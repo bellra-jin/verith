@@ -107,12 +107,15 @@ QuestionKind = Literal["company", "industry", "market", "general"]
 # "오늘 코스피 흐름 알려줘"  → market   → resolve 생략
 ```
 
-| 상태 | 의미 | 처리 |
+| resolve 상태 | 의미 | 종목 의존 에이전트에 내려가는 사유 코드 |
 |---|---|---|
-| `resolved` | 종목 식별 성공 | 종목 의존 에이전트 실행 |
-| `not_found` | 미상장·오타·미식별 | 장애가 아닌 정상 상태로 응답 |
-| `ambiguous` | 후보가 여러 개 | 후보 정보 유지 |
-| `resolver_unavailable` | timeout·연결·5xx | 일시적 도구 장애로 구분 |
+| `resolved` | 종목 식별 성공 | `stock_resolved` — 실행 |
+| `not_found` | 미상장·오타·미식별 | `stock_not_found` — 장애가 아닌 정상 상태 |
+| `ambiguous` | 후보가 여러 개 | `stock_ambiguous` — 단일 확정 필요 |
+| `not_attempted` | 비종목 질문이라 호출하지 않음 | `stock_not_resolved` |
+| `error` | timeout·연결·5xx | `resolver_unavailable` — 일시적 도구 장애 |
+
+상태(`ResolutionStatus`)와 사유 코드(`ReasonCode`)를 분리해, 프론트가 "종목이 없습니다"와 "잠시 후 다시 시도하세요"를 다르게 안내할 수 있게 했습니다.
 
 ### 5.2 실행 정책과 실패 격리
 
@@ -144,18 +147,25 @@ fallback 결과를 실시간으로 정본 DB에 쓰지 않아 잘못된 alias가
 
 | # | 노드 | 주체 | 역할 |
 |---:|---|---|---|
-| 1 | `request_normalize` | LLM | 질문을 안전한 분석 요청으로 정규화 |
-| 2 | `intent_analyze` | LLM | 분석 초점과 의도 정리 |
-| 3 | `data_fetch` | 코드 | KIS 일·주·월봉 조회와 캐시 처리 |
+| 1 | `normalize_question` | LLM | 질문을 안전한 분석 요청으로 정규화 |
+| 2 | `focus_analysis` | LLM | 분석 초점과 의도 정리 |
+| 3 | `data_collect` | 코드 | KIS 일·주·월봉 조회와 캐시 처리 |
 | 4 | `indicator_calculate` | 코드 | MA·RSI·거래량·지지저항·패턴 계산 |
 | 5 | `regime_classify` | 코드 | 일봉 국면과 상위 타임프레임 보정 |
-| 6 | `signal_synthesize` | 코드 | 지표별 신호 가중 합산 |
-| 7 | `confidence_calculate` | 코드 | 데이터 품질·정합성 기반 신뢰도 산출 |
-| 8 | `risk_detect` | 코드 | 변동성·과열 등 리스크 탐지 |
+| 6 | `signal_aggregate` | 코드 | 지표별 신호 가중 합산 |
+| 7 | `confidence_calculate` | 코드 | 지표 일치도·거래량 확인 기반 신뢰도 산출 |
+| 8 | `risk_detect` | 코드 | 과열·저항 근접·신호 충돌 등 리스크 탐지 |
 | 9 | `chart_generate` | 코드 | 캔들·오버레이·annotation 생성 |
 | 10 | `interpret_report` | LLM + 검증 | 확정값 설명 후 라벨 일치 검사 |
 
 LLM은 1·2·10번 노드에서만 사용합니다. 나머지 7개 노드는 동일 입력에 동일 결과를 내는 결정론 코드입니다.
+
+번호는 설계 문서상의 노드 번호이고, 실제 그래프에서는 **`regime_classify`가 gate로 먼저 실행**됩니다. 국면을 판정하지 못하면 지표 계산·신호 종합·신뢰도·리스크를 모두 건너뛰고 안전하게 종료하기 위해서입니다.
+
+```text
+data_collect → regime_classify → indicator_calculate → signal_aggregate
+             → confidence_calculate → risk_detect → chart_generate → interpret_report
+```
 
 ```text
 technical_supervisor → technical_graph → pipeline_steps
@@ -175,13 +185,13 @@ KIS에서 일·주·월봉을 각각 조회하고 일봉 국면을 상위 타임
 
 ```python
 class Regime(str, Enum):
-    STRONG_UPTREND = "strong_uptrend"
-    UPTREND = "uptrend"
-    OVERHEATED = "overheated"
-    EARLY_RECOVERY = "early_recovery"
-    DOWNTREND = "downtrend"
-    SIDEWAYS = "sideways"
-    UNAVAILABLE = "unavailable"
+    UPTREND_INTACT         = "uptrend_intact"            # 상승 추세 유지
+    OVERHEATED             = "overheated"                # 과열
+    BULLISH_REVERSAL_WATCH = "bullish_reversal_watch"    # 상승 전환 관찰
+    OVERSOLD_REBOUND_WATCH = "oversold_rebound_watch"    # 과매도 반등 관찰
+    DOWNTREND              = "downtrend"                 # 하락 추세
+    SIDEWAYS               = "sideways"                  # 횡보
+    UNAVAILABLE            = "unavailable"               # 판단 불가
 ```
 
 ### 6.3 신호와 신뢰도 분리
@@ -194,8 +204,10 @@ INDICATOR_WEIGHTS = {
     "support_resistance": 0.20, "pattern": 0.10,
 }
 CONFIDENCE_WEIGHTS = {
-    "data_quality": 0.35, "indicator_agreement": 0.25,
-    "trend_clarity": 0.20, "conflict_absence": 0.20,
+    "agreement": 0.40,        # 지표 간 일치도
+    "volume_confirm": 0.20,   # 거래량 확인
+    "trend_clarity": 0.20,    # 추세 명확성
+    "conflict_absence": 0.20, # 충돌 신호 부재
 }
 ```
 

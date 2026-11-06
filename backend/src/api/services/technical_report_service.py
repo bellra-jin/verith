@@ -31,6 +31,7 @@ from src.api.constants.stocks import allowlist_name
 from src.api.repositories import agent_report_repository as agent_repo
 from src.api.repositories import technical_report_repository as tr_repo
 from src.api.schemas.agent_report import AgentReportListItem
+from src.api.services.flow_report_service import FlowReportService
 from src.api.schemas.ai_technical_output import TechnicalAgentOutputMirror
 from src.api.schemas.report_archive import (
     ArchiveCard,
@@ -1121,6 +1122,7 @@ class TechnicalReportService:
             limit=limit,
             offset=offset,
         )
+        await FlowReportService(self._session).validate_index_rows(rows)
         return [AgentReportListItem.model_validate(r) for r in rows]
 
     async def list_report_archive(
@@ -1139,6 +1141,7 @@ class TechnicalReportService:
             self._session, agent_type=agent_type, client_session_id=client_session_id,
             stock_code=stock_code, limit=limit, offset=offset,
         )
+        await FlowReportService(self._session).validate_index_rows(rows)
         total = await agent_repo.count_reports(
             self._session, agent_type=agent_type, client_session_id=client_session_id,
             stock_code=stock_code,

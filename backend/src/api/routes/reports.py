@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.api.deps import get_technical_report_service
 from src.api.schemas.agent_report import ReportsListResponse
 from src.api.schemas.report_archive import ArchiveListResponse
+from src.api.schemas.flow_execution import ErrorCode, SafeError
+from src.api.services.flow_report_service import FlowStoredPayloadError
 from src.api.services.technical_report_service import TechnicalReportService
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -22,10 +24,19 @@ async def list_report_archive(
     service: TechnicalReportService = Depends(get_technical_report_service),
 ) -> ArchiveListResponse:
     """리포트 보관함 공통 카드 목록(agent_type 필터, created_at DESC). agent 상세와 분리된 프론트 view model."""
-    return await service.list_report_archive(
-        agent_type=agent_type, client_session_id=client_session_id,
-        stock_code=stock_code, limit=limit, offset=offset,
-    )
+    try:
+        return await service.list_report_archive(
+            agent_type=agent_type,
+            client_session_id=client_session_id,
+            stock_code=stock_code,
+            limit=limit,
+            offset=offset,
+        )
+    except FlowStoredPayloadError as exc:
+        error = SafeError(code=ErrorCode.RESULT_CONTRACT_INVALID)
+        raise HTTPException(
+            status_code=error.http_status, detail=error.model_dump(mode="json")
+        ) from exc
 
 
 @router.get("", response_model=ReportsListResponse)
@@ -37,11 +48,19 @@ async def list_reports(
     offset: int = Query(default=0, ge=0),
     service: TechnicalReportService = Depends(get_technical_report_service),
 ) -> ReportsListResponse:
-    items = await service.list_reports(
-        agent_type=agent_type,
-        client_session_id=client_session_id,
-        stock_code=stock_code,
-        limit=limit,
-        offset=offset,
+    try:
+        items = await service.list_reports(
+            agent_type=agent_type,
+            client_session_id=client_session_id,
+            stock_code=stock_code,
+            limit=limit,
+            offset=offset,
+        )
+    except FlowStoredPayloadError as exc:
+        error = SafeError(code=ErrorCode.RESULT_CONTRACT_INVALID)
+        raise HTTPException(
+            status_code=error.http_status, detail=error.model_dump(mode="json")
+        ) from exc
+    return ReportsListResponse(
+        items=items, limit=limit, offset=offset, count=len(items)
     )
-    return ReportsListResponse(items=items, limit=limit, offset=offset, count=len(items))

@@ -1,5 +1,12 @@
 # Flow Backend Handoff
 
+> CF-001 보완: 현재 save-only 구현과 검증·호환·테스트 경계는
+> [flow_contract.md](flow_contract.md)를 따른다. 아래의 구현 전 설명과 data_status
+> 미정 설명은 과거 handoff 기록이다. 현재 AI storage-spec/export는
+> `ok / data_limited`를 사용한다. checks JSONB의 한시 snapshot 보존과 형식·정합성
+> 검사를 적용했고 v1.1 재검토 후 새 tmpfs 격리 DB 검사 29개가 통과했다. 전용 snapshot 저장소와
+> 인증·owner·run 연결은 후속이다.
+
 `docs/flow_backend_handoff.md`
 
 이 문서는 Flow(수급/자금흐름) 담당자가 backend 쪽 구현을 이어받을 때 참고할 handoff 문서다.

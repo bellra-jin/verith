@@ -1,5 +1,13 @@
 # veriθ Backend
 
+## 공용 환경 참고 · ST-001 3-A
+
+[개발 환경 안내](../docs/development.md)·[Backend 변수 예제](../docs/examples/backend.env.example)·
+[별도 명시 Compose 참고](../docs/examples/compose.local.example.yaml)를 추가했다. 실제 자격/설정이나
+기동 검증을 제공하지 않는다. DATABASE_URL의 필수 검증과 AI_SERVICE_URL 검증 부재, graph 조건을
+구분한다. 아래 Docker/migration/seed/restore/sync는 기본 테스트 준비가 아니며 3-B 안전 entry도 미구현이다.
+기존 .env/ignored Compose/DB·자료는 조회·복사·변경하지 않는다.
+
 ## 문서 탐색과 현재 범위
 
 [문서 목록/권위](../docs/documentation.md), [Backend 작성 가이드](docs/backend_coding_guidelines.md),

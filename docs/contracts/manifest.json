@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checked_at": "2026-11-07T22:57:03+09:00",
+  "checked_at": "2026-11-07T23:52:41+09:00",
   "derivation": "Reviewed technical summaries, not original instructions or runtime authorization",
   "application_order": [
     "CF-001",
@@ -8,10 +8,10 @@
   ],
   "work_item": {
     "id": "ST-001",
-    "source_version": "v1.1",
-    "source_sha256": "9a7d519f8636e6ba127bb66e74c74ff70d84f50b8705814b91916599c2ef97be",
-    "reviewed_commit": "083dea8436b699aa3a52ddbf36848e8fe3535720",
-    "stage": "2 repository work guides only"
+    "source_version": "v1.3",
+    "source_sha256": "73f4c0b6d98fa3e33fc6d1d8f9fc0892f94608175eff3024d47a85300fbf1099",
+    "reviewed_commit": "6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef",
+    "stage": "3-A public environment reference examples only"
   },
   "snapshots": [
     {
@@ -88,6 +88,13 @@
       "source_sha256": "1b7975913e92ff08065b2094879075fbe796e6e57d6227890b8bc92a772c5010",
       "reviewed_commit": "a5b60f2fd0b00efedae2c98a2004ede62470b094",
       "stage": "1 documentation only"
+    },
+    {
+      "id": "ST-001",
+      "source_version": "v1.1",
+      "source_sha256": "9a7d519f8636e6ba127bb66e74c74ff70d84f50b8705814b91916599c2ef97be",
+      "reviewed_commit": "083dea8436b699aa3a52ddbf36848e8fe3535720",
+      "stage": "2 repository work guides only"
     }
   ]
 }

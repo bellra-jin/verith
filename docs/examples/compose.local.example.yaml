@@ -1,0 +1,40 @@
+# Explicit reference file only; no Docker/Compose invocation in ST-001 3-A.
+# Namespace availability, labels, ports and selected images need later verification.
+name: verith-st001-example
+services:
+  postgres:
+    image: "${VERITH_EXAMPLE_POSTGRES_IMAGE:?REPLACE_WITH_APPROVED_POSTGRES_IMAGE}"
+    ports:
+      - "127.0.0.1:15432:5432/tcp"
+    environment:
+      POSTGRES_USER: "${VERITH_EXAMPLE_POSTGRES_USER:?REPLACE_WITH_APPROVED_USER}"
+      POSTGRES_PASSWORD: "${VERITH_EXAMPLE_POSTGRES_PASSWORD:?REPLACE_WITH_APPROVED_PASSWORD}"
+      POSTGRES_DB: "${VERITH_EXAMPLE_POSTGRES_DB:?REPLACE_WITH_APPROVED_DATABASE}"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    tmpfs:
+      - /var/lib/postgresql/data
+    restart: "no"
+  neo4j:
+    profiles: [optional-graph]
+    image: "${VERITH_EXAMPLE_NEO4J_IMAGE:?REPLACE_WITH_APPROVED_NEO4J_IMAGE}"
+    ports:
+      - "127.0.0.1:17474:7474/tcp"
+      - "127.0.0.1:17687:7687/tcp"
+    environment:
+      NEO4J_AUTH: "neo4j/${VERITH_EXAMPLE_NEO4J_PASSWORD:?REPLACE_WITH_APPROVED_PASSWORD}"
+    tmpfs:
+      - /data
+      - /logs
+    restart: "no"
+  redis:
+    # Deliberately unfinished: no unauthenticated Redis daemon is started.
+    # No invented REDIS_PASSWORD variable. A future reviewed auth config is required.
+    profiles: [unfinished-redis]
+    image: "${VERITH_EXAMPLE_REDIS_IMAGE:?REPLACE_WITH_APPROVED_REDIS_IMAGE}"
+    entrypoint: [/bin/sh, -c]
+    command: ["echo 'REPLACE_WITH_APPROVED_REDIS_AUTH_CONFIG: service unfinished' >&2; exit 78"]
+    ports:
+      - "127.0.0.1:16379:6379/tcp"
+    tmpfs:
+      - /data
+    restart: "no"

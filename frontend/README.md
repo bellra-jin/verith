@@ -1,5 +1,12 @@
 # Verith Frontend
 
+## 공용 환경 참고 · ST-001 3-A
+
+[개발 환경 안내](../docs/development.md)와 [Frontend 변수 예제](../docs/examples/frontend.env.example)는
+비밀 없는 참고 형식이다. 실제 .env 자동 생성/복사·서비스 실행 절차가 아니며 현재 private override는
+미확인이다. 서버 BACKEND_URL과 공개 NEXT_PUBLIC_API_URL의 미설정/빈 값 차이를 구분한다.
+3-B 수집 전 안전 entry는 아직 미구현이며 아래 기존 명령을 이번 단계에서 실행하지 않는다.
+
 ## 문서 탐색과 현재 범위
 
 [문서 권위/검증 상태](../docs/documentation.md), [Frontend 작성 가이드](docs/frontend_coding_guidelines.md),

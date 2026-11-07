@@ -47,7 +47,8 @@ DATABASE_URL alias를 수용한다. 이 구현을 보존하되 앱 credential을
 - `.env`·credentials·실제 DB/graph/cache·Google/AI endpoint·모델을 검사 입력으로 사용하지 않는다.
   승인된 별도 검사에서는 선택한 순수/합성 대상의 **수집 전** 파일/네트워크/DB/모델 부작용 차단을
   먼저 입증해야 한다. fake corp-code connection/설정·fallback/cache 검사와 실제 DART/DB 검증을 구분한다.
-- 3-C AI 안전 entry와 3-A 공용 환경 예제는 **미구현 후속**이다. 아직 없는 script/명령을 안내하거나
+- 3-A [환경 안내](../docs/development.md)·[AI 예제](../docs/examples/ai.env.example)는 비밀 없는 참고이며
+  실제 설정/안전한 비활성화/실행 승인이 아니다. 3-C AI 안전 entry는 **미구현 후속**이다. 아직 없는 script/명령을 안내하거나
   전체 pytest/실제 수집·smoke를 기본 시작 절차로 실행하지 않는다. 3-B도 별도 선행 단계다.
 - 현재 문서 단계는 기능·unit/build/lint·AI/DB/Google/Docker 검사를 실행하지 않는다.
   과거 검사 보고와 이번 직접 검사를 구분하고 실제 인증 미검증/기존 lint 실패를 숨기지 않는다.

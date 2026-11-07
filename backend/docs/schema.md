@@ -108,6 +108,13 @@ CREATE EXTENSION IF NOT EXISTS vector;     -- news.embedding 의 vector 타입
 | `flow_report_interpretations` | 해석 (1:1) |
 | `flow_report_verifications` | 검증 (1:1) |
 
+CF-001은 물리 스키마를 변경하지 않는다. **이번 한시 호환 저장 방식**은 기존 `checks` JSONB의
+`gate1/2/3`를 유지하면서 예약 키 `_flow_payload_snapshot`에 검증된 v1 원본을
+보존한다. version·추가 필드·null·생략 보존과 구 자료 reader 규칙은
+[flow_contract.md](flow_contract.md)를 따른다. 전용 snapshot 저장소는 후속이다.
+신규 형식 표식은 checks와 agent_reports.summary의 `_flow_storage_format`에 함께
+보존한다. 이는 물리 컬럼이나 payload version 추가가 아니다.
+
 ### Industry (산업/섹터)
 | 테이블 | 요약 |
 |---|---|

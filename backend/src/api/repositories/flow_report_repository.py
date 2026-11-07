@@ -16,13 +16,24 @@ from db.models.flow.report_verification import FlowReportVerification
 
 
 async def ensure_stock(
-    session: AsyncSession, *, stock_code: str, stock_name: str | None, market: str | None
+    session: AsyncSession,
+    *,
+    stock_code: str,
+    stock_name: str | None,
+    market: str | None,
 ) -> None:
     """flow_reports.stock_code 는 stocks FK(NOT NULL) — 없으면 먼저 채운다(멱등)."""
-    values: dict[str, object] = {"stock_code": stock_code, "stock_name": stock_name or stock_code}
+    values: dict[str, object] = {
+        "stock_code": stock_code,
+        "stock_name": stock_name or stock_code,
+    }
     if market:
         values["market"] = market
-    stmt = pg_insert(Stock).values(**values).on_conflict_do_nothing(index_elements=[Stock.stock_code])
+    stmt = (
+        pg_insert(Stock)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=[Stock.stock_code])
+    )
     await session.execute(stmt)
 
 
@@ -48,7 +59,9 @@ async def get_interpretation(
     session: AsyncSession, report_id: UUID
 ) -> FlowReportInterpretation | None:
     return await session.scalar(
-        select(FlowReportInterpretation).where(FlowReportInterpretation.report_id == report_id)
+        select(FlowReportInterpretation).where(
+            FlowReportInterpretation.report_id == report_id
+        )
     )
 
 
@@ -56,7 +69,57 @@ async def get_verification(
     session: AsyncSession, report_id: UUID
 ) -> FlowReportVerification | None:
     return await session.scalar(
-        select(FlowReportVerification).where(FlowReportVerification.report_id == report_id)
+        select(FlowReportVerification).where(
+            FlowReportVerification.report_id == report_id
+        )
+    )
+
+
+async def get_agent_indexes(
+    session: AsyncSession, report_id: UUID
+) -> list[AgentReport]:
+    rows = await session.scalars(
+        select(AgentReport).where(
+            AgentReport.agent_type == "flow",
+            AgentReport.agent_report_id == report_id,
+        )
+    )
+    return list(rows.all())
+
+
+async def get_report_parts(
+    session: AsyncSession, report_ids: list[UUID]
+) -> tuple[
+    list[FlowReport],
+    list[FlowReportInterpretation],
+    list[FlowReportVerification],
+    list[AgentReport],
+]:
+    """Batch projections for a list page; keep reads bounded as page size increases."""
+    roots = await session.scalars(
+        select(FlowReport).where(FlowReport.id.in_(report_ids))
+    )
+    interpretations = await session.scalars(
+        select(FlowReportInterpretation).where(
+            FlowReportInterpretation.report_id.in_(report_ids)
+        )
+    )
+    verifications = await session.scalars(
+        select(FlowReportVerification).where(
+            FlowReportVerification.report_id.in_(report_ids)
+        )
+    )
+    indexes = await session.scalars(
+        select(AgentReport).where(
+            AgentReport.agent_type == "flow",
+            AgentReport.agent_report_id.in_(report_ids),
+        )
+    )
+    return (
+        list(roots.all()),
+        list(interpretations.all()),
+        list(verifications.all()),
+        list(indexes.all()),
     )
 
 

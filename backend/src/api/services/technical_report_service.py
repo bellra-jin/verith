@@ -31,7 +31,7 @@ from src.api.constants.stocks import allowlist_name
 from src.api.repositories import agent_report_repository as agent_repo
 from src.api.repositories import technical_report_repository as tr_repo
 from src.api.schemas.agent_report import AgentReportListItem
-from src.api.services.flow_report_service import FlowReportService
+from src.api.services.auth_service import AuthenticationRequired
 from src.api.schemas.ai_technical_output import TechnicalAgentOutputMirror
 from src.api.schemas.report_archive import (
     ArchiveCard,
@@ -1114,42 +1114,10 @@ class TechnicalReportService:
         limit: int,
         offset: int,
     ) -> list[AgentReportListItem]:
-        rows = await agent_repo.list_reports(
-            self._session,
-            agent_type=agent_type,
-            client_session_id=client_session_id,
-            stock_code=stock_code,
-            limit=limit,
-            offset=offset,
-        )
-        await FlowReportService(self._session).validate_index_rows(rows)
-        return [AgentReportListItem.model_validate(r) for r in rows]
+        raise AuthenticationRequired()
 
-    async def list_report_archive(
-        self,
-        *,
-        agent_type: str | None = None,
-        client_session_id: str | None = None,
-        stock_code: str | None = None,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> ArchiveListResponse:
-        """공통 보관함 목록(agent_reports 공통 인덱스, created_at DESC). 카드 projection + canonical stock 조인.
-
-        agent_type 필터로 상단 탭 구성. technical 은 reference 매핑, 다른 agent 도 같은 카드 shape 로 확장."""
-        rows = await agent_repo.list_reports(
-            self._session, agent_type=agent_type, client_session_id=client_session_id,
-            stock_code=stock_code, limit=limit, offset=offset,
-        )
-        await FlowReportService(self._session).validate_index_rows(rows)
-        total = await agent_repo.count_reports(
-            self._session, agent_type=agent_type, client_session_id=client_session_id,
-            stock_code=stock_code,
-        )
-        codes = list({r.stock_code for r in rows if r.stock_code})
-        stocks = await tr_repo.get_stocks(self._session, codes)
-        items = [build_archive_item(row=r, stock=stocks.get(r.stock_code)) for r in rows]
-        return ArchiveListResponse(items=items, total=total, limit=limit, offset=offset)
+    async def list_report_archive(self, **kwargs):
+        raise AuthenticationRequired()
 
     # ── 삭제 ──────────────────────────────────────────────────────────────────
     async def delete_report(self, report_id: UUID) -> bool:

@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import Date, ForeignKey, Index, String, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -17,6 +17,11 @@ class FlowReport(Base):
     __tablename__ = "flow_reports"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("auth_users.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     ticker: Mapped[str | None] = mapped_column(String, nullable=True)
     stock_code: Mapped[str] = mapped_column(
         String, ForeignKey("stocks.stock_code"), nullable=False
@@ -31,7 +36,15 @@ class FlowReport(Base):
     created_at: Mapped[datetime] = created_at()
 
     __table_args__ = (
-        Index("ix_flow_reports_stock_code_base_date", "stock_code", text("base_date DESC")),
+        Index(
+            "ix_flow_reports_owner_created_id",
+            "owner_user_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
+        Index(
+            "ix_flow_reports_stock_code_base_date", "stock_code", text("base_date DESC")
+        ),
         Index("ix_flow_reports_ticker_base_date", "ticker", text("base_date DESC")),
         Index("ix_flow_reports_trace_id", "trace_id"),
     )

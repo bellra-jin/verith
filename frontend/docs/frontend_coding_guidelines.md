@@ -66,14 +66,14 @@
 <span>{REGIME_LABELS[report.regime.final_regime]}</span>
 ```
 
-### 2.2 환경변수는 public 값만 둔다
+### 2.2 브라우저 변수에는 공개 값만 둔다
 
-프론트 환경변수에는 공개되어도 되는 값만 둔다.
+브라우저 번들에 전달하는 Next 환경변수에는 공개되어도 되는 값만 둔다.
 
 허용:
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000
+NEXT_PUBLIC_API_URL=http://localhost:8200
 ```
 
 금지:
@@ -85,6 +85,10 @@ DB_PASSWORD=...
 ```
 
 프론트 번들에 들어가는 값은 사용자 브라우저에서 볼 수 있다고 생각한다.
+
+Next 서버 전용 `BACKEND_URL=http://localhost:8200`은 명시 설정하고 `NEXT_PUBLIC_`로 노출하지 않는다.
+개인 요청은 같은 origin BFF를 통하며 서버 URL 미설정 시 공개 변수 fallback 없이 닫는다.
+Google client secret은 Backend 전용이며 Frontend public 변수에 두지 않는다. 로컬 브라우저는 localhost:3200이다.
 
 ---
 

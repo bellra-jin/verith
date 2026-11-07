@@ -2,8 +2,8 @@
 """실제 파이프라인을 눈으로 보는 Streamlit 데모.
 
 실행:
-    # backend(:8001 등)와 postgres/neo4j 가 떠 있어야 한다.
-    BACKEND_BASE_URL=http://127.0.0.1:8001 \\
+    # backend(:8200)와 postgres/neo4j 가 떠 있어야 한다.
+    BACKEND_BASE_URL=http://localhost:8200 \\
     uv run --project ai --with streamlit streamlit run ai/src/agents/news/demo_pipeline_app.py
 
 이 앱은 배선(graph.py)을 우회해 노드를 **직접 순차 실행**하며 각 단계 산출을 화면에 보여준다
@@ -23,7 +23,7 @@ _AI_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__
 if _AI_ROOT not in sys.path:
     sys.path.insert(0, _AI_ROOT)
 
-os.environ.setdefault("BACKEND_BASE_URL", "http://127.0.0.1:8001")
+os.environ.setdefault("BACKEND_BASE_URL", "http://localhost:8200")
 
 import streamlit as st  # noqa: E402
 

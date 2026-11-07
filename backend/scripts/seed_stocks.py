@@ -10,7 +10,7 @@ Technical Agent 지원 10종을 `stocks` 에 미리 넣어, 이후 Stock Resolve
     # 또는
     uv run python scripts/seed_stocks.py
 
-전제: PostgreSQL 실행 중 + `DATABASE_URL`(backend/.env, 포트 5433) 설정. DB URL/비밀번호는
+전제: PostgreSQL 실행 중 + `DATABASE_URL`(backend/.env, 포트 15432) 설정. DB URL/비밀번호는
 코드에 하드코딩하지 않고 기존 backend config/session 을 재사용한다.
 """
 
@@ -29,7 +29,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from db.models.common.stock import Stock  # noqa: E402
-from db.session import async_session_factory, engine  # noqa: E402
 
 # 종목 정본은 backend 단일 정의(constants)에서 읽는다 — seed 는 별도 목록을 두지 않는다.
 from src.api.constants.stocks import SUPPORTED_STOCKS  # noqa: E402
@@ -59,6 +58,8 @@ async def seed(session: AsyncSession) -> dict:
 
 
 async def main() -> None:
+    from db.session import async_session_factory, engine
+
     async with async_session_factory() as session:
         summary = await seed(session)
         await session.commit()

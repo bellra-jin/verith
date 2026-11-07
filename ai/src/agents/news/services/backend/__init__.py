@@ -1,4 +1,4 @@
-# services/backend/ — backend(:8000) HTTP 클라이언트 (절대규칙 1: DB 에 닿는 유일 경로)
+# services/backend/ — backend(:8200) HTTP 클라이언트 (절대규칙 1: DB 에 닿는 유일 경로)
 """이 에이전트가 PostgreSQL·Neo4j 에 닿는 **유일 경로**이자, 그마저도 backend HTTP 다.
 
 - client.py     : 공용 HTTP 계층(BackendClient·BackendError). httpx 는 오직 여기에만.

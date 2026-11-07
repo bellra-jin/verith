@@ -8,9 +8,9 @@ Person/Country=key, NewsRef=news_id)이 있어, 정체성 키 기준 MERGE 로 �
 backend 앱 startup(lifespan)이 만들므로 복원 전에 backend 를 한 번 띄우면 인덱스가 이미 있다.
 
 사용:
-    NEO4J_URI=bolt://localhost:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=... \
+    NEO4J_URI=bolt://localhost:17687 NEO4J_USER=neo4j NEO4J_PASSWORD=... \
         python -m scripts.export_news_graph [out.cypher]
-값이 없으면 backend/.env 를 읽고, 그래도 없으면 로컬 기본값(bolt://localhost:7687)을 쓴다.
+값이 없으면 backend/.env 를 읽고, 그래도 없으면 로컬 기본값(bolt://localhost:17687)을 쓴다.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def export(uri: str, user: str, password: str, out_path: Path) -> tuple[int, int
 
 def main() -> None:
     _load_env_from_dotenv()
-    uri = os.getenv("NEO4J_URI") or "bolt://localhost:7687"
+    uri = os.getenv("NEO4J_URI") or "bolt://localhost:17687"
     user = os.getenv("NEO4J_USER") or "neo4j"
     password = os.getenv("NEO4J_PASSWORD") or "verith1234"
 

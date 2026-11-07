@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.api.deps import get_technical_report_service
+from src.api.routes.flow_reports import get_flow_report_service
 from src.api.schemas.agent_report import ReportsListResponse
 from src.api.schemas.report_archive import ArchiveListResponse
 from src.api.schemas.flow_execution import ErrorCode, SafeError
 from src.api.services.flow_report_service import FlowStoredPayloadError
-from src.api.services.technical_report_service import TechnicalReportService
+from src.api.services.flow_report_service import FlowReportService
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -21,7 +21,7 @@ async def list_report_archive(
     stock_code: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    service: TechnicalReportService = Depends(get_technical_report_service),
+    service: FlowReportService = Depends(get_flow_report_service),
 ) -> ArchiveListResponse:
     """리포트 보관함 공통 카드 목록(agent_type 필터, created_at DESC). agent 상세와 분리된 프론트 view model."""
     try:
@@ -46,10 +46,10 @@ async def list_reports(
     stock_code: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    service: TechnicalReportService = Depends(get_technical_report_service),
+    service: FlowReportService = Depends(get_flow_report_service),
 ) -> ReportsListResponse:
     try:
-        items = await service.list_reports(
+        items = await service.list_common(
             agent_type=agent_type,
             client_session_id=client_session_id,
             stock_code=stock_code,

@@ -10,40 +10,29 @@ import pytest
 import pytest_asyncio
 from dotenv import dotenv_values
 from sqlalchemy import func, select, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from db.models.common.agent_report import AgentReport
 from db.models.flow.flow_report import FlowReport
 from src.api.services.flow_report_service import FlowReportService
+from tests.db_safety import (
+    UnsafeTestDatabase,
+    preflight_database,
+    attest_engine_connection,
+)
 
 
 @pytest_asyncio.fixture
 async def flow_db():
-    if os.getenv("CF001_RUN_DB_TESTS") != "1":
-        pytest.skip(
-            "Opt in with CF001_RUN_DB_TESTS=1 after verifying verith_test isolation"
-        )
     values = dotenv_values(Path(__file__).resolve().parents[2] / ".env")
-    raw_test = os.getenv("TEST_DATABASE_URL") or values.get("TEST_DATABASE_URL")
     raw_app = os.getenv("DATABASE_URL") or values.get("DATABASE_URL")
-    if not raw_test:
-        pytest.fail(
-            "TEST_DATABASE_URL is required; app DB fallback is forbidden", pytrace=False
-        )
-    target = make_url(raw_test)
-    app_target = make_url(raw_app) if raw_app else None
-    if (
-        target.database != "verith_test"
-        or target.host not in ("localhost", "127.0.0.1", "::1")
-        or app_target is None
-        or app_target.database == target.database
-    ):
-        pytest.fail(
-            "Only the documented local verith_test, distinct from app DB, is allowed",
-            pytrace=False,
-        )
-    engine = create_async_engine(target, connect_args={"timeout": 3})
+    try:
+        approval = await preflight_database(os.environ, raw_app)
+    except UnsafeTestDatabase as exc:
+        pytest.fail(str(exc), pytrace=False)
+    engine = create_async_engine(
+        approval.url, connect_args={**approval.connection_parameters(), "timeout": 3}
+    )
     connection = None
     connection_error = None
     try:
@@ -59,11 +48,18 @@ async def flow_db():
     assert connection is not None
     outer = None
     session = None
-    context = SimpleNamespace(report_ids=[])
+
+    class TestContext(SimpleNamespace):
+        def __repr__(self):
+            return "<isolated Flow test context>"
+
+    context = TestContext(report_ids=[])
     try:
         # Read-only readiness checks before beginning the rollback-isolated test.
+        await attest_engine_connection(connection, approval)
         assert (
-            await connection.scalar(text("SELECT current_database()")) == "verith_test"
+            await connection.scalar(text("SELECT current_database()"))
+            == approval.database
         )
         for table in (
             "stocks",
@@ -87,7 +83,18 @@ async def flow_db():
             expire_on_commit=False,
         )
         context.session = session
-        context.service = FlowReportService(session)
+        from db.models.auth.models import AuthUser
+        from src.api.services.auth_service import issue_session
+        from uuid import uuid4
+
+        user = AuthUser(id=uuid4())
+        session.add(user)
+        await session.flush()
+        token, principal = await issue_session(session, user)
+        await session.commit()
+        context.principal = principal
+        context.token = token
+        context.service = FlowReportService(session, principal=principal)
         yield context
     finally:
         if session is not None:

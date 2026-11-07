@@ -7,8 +7,8 @@
 통과한 결과에서 news 결과만 뽑아 렌더한다. 즉 "supervisor 에 붙은 news 가 리포트를 내는가" 를 검증한다.
 
 실행:
-    # 검색→리포트가 실제로 뜨려면 backend(:8001 등)+postgres+neo4j 가 떠 있어야 한다.
-    BACKEND_BASE_URL=http://127.0.0.1:8001 \\
+    # 검색→리포트가 실제로 뜨려면 backend(:8200)+postgres+neo4j 가 떠 있어야 한다.
+    BACKEND_BASE_URL=http://localhost:8200 \\
     uv run --project ai --with streamlit \\
         streamlit run ai/src/supervisor/devtools/streamlit_supervisor_news_lab.py
 
@@ -30,7 +30,7 @@ _AI_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__
 if _AI_ROOT not in sys.path:
     sys.path.insert(0, _AI_ROOT)
 
-os.environ.setdefault("BACKEND_BASE_URL", "http://127.0.0.1:8001")
+os.environ.setdefault("BACKEND_BASE_URL", "http://localhost:8200")
 
 import streamlit as st  # noqa: E402
 import streamlit.components.v1 as components  # noqa: E402

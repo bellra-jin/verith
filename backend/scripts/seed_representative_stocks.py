@@ -12,7 +12,7 @@ battery bootstrap seed(`seed_stocks`/`seed_stock_aliases`)와 **분리된 경로
     cd backend
     uv run python -m scripts.seed_representative_stocks
 
-전제: PostgreSQL 실행 중 + `DATABASE_URL`(backend/.env, 포트 5433). DB 크리덴셜은 코드에 하드코딩하지
+전제: PostgreSQL 실행 중 + `DATABASE_URL`(backend/.env, 포트 15432). DB 크리덴셜은 코드에 하드코딩하지
 않고 기존 backend config/session 을 재사용한다.
 """
 
@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from db.models.common.stock import Stock  # noqa: E402
 from db.models.common.stock_alias import StockAlias  # noqa: E402
-from db.session import async_session_factory, engine  # noqa: E402
 from src.api.constants.stock_aliases import REPRESENTATIVE_ALIAS_SEED  # noqa: E402
 from src.api.constants.stocks import REPRESENTATIVE_STOCKS  # noqa: E402
 from src.api.text_normalize import normalize_stock_text  # noqa: E402
@@ -58,24 +57,38 @@ async def seed(session: AsyncSession) -> dict:
     for a in REPRESENTATIVE_ALIAS_SEED:
         norm = normalize_stock_text(a["alias"])
         if not norm:
-            raise RepresentativeSeedError(f"alias 가 빈 문자열로 정규화됨: {a['alias']!r}")
-        alias_rows.append({
-            "stock_code": a["stock_code"], "alias": a["alias"],
-            "normalized_alias": norm, "alias_type": a["alias_type"],
-        })
+            raise RepresentativeSeedError(
+                f"alias 가 빈 문자열로 정규화됨: {a['alias']!r}"
+            )
+        alias_rows.append(
+            {
+                "stock_code": a["stock_code"],
+                "alias": a["alias"],
+                "normalized_alias": norm,
+                "alias_type": a["alias_type"],
+            }
+        )
 
     referenced = {r["stock_code"] for r in alias_rows}
     present = set(
-        (await session.execute(select(Stock.stock_code).where(Stock.stock_code.in_(referenced)))).scalars()
+        (
+            await session.execute(
+                select(Stock.stock_code).where(Stock.stock_code.in_(referenced))
+            )
+        ).scalars()
     )
     missing = sorted(referenced - present)
     if missing:
-        raise RepresentativeSeedError(f"stocks 에 없는 대표 종목코드 {missing} — 부분 seed 금지")
+        raise RepresentativeSeedError(
+            f"stocks 에 없는 대표 종목코드 {missing} — 부분 seed 금지"
+        )
 
     alias_stmt = (
         pg_insert(StockAlias)
         .values(alias_rows)
-        .on_conflict_do_nothing(index_elements=[StockAlias.normalized_alias, StockAlias.stock_code])
+        .on_conflict_do_nothing(
+            index_elements=[StockAlias.normalized_alias, StockAlias.stock_code]
+        )
         .returning(StockAlias.id)
     )
     inserted_aliases = len(list((await session.execute(alias_stmt)).scalars()))
@@ -90,6 +103,8 @@ async def seed(session: AsyncSession) -> dict:
 
 
 async def main() -> None:
+    from db.session import async_session_factory, engine
+
     async with async_session_factory() as session:
         summary = await seed(session)
         await session.commit()

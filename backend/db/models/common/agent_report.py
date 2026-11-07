@@ -23,12 +23,18 @@ class AgentReport(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     agent_type: Mapped[str] = mapped_column(String, nullable=False)
     # 각 agent root report id — app-level reference (FK 아님).
-    agent_report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_report_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
     request_id: Mapped[str | None] = mapped_column(String, nullable=True)
     client_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # external users/sessions 의 id — 논리 링크, FK 걸지 않음.
-    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    owner_session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    owner_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     # 뉴스/거시는 종목이 없을 수 있어 nullable.
     stock_code: Mapped[str | None] = mapped_column(
         String, ForeignKey("stocks.stock_code"), nullable=True
@@ -38,17 +44,34 @@ class AgentReport(Base):
     answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     data_status: Mapped[str | None] = mapped_column(String, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    as_of: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = created_at()
     summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
-        Index("ix_agent_reports_agent_type_created_at", "agent_type", text("created_at DESC")),
+        Index(
+            "ix_agent_reports_type_owner_created_id",
+            "agent_type",
+            "owner_user_id",
+            text("created_at DESC"),
+            text("id DESC"),
+        ),
+        Index(
+            "ix_agent_reports_agent_type_created_at",
+            "agent_type",
+            text("created_at DESC"),
+        ),
         Index(
             "ix_agent_reports_client_session_id_created_at",
             "client_session_id",
             text("created_at DESC"),
         ),
-        Index("ix_agent_reports_stock_code_created_at", "stock_code", text("created_at DESC")),
+        Index(
+            "ix_agent_reports_stock_code_created_at",
+            "stock_code",
+            text("created_at DESC"),
+        ),
         Index("ix_agent_reports_trace_id", "trace_id"),
     )

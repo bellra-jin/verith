@@ -7,6 +7,10 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_environment(monkeypatch):
+    # Never read private .env files in isolated unit/config checks.
+    from pydantic_settings.sources import DotEnvSettingsSource
+
+    monkeypatch.setattr(DotEnvSettingsSource, "_read_env_files", lambda self: {})
     # Route imports construct an unused engine. Set dummy values before the lazy
     # route import, and restore the process environment after every unit test.
     values = {

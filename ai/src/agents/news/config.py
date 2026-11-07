@@ -196,7 +196,7 @@ GRAPH_NEWSREF_KEY: str = "url"
 # (CLAUDE.md §7). ⚠️ 실제 경로·요청/응답 스키마 확정은 verith/docs/api_contract.md(미확정, §8) —
 # 아래 경로는 SCHEMA_SPEC §7.2 초안을 따른 '잠정값'이다(확정값처럼 굳히지 않는다).
 # ---------------------------------------------------------------------------
-BACKEND_BASE_URL: str = (os.getenv("BACKEND_BASE_URL") or "").strip() or "http://localhost:8000"
+BACKEND_BASE_URL: str = (os.getenv("BACKEND_BASE_URL") or "").strip() or "http://localhost:8200"
 BACKEND_TIMEOUT: float = float(os.getenv("BACKEND_TIMEOUT") or 10.0)      # backend 호출 타임아웃(초)
 BACKEND_MAX_RETRIES: int = int(os.getenv("BACKEND_MAX_RETRIES") or 2)     # 재시도 횟수(총 시도 = 1 + N)
 BACKEND_RETRY_BACKOFF: float = float(os.getenv("BACKEND_RETRY_BACKOFF") or 1.0)  # 재시도 간 대기(초, 지수 backoff 기준)

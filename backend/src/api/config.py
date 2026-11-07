@@ -4,7 +4,7 @@
 API/AI 서버/JWT 등 나머지 설정은 각 담당자가 후속 브랜치에서 확장한다.
 
 **비밀값/DB URL 은 코드에 하드코딩하지 않는다**(backend_coding_guidelines §2.1/§2.2).
-`DATABASE_URL` 은 필수 환경변수이며(예: `postgresql+asyncpg://<user>:<pw>@<host>:5433/<db>`),
+`DATABASE_URL` 은 필수 환경변수이며(예: `postgresql+asyncpg://<user>:<pw>@<host>:15432/<db>`),
 없으면 설정 로딩 단계에서 즉시 에러를 낸다. 값은 환경변수 또는 `backend/.env` 로 주입한다.
 
 **secret-safe:** DATABASE_URL 검증은 pydantic 밖에서 수행한다. pydantic 의 `ValidationError`
@@ -16,6 +16,8 @@ API/AI 서버/JWT 등 나머지 설정은 각 담당자가 후속 브랜치에�
 from __future__ import annotations
 
 import pathlib
+
+from pydantic import Field
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -39,11 +41,18 @@ class Settings(BaseSettings):
     # SQLAlchemy async DSN. 검증은 _load_settings() 에서(secret-safe).
     DATABASE_URL: str = ""
     # pytest 전용 DB(예: verith_test). 공유 dev/smoke DB 오염 방지용 경계. app runtime 은 쓰지 않고
-    # conftest 만 참조한다(미설정이면 os env → DATABASE_URL fallback + 경고). startup 필수 아님.
+    # legacy 설정 호환용. 테스트는 명시적 환경변수와 승인된 일회용 자원 preflight가 필수다.
     TEST_DATABASE_URL: str = ""
+    ENABLE_NEWS_GRAPH: bool = False
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = Field(default="", repr=False)
+    AUTH_REDIRECT_URI: str = ""
+    AUTH_ORIGINS: str = ""
+    AUTH_ALLOW_LOCAL_HTTP: bool = False
+    AUTH_SESSION_TTL_SECONDS: int = Field(default=3600, gt=0, le=2147483647)
 
     # Neo4j(뉴스 지식그래프) 접속. PostgreSQL 과 마찬가지로 별도 DB 서버이며,
-    # bolt 드라이버로 접속한다(예: bolt://localhost:7687). 값·비밀번호는 코드에 박지 않고
+    # bolt 드라이버로 접속한다(예: bolt://localhost:17687). 값·비밀번호는 코드에 박지 않고
     # .env/환경변수에서 읽는다. 검증은 _load_settings() 에서(secret-safe).
     NEO4J_URI: str = ""
     NEO4J_USER: str = ""
@@ -60,9 +69,9 @@ class Settings(BaseSettings):
     DART_API_KEY: str = ""
     DART_BASE_URL: str = "https://opendart.fss.or.kr/api"
 
-    # CORS 허용 origin(브라우저가 백엔드를 직접 호출할 때). 콤마 구분 — dev 기본은 프론트(3000),
+    # CORS 허용 origin(브라우저가 백엔드를 직접 호출할 때). 콤마 구분 — dev 기본은 프론트(3200),
     # 배포 시 env(CORS_ORIGINS)로 실제 도메인을 넣는다. (프론트와 백엔드는 서로 다른 origin.)
-    CORS_ORIGINS: str = "http://localhost:3000"
+    CORS_ORIGINS: str = "http://localhost:3200"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -82,20 +91,17 @@ def _load_settings() -> Settings:
             "DATABASE_URL 이 설정되지 않았습니다. 환경변수 또는 backend/.env 에 "
             "postgresql+asyncpg://... DSN 을 설정하세요."
         )
-    if not s.NEO4J_URI.strip():
+    if s.ENABLE_NEWS_GRAPH and not s.NEO4J_URI.strip():
         raise RuntimeError(
             "NEO4J_URI 가 설정되지 않았습니다. 환경변수 또는 backend/.env 에 "
             "bolt://<host>:7687 형태의 URI 를 설정하세요."
         )
-    if not s.NEO4J_USER.strip() or not s.NEO4J_PASSWORD.strip():
+    if s.ENABLE_NEWS_GRAPH and (
+        not s.NEO4J_USER.strip() or not s.NEO4J_PASSWORD.strip()
+    ):
         raise RuntimeError(
             "NEO4J_USER / NEO4J_PASSWORD 가 설정되지 않았습니다. 환경변수 또는 "
             "backend/.env 에 Neo4j 계정 정보를 설정하세요."
-        )
-    if not s.AI_SERVICE_URL.strip():
-        raise RuntimeError(
-            "AI_SERVICE_URL 이 설정되지 않았습니다. 환경변수 또는 backend/.env 에 "
-            "AI 서버 base URL 을 설정하세요."
         )
     return s
 

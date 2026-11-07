@@ -18,7 +18,7 @@
 
 ## 2. 절대 규칙 (반드시 지킬 것)
 
-1. **DB에 직접 접근하지 않는다.** PostgreSQL·Neo4j 접근은 오직 `services/backend/`의 클라이언트(save_client / query_client)를 통해 backend(:8000)를 HTTP 호출한다. 이 에이전트 코드에 DB 드라이버·SQL·Cypher를 직접 쓰지 않는다.
+1. **DB에 직접 접근하지 않는다.** PostgreSQL·Neo4j 접근은 오직 `services/backend/`의 클라이언트(save_client / query_client)를 통해 backend(:8200)를 HTTP 호출한다. 이 에이전트 코드에 DB 드라이버·SQL·Cypher를 직접 쓰지 않는다.
 
 2. **nodes는 얇게, 로직은 services에.** `nodes/`의 파일은 "이 단계에서 무엇을 할지" 순서만 담당하고, 실제 무거운 로직(크롤링·모델 추론·계산)은 `services/`에 둔다. 노드는 서비스를 호출하는 얇은 껍데기다.
 

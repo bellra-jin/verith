@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,7 +88,7 @@ async def get_agent_indexes(
 
 
 async def get_report_parts(
-    session: AsyncSession, report_ids: list[UUID]
+    session: AsyncSession, report_ids: list[UUID], *, owner_user_id: UUID
 ) -> tuple[
     list[FlowReport],
     list[FlowReportInterpretation],
@@ -96,23 +96,22 @@ async def get_report_parts(
     list[AgentReport],
 ]:
     """Batch projections for a list page; keep reads bounded as page size increases."""
-    roots = await session.scalars(
-        select(FlowReport).where(FlowReport.id.in_(report_ids))
-    )
+    eligible = eligible_flow_ids(owner_user_id).where(FlowReport.id.in_(report_ids))
+    roots = await session.scalars(select(FlowReport).where(FlowReport.id.in_(eligible)))
     interpretations = await session.scalars(
         select(FlowReportInterpretation).where(
-            FlowReportInterpretation.report_id.in_(report_ids)
+            FlowReportInterpretation.report_id.in_(eligible)
         )
     )
     verifications = await session.scalars(
         select(FlowReportVerification).where(
-            FlowReportVerification.report_id.in_(report_ids)
+            FlowReportVerification.report_id.in_(eligible)
         )
     )
     indexes = await session.scalars(
         select(AgentReport).where(
             AgentReport.agent_type == "flow",
-            AgentReport.agent_report_id.in_(report_ids),
+            AgentReport.agent_report_id.in_(eligible),
         )
     )
     return (
@@ -137,3 +136,76 @@ async def delete_root(session: AsyncSession, report_id: UUID) -> int:
     # interpretation·verification 은 FK CASCADE 로 함께 지워진다.
     result = await session.execute(delete(FlowReport).where(FlowReport.id == report_id))
     return result.rowcount or 0
+
+
+def eligible_flow_ids(owner_user_id: UUID):
+    """One SQL predicate shared by detail/list/count/batches, before pagination."""
+    counts = (
+        select(AgentReport.agent_report_id.label("root_id"), func.count().label("n"))
+        .where(AgentReport.agent_type == "flow")
+        .group_by(AgentReport.agent_report_id)
+        .subquery()
+    )
+    return (
+        select(FlowReport.id)
+        .join(counts, counts.c.root_id == FlowReport.id)
+        .join(
+            AgentReport,
+            (AgentReport.agent_report_id == FlowReport.id)
+            & (AgentReport.agent_type == "flow"),
+        )
+        .where(
+            FlowReport.owner_user_id == owner_user_id,
+            counts.c.n == 1,
+            AgentReport.owner_user_id == FlowReport.owner_user_id,
+        )
+    )
+
+
+async def get_owned_report(
+    session: AsyncSession, report_id: UUID, *, owner_user_id: UUID, lock: bool = False
+):
+    # Root lock must precede projection inspection for writers.
+    statement = select(FlowReport).where(
+        FlowReport.id == report_id, FlowReport.owner_user_id == owner_user_id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    root = await session.scalar(statement.execution_options(populate_existing=True))
+    if root is None:
+        return None
+    eligible = await session.scalar(
+        select(FlowReport.id).where(
+            FlowReport.id == report_id,
+            FlowReport.id.in_(eligible_flow_ids(owner_user_id)),
+        )
+    )
+    return root if eligible is not None else None
+
+
+async def list_owned_indexes(
+    session: AsyncSession,
+    *,
+    owner_user_id: UUID,
+    stock_code=None,
+    client_session_id=None,
+    limit=20,
+    offset=0,
+    count=False,
+):
+    statement = select(func.count() if count else AgentReport).where(
+        AgentReport.agent_type == "flow",
+        AgentReport.agent_report_id.in_(eligible_flow_ids(owner_user_id)),
+    )
+    if stock_code is not None:
+        statement = statement.where(AgentReport.stock_code == stock_code)
+    if client_session_id is not None:
+        statement = statement.where(AgentReport.client_session_id == client_session_id)
+    if count:
+        return int(await session.scalar(statement) or 0)
+    rows = await session.scalars(
+        statement.order_by(AgentReport.created_at.desc(), AgentReport.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(rows.all())

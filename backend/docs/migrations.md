@@ -89,9 +89,20 @@ docker exec verith-postgres psql -U verith -d verith -c "
 
 | 증상 | 원인 / 해결 |
 |---|---|
-| `Connect call failed ('127.0.0.1', 5432)` | 호스트 실행 시 `DATABASE_URL`을 compose host 포트 5433으로 맞춘다. |
+| `Connect call failed ('127.0.0.1', 5432)` | 호스트 실행 시 `DATABASE_URL`을 compose host 포트 15432으로 맞춘다. |
 | `CREATE EXTENSION vector` 실패 | PostgreSQL 이미지가 `pgvector/pgvector:pg16`인지 확인한다. |
 | `ValueError: the greenlet library is required` | `uv sync`로 `sqlalchemy[asyncio]` 의존성을 설치한다. |
 | `NameError: pgvector` | migration 상단의 `import pgvector.sqlalchemy.vector`를 확인한다. |
 | `agent_reports ... stocks` FK 위반 | `stocks`를 먼저 확보한 뒤 report/index를 저장한다. |
 | collation version mismatch 경고 | 개발 볼륨/OS locale 차이로 발생할 수 있다. 필요 시 DB collation version을 갱신한다. |
+
+
+## CF-002 현재 경계
+
+Host DSN 안내: `postgresql+asyncpg://<user>:<password>@localhost:15432/<database>`.
+Compose 내부는 `postgres:5432` 그대로다. 포트 패치는 실제 migration/재시작 승인이 아니다.
+검증은 앱 DB가 아닌 승인된 별도 일회용 PostgreSQL에서 readonly preflight·실제 SQLAlchemy
+연결 재확인 후 동일 연결을 Alembic attributes/run_sync에 전달한다. verified test mode에
+연결이 없으면 앱 URL 로딩 전에 실패한다. auth 행/소유권이 있으면 CF-002 downgrade는 거부된다.
+기존 앱/운영 DB에서 위 왕복·extension drop 검사를 실행하지 않는다.
+[CF-002 실행 증거](flow_auth_ownership.md), [포트 안내](../../docs/local_ports.md).

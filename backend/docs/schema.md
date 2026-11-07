@@ -252,3 +252,29 @@ PostgreSQL 에는 `news.event_id`(nullable uuid)만 둬서 Neo4j `Event.canonica
   기본 지원 종목은 [`../README.md`](../README.md)의 seed 절차로 구성한다. 런타임 저장에서도
   결측에 대비해 `stocks`를 먼저 확보한 뒤 리포트/index를 저장한다.
 - `stock_code` 는 **nullable** 이다(뉴스/산업/거시성 질의는 종목이 없을 수 있음).
+
+
+## CF-002 v0.3 — 서버 인증과 Flow 소유권 확장
+
+`auth_users`: 서버 발급 UUID PK, created_at timestamptz, nullable disabled_at.
+`auth_identities`: UUID PK, user_id RESTRICT FK, 대소문자를 보존하는 nonempty issuer TEXT와
+subject VARCHAR(255), created_at. UNIQUE(issuer, subject), user_id index. 최초 연결은 사용자와
+신원을 같은 savepoint에서 생성하고 UNIQUE 경쟁 실패 시 둘 다 rollback 후 기존 신원을 읽는다.
+`auth_sessions`: UUID PK, user_id RESTRICT FK, 유일한 SHA-256 token_digest BYTEA(32),
+created_at/expires_at/revoked_at timestamptz. expires_at은 유한하며 created_at보다 미래,
+revoked_at은 NULL 또는 created_at 이후. user_id/expires_at 및 expires_at index.
+원문 난수 bearer는 DB에 저장하지 않는다. TTL 기본 3600초, 매 요청 DB 유효성 확인.
+
+flow_reports.owner_user_id는 nullable RESTRICT FK이며 기존 행은 NULL 그대로 보존한다.
+owner/created_at DESC/id DESC index를 추가한다. common agent_reports의 기존 owner/session
+UUID는 논리 링크로 보존하고 global FK/UNIQUE/NOT NULL을 추가하지 않는다.
+agent_type/owner/created_at DESC/id DESC 비유일 index를 추가한다.
+Flow root owner가 정본이며 정확히 한 Flow index의 owner가 같아야 reader에 노출한다.
+모든 목록/count/pagination/batch/detail/delete에서 SQL로 owner와 적격 projection을 검증한다.
+삭제 잠금 순서는 유효 세션 공유 잠금 → 소유 root FOR UPDATE → index 정합성 → 삭제이다.
+공개 저장·전체 삭제·다른 관점·Supervisor 직접 AI 경로는 닫는다.
+
+b1e9d4a7c2f1 다음 확장 revision만 추가한다. auth 데이터 또는 nonNULL root owner가 있으면
+파괴적 downgrade를 거부한다. 테스트 migration은 승인된 일회용 PostgreSQL의 구성·readonly
+preflight 및 실제 SQLAlchemy 연결 재확인 후 동일 연결을 Alembic에 전달한다.
+실제 외부 OIDC 검증은 내부 합성 세션/owner PostgreSQL 검증과 구별한다.

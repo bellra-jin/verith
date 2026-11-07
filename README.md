@@ -7,6 +7,8 @@
 생성/HTML·Supervisor 직접 AI proxy는 차단한다. 기존 UI/분석 코드의 존재는 공개 허용이 아니다.
 
 - 먼저 [문서 목록과 권위](docs/documentation.md)를 읽고 [현재 책임/DB 경계](docs/architecture/current-boundaries.md)를 확인한다.
+- 작업 안내는 [root AGENTS](AGENTS.md) → 해당 서비스 AGENTS로 읽는다. ST-001 1단계 PR #3 병합 후
+  [2단계 작업 안내 기록](docs/work/ST-001-stage-2.md)을 추가했다. 공용 환경/안전 entry는 아직 후속이다.
 - 공유 가능한 [CF-001 저장 계약](docs/contracts/CF-001-v1.1.shared-v1.md) 위에
   [CF-002 인증/owner 계약](docs/contracts/CF-002-v0.6.shared-v1.md)을 적용한다.
   둘은 외부 지시서의 파생 스냅샷이며 원본/실행 승인이 아니다. [출처·hash manifest](docs/contracts/manifest.json)를 함께 관리한다.
@@ -16,8 +18,8 @@
 - [검증 상태](docs/documentation.md#검증-상태와-이력): 과거 Backend 343개/Frontend 15개와 합성 HTTP 3개·대상 lint/type/build 기록과
   전체 ESLint 기존 오류 2건을 구분한다. 실제 인증의 자연 만료·옛 cookie 재전송 등은 미검증이다.
   CF-002 병합은 전체 Flow MVP·서비스 공개 완료가 아니다.
-- 기존 검사 경계/사본 도우미는 서비스 README에서 찾는다. 새 수집 전 안전 검사 entry·공용 환경 예제와
-  AGENTS 정리는 후속 단계다. 앱 import/전체 pytest·migration/seed·Google/AI 호출을 문서 확인 중 실행하지 않는다.
+- 기존 검사 경계/사본 도우미는 서비스 README에서 찾는다. 새 수집 전 안전 검사 entry와 공용 환경 예제는
+  후속 단계다. 앱 import/전체 pytest·migration/seed·Google/AI 호출을 문서 확인 중 실행하지 않는다.
   실제 .env·ignored Compose·기존 DB/volume는 보존하며 개인 설정이 clone에 있다고 가정하지 않는다.
 
 ## 과거 포트폴리오·구현/시연 기록

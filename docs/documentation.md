@@ -1,12 +1,15 @@
 # 문서 목록과 권위
 
-문서 목록 버전 1 / 확인일 2026-11-07, Asia/Seoul (+09:00).
-검토 코드 `a5b60f2fd0b00efedae2c98a2004ede62470b094` (CF-002 PR #2 병합).
+문서 목록 버전 2 / 확인일 2026-11-07, Asia/Seoul (+09:00).
+현재 작업 기준 `083dea8436b699aa3a52ddbf36848e8fe3535720` (ST-001 1단계 PR #3 병합).
+CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작업 기준 갱신을 이유로 바꾸지 않는다.
 문서가 있다는 사실은 해당 기능의 공개 허용·검증 완료·실제 환경 설정을 뜻하지 않는다.
 
 ## 현재 개발 시작점
 
-1. [루트 README](../README.md)의 현재 상태와 [현재 책임/DB 경계](architecture/current-boundaries.md)를 읽는다.
+1. [루트 README](../README.md)와 [root 작업 안내](../AGENTS.md), 해당 서비스의
+   [Frontend](../frontend/AGENTS.md)·[Backend](../backend/AGENTS.md)·[AI](../ai/AGENTS.md) 안내를 읽고
+   [현재 책임/DB 경계](architecture/current-boundaries.md)를 확인한다.
 2. 아래 표에서 수정할 도메인의 계약과 코드 기준을 고른다. Technical 계약을 Flow나 전체 서비스 계약으로 확대하지 않는다.
 3. [포트/설정 안내](local_ports.md)와 서비스별 [Frontend](../frontend/README.md)/[Backend](../backend/README.md)
    README를 확인한다. 서비스 실행·migration·seed·DB/Google/AI 검사는 문서 열람의 부수 작업이 아니다.
@@ -43,15 +46,23 @@
 논리 문서명·버전·source hash는 manifest의 reference_documents에 기록한다.
 상세설계의 전체 실행/복구·다중 관점 목표를 현재 구현 완료로 읽지 않는다.
 
-현재 문서 작업 지시는 **ST-001_문서_정본과_안전한_개발_기반_정리.md v1.0**,
-source SHA-256 `1b7975913e92ff08065b2094879075fbe796e6e57d6227890b8bc92a772c5010`이다.
-이번 구현 기준은 위 a5b60f2이며 1단계 문서만 미커밋이다. root/backend/ai AGENTS·공용 환경 예제·
-수집 전 차단 검사 entry는 후속 분리 단계다. 다음 단계는 이 단계 검토와 사용자 병합 후 최신
-develop에서 별도 브랜치로 시작한다. 큰 파일/폴더 재배치 구조는 비교 검토 전 **후보**이며 미확정이다.
+현재 문서 작업 지시는 **ST-001_문서_정본과_안전한_개발_기반_정리.md v1.1 / 2단계**,
+source SHA-256 `9a7d519f8636e6ba127bb66e74c74ff70d84f50b8705814b91916599c2ef97be`다.
+1단계는 commit `7aab357ae9e358dc7ab34320e4e5eecc1ae56288`/PR #3으로 병합됐고,
+이번 작업 기준은 위 `083dea8`이며 새 미커밋은 2단계의 작업 안내 문서다.
+manifest의 기존 v1.0 work_item은 work_item_history에 원형 보존하고 CF snapshot bytes/출처/버전/
+hash/reviewed SHA와 reference_documents는 유지한다.
+
+root·Backend·AI AGENTS를 추가하고 Frontend 기존 Next 블록은 보존했다. 이 단계의 문서 구현과
+독립 검토 수용은 구분한다. **3-A 공용 환경 예제·3-B Backend/Frontend 공통 안전 entry·3-C AI 안전
+entry는 아직 미구현 후속**이며 이 단계 검토/사용자 병합 후 최신 develop의 별도 branch에서
+3-A→3-B→3-C 순서로 진행한다. 없는 예제/script의 실행 링크를 제공하지 않는다.
+큰 파일/폴더 재배치 구조는 비교 검토 전 **후보**이며 미확정이다.
 
 ## 검증 상태와 이력
 
-ST-001 1단계는 문서 링크/anchor·출처/버전/hash·개인/비밀 제외·runtime diff 0을 직접 검사한다.
+ST-001 2단계는 허용된 9개 문서의 링크/anchor·작업 이력/source hash·기존 Next 블록/CF bytes 보존·
+개인/비밀 제외·허용범위 밖/runtime diff 0을 직접 검사한다.
 기능 테스트·서비스 실행·DB/Google/AI 검사를 재실행하지 않는다. 아래 기능 수치는 병합된
 **과거 CF 보고서 확인**이며 이번 문서 단계의 실행 결과가 아니다.
 
@@ -70,7 +81,9 @@ ST-001 1단계는 문서 링크/anchor·출처/버전/hash·개인/비밀 제외
 - ignored Compose는 공유되지 않았고 실제 private override/현재 DB 자격·포트 상태는 미확인이다.
   원본 비밀 파일을 읽거나 기존 컨테이너/자료를 재현 검사 대상으로 쓰지 않는다.
 
-이번 문서 1단계의 직접 검사·변경 목록은 [ST-001 1단계 기록](work/ST-001-stage-1.md)에 있다.
+1단계의 210개 독립 검토와 병합 전 작성/검사는 [1단계 기록](work/ST-001-stage-1.md)의 이력이다.
+작성 채팅의 병합 tree 확인은 local path 190개 존재 검사이며 anchor/전체 재검사는 아니었다는
+전달 기록과 구분한다. 이번 추가 문서의 직접 검사는 [2단계 기록](work/ST-001-stage-2.md)에 있다.
 
 ## 공유본 갱신 절차
 

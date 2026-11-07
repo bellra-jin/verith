@@ -1,5 +1,16 @@
 # CF-001 최소 공통·Flow 계약
 
+> **현재 상태 주석 · ST-001 1단계 / 2026-11-07T18:52:34+09:00**
+> 검토 head `a5b60f2fd0b00efedae2c98a2004ede62470b094`. CF-001은 commit
+> `02e443f5b3a6101c62bba1624b62eb42207a4056`/[PR #1](https://github.com/bellra-jin/verith/pull/1),
+> merge `d8d800b104822dfc72e1a7b0daecfa1ac45b9e43`로 병합됐다. CF-002 commit `7a5853d5f8725f593f647b2b0e5898dba50254fd`/
+> [PR #2](https://github.com/bellra-jin/verith/pull/2)는 검토 head로 18:22:15 KST (`2026-11-07T09:22:15Z`) 병합됐다.
+> 현재 인증/owner·공개 save 차단은 후속 [CF-002 공유 계약](../../docs/contracts/CF-002-v0.6.shared-v1.md)을 적용한다.
+> 아래 owner 미연결·공개 save-only·미커밋/미구현 설명은 **CF-001 당시 이력**이며 현재 허용 정책이 아니다.
+> 현재 미커밋 작업은 ST-001 문서만이다. 당시 단위/격리 DB 결과를 이번에 재실행하지 않았고
+> 공통 실행·worker·실제 AI·전용 snapshot/복구와 실제 인증의 남은 검증을 완료로 바꾸지 않는다.
+> [문서 권위/검증 상태](../../docs/documentation.md).
+
 기준: develop `7f376ce11c7bd12254e1e6fe1cebc3bf13f64e66`, 작업 브랜치
 `feat/flow-contract`. 상세설계 v1.0은 목표 안전 원칙, MVP v0.1은 단계 제안이다.
 이번 구현은 스키마·순수 검증·기존 save-only 경계만 다룬다.

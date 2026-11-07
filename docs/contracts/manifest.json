@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-11-07T19:05:06+09:00",
+  "derivation": "Reviewed technical summaries, not original instructions or runtime authorization",
+  "application_order": [
+    "CF-001",
+    "CF-002"
+  ],
+  "work_item": {
+    "id": "ST-001",
+    "source_version": "v1.0",
+    "source_sha256": "1b7975913e92ff08065b2094879075fbe796e6e57d6227890b8bc92a772c5010",
+    "reviewed_commit": "a5b60f2fd0b00efedae2c98a2004ede62470b094",
+    "stage": "1 documentation only"
+  },
+  "snapshots": [
+    {
+      "task_id": "CF-001",
+      "source_document": "CF-001_최소_공통_Flow_계약.md",
+      "source_version": "v1.1",
+      "source_sha256": "ff92ece459e42f707cc723e9dda7b2e353b423c8c2c1bfa60db37e7262d83c08",
+      "publication_version": "shared-v1",
+      "reviewed_commit": "a5b60f2fd0b00efedae2c98a2004ede62470b094",
+      "snapshot_path": "docs/contracts/CF-001-v1.1.shared-v1.md",
+      "snapshot_sha256": "bf8e8bb84c8ba80a8fa7f074b12b0b92a53b732389928f2684158236394fe8d7",
+      "source_sections": [
+        "4 최소 계약",
+        "5 ID 제안",
+        "6 검증 범위",
+        "6-1 한시 JSONB",
+        "7 검증",
+        "8 후속"
+      ],
+      "omitted": [
+        "개인 로컬 경로와 운영 대화",
+        "브랜치 작업 지시/개인 운영 원문",
+        "과거 원시 실행 영수증·자격·개인정보"
+      ]
+    },
+    {
+      "task_id": "CF-002",
+      "source_document": "CF-002_실제_인증과_Flow_소유권_경계.md",
+      "source_version": "v0.6",
+      "source_sha256": "00fb44149066602152002910b446004289de8b3eed1410b8f554dd873b5d32eb",
+      "publication_version": "shared-v1",
+      "reviewed_commit": "a5b60f2fd0b00efedae2c98a2004ede62470b094",
+      "snapshot_path": "docs/contracts/CF-002-v0.6.shared-v1.md",
+      "snapshot_sha256": "97fb8d2480f5129d690370e71ef8a3db6e39d9372f6d84cf47c24a6c23477ff3",
+      "source_sections": [
+        "1 범위",
+        "4-1 책임",
+        "4-2 Google 계약",
+        "4-3 내부 모델",
+        "4-4 세션",
+        "4-5 owner/index/migration",
+        "4-6 포트",
+        "4-7 소유 증명/격리 원칙",
+        "5 차단",
+        "6 검증 수준",
+        "8 후속"
+      ],
+      "omitted": [
+        "사람/계정/개인 프로젝트 정보",
+        "전체 Mac 경로·대화·개인 운영 원문",
+        "일회성 credential 사용 승인/외부 실행 허가",
+        "원시 PID/컨테이너/nonce/브라우저 실행 영수증·비밀"
+      ]
+    }
+  ],
+  "reference_documents": [
+    {
+      "source_document": "Verith_고도화_상세설계_v1.0.md",
+      "source_version": "v1.0",
+      "source_sha256": "14e1e5cdf11b355c02dd5bb8b9dd6cf4672a19c9b053af44fa4e026fafc9958e",
+      "role": "Target architecture and safety principles; not implementation evidence"
+    },
+    {
+      "source_document": "verith_고도화_mvp.md",
+      "source_version": "v0.1",
+      "source_sha256": "87af33488984fb03ccbe2697de7e8293a49d1893ee30bbf07f96584fb1703ed0",
+      "role": "Proposed stage scope; not completion evidence"
+    }
+  ]
+}

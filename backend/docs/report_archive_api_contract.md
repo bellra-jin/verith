@@ -1,5 +1,8 @@
 # Report Archive — 공통 보관함 목록 API 계약 (정본)
 
+> **현재 적용 범위 (a5b60f2 / 2026-11-07 KST):** 아래 다관점 카드 shape/필터 예시는 응답 형태의 범위다. 현재 CF-002 접근 허용은 인증된 본인 Flow 목록/count뿐이며 다른 agent 기능의 공개 허용을 뜻하지 않는다.
+> [문서 권위](../../docs/documentation.md)와 [현재 책임/DB 경계](../../docs/architecture/current-boundaries.md)를 함께 읽는다. 이번 문서 단계는 기능/DB 검사를 재실행하지 않았다.
+
 `backend/docs/report_archive_api_contract.md`
 
 프론트 "리포트 보관함" 화면이 여러 agent 리포트를 **하나의 공통 카드 리스트**로 렌더하기 위한 목록 API.

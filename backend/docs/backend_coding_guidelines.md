@@ -1,6 +1,6 @@
 # veriθ Backend — 코드 작성 규칙
 
-`docs/backend_coding_guidelines.md`
+`backend/docs/backend_coding_guidelines.md`
 
 이 문서는 veriθ 백엔드 서버를 구현할 때 지켜야 할 코드 작성 기준을 정리한다. 목적은 단순한 스타일 통일이 아니라 **책임 범위 혼동, 하드코딩, 스파게티 코드, DB 저장 불일치, 비밀키 노출, API 계약 깨짐**을 방지하는 것이다.
 
@@ -12,15 +12,23 @@
 
 ### 1.1 문서가 먼저, 코드는 그다음
 
-백엔드의 API, DB, 응답 구조는 문서가 정본이다.
+먼저 [문서 목록과 권위](../../docs/documentation.md)에서 수정할 도메인과 현재 계약을 확인한다.
 
-- API 변경은 `docs/api_spec.md`를 먼저 수정한다.
-- DB 컬럼·테이블 변경은 `docs/schema.md`를 먼저 수정한다.
-- AI 응답 JSON 구조 변경은 `docs/contracts.md`를 먼저 수정한다.
-- enum/code 값 변경은 `docs/enums.md`를 먼저 수정한다.
-- 화면 표시용 매핑 변경은 `docs/frontend_mapping.md`와 충돌하지 않는지 확인한다.
+- DB 물리 구조는 [schema](schema.md), 변경/검증 절차는 [migrations](migrations.md)다.
+- Backend Technical 응답은 [technical_frontend_api_contract](technical_frontend_api_contract.md),
+  공통 보관함 shape는 [report_archive_api_contract](report_archive_api_contract.md)에서 관리한다.
+- Technical AI 내부 요청/JSON/enum/화면은 각각
+  [api_spec](../../ai/src/agents/technical/docs/api_spec.md),
+  [contracts](../../ai/src/agents/technical/docs/contracts.md),
+  [enums](../../ai/src/agents/technical/docs/enums.md),
+  [frontend_mapping](../../ai/src/agents/technical/docs/frontend_mapping.md)의 **Technical 범위**다.
+- Flow 저장·검증은 [CF-001 공유 계약](../../docs/contracts/CF-001-v1.1.shared-v1.md),
+  실제 세션/owner·공개 차단은 [CF-002 공유 계약](../../docs/contracts/CF-002-v0.6.shared-v1.md)을 함께 적용한다.
+  종목 식별 API는 [stock_resolver](stock_resolver.md)와 구분한다.
 
-코드가 문서와 다르면 코드가 틀린 것으로 본다.
+없는 docs/api_spec·contracts·enums·frontend_mapping을 새 범용 정본처럼 만들지 않는다.
+차이가 나면 현재 지시/해당 계약/코드 근거의 출처와 영향을 보고하고 확정 계약부터 맞춘다.
+과거 문서나 다른 도메인을 기준으로 현재 코드를 일괄 오류로 판단하거나 API/권한을 바꾸지 않는다.
 
 ### 1.2 백엔드는 저장과 전달의 책임을 가진다
 
@@ -63,7 +71,7 @@ AI_SERVICE_URL = "http://localhost:8001"
 좋은 예:
 
 ```python
-from src.core.config import settings
+from src.api.config import settings
 
 ai_service_url = settings.AI_SERVICE_URL
 ```
@@ -98,7 +106,10 @@ ai_service_url = settings.AI_SERVICE_URL
 - HTML 생성
 - 프론트 UI 라벨 임의 생성
 
-이 값들은 AI 에이전트 또는 프론트의 책임이다.
+이 값들은 AI 에이전트 또는 프론트의 책임이다. 위 금지는 사용자 분석 요청 경로의 책임 원칙이다.
+기존 KIS/DART 수동 master sync 관리 스크립트와 Fundamental SELECT 호환의 실제 예외/미확인은
+[현재 책임 지도](../../docs/architecture/current-boundaries.md)에서 구분한다. 이를 새 실제 호출·DB 권한
+확대나 현재 차단된 분석을 열라는 지시로 해석하지 않는다.
 
 ### 3.2 백엔드는 AI 결과를 임의로 바꾸지 않는다
 
@@ -124,7 +135,10 @@ validated_report = TechnicalReportResponse.model_validate(ai_response)
 
 ### 4.1 계층별 책임을 분리한다
 
-권장 구조 예시는 다음과 같다.
+아래는 **권장 책임 예시**이며 현재 경로/새 재배치안이 아니다. 실제 entry는
+[src/api/main.py](../src/api/main.py), config는 [src/api/config.py](../src/api/config.py),
+service/repository/schema는 src/api 아래, 모델은 [db/models](../db/models),
+테스트는 [tests](../tests)에 있다. 큰 파일/목표 폴더 구조는 후속 비교 전 확정하지 않는다.
 
 ```text
 backend/src/
@@ -178,7 +192,7 @@ def create_report(payload: CreateTechnicalReportRequest):
 
 ### 5.1 DB 구조는 `schema.md`를 따른다
 
-테이블명, 컬럼명, 관계는 `docs/schema.md`가 정본이다. 임의 컬럼을 추가하지 않는다.
+테이블명, 컬럼명, 관계는 [schema](schema.md)가 정본이다. 임의 컬럼을 추가하지 않는다.
 
 DB 변경이 필요하면 순서가 중요하다.
 
@@ -430,7 +444,7 @@ git diff
 체크리스트:
 
 - [ ] 요청 범위의 파일만 변경했는가?
-- [ ] `api_spec.md`, `schema.md`, `contracts.md`와 충돌하지 않는가?
+- [ ] 문서 목록의 해당 도메인 API/JSON 계약과 schema/migrations에 충돌하지 않는가?
 - [ ] DB 변경이 있다면 migration이 있는가?
 - [ ] 백엔드가 AI 분석 값을 임의로 만들거나 바꾸지 않는가?
 - [ ] timeout 없는 외부 호출이 없는가?

@@ -1,5 +1,30 @@
 # veriθ — 멀티 에이전트 주식 분석 서비스
 
+## 현재 개발 안내 · CF-002 이후
+
+기준: develop의 CF-002 병합 `a5b60f2` (2026-11-07). 현재 사용자 경로는 **Google 앱 세션으로
+보호된 본인 Flow 보관함·상세·개별 삭제**다. 새 분석/공개 payload 저장·전체 삭제·다른 관점의
+생성/HTML·Supervisor 직접 AI proxy는 차단한다. 기존 UI/분석 코드의 존재는 공개 허용이 아니다.
+
+- 먼저 [문서 목록과 권위](docs/documentation.md)를 읽고 [현재 책임/DB 경계](docs/architecture/current-boundaries.md)를 확인한다.
+- 공유 가능한 [CF-001 저장 계약](docs/contracts/CF-001-v1.1.shared-v1.md) 위에
+  [CF-002 인증/owner 계약](docs/contracts/CF-002-v0.6.shared-v1.md)을 적용한다.
+  둘은 외부 지시서의 파생 스냅샷이며 원본/실행 승인이 아니다. [출처·hash manifest](docs/contracts/manifest.json)를 함께 관리한다.
+- 서비스 안내: [Frontend](frontend/README.md), [Backend](backend/README.md).
+  브라우저 3200/Backend 8200/AI 9200, 데이터 host port·callback은 [로컬 포트 문서](docs/local_ports.md)를 따른다.
+  container 내부 포트·모델 inference 주소와 혼동하지 않는다.
+- [검증 상태](docs/documentation.md#검증-상태와-이력): 과거 Backend 343개/Frontend 15개와 합성 HTTP 3개·대상 lint/type/build 기록과
+  전체 ESLint 기존 오류 2건을 구분한다. 실제 인증의 자연 만료·옛 cookie 재전송 등은 미검증이다.
+  CF-002 병합은 전체 Flow MVP·서비스 공개 완료가 아니다.
+- 기존 검사 경계/사본 도우미는 서비스 README에서 찾는다. 새 수집 전 안전 검사 entry·공용 환경 예제와
+  AGENTS 정리는 후속 단계다. 앱 import/전체 pytest·migration/seed·Google/AI 호출을 문서 확인 중 실행하지 않는다.
+  실제 .env·ignored Compose·기존 DB/volume는 보존하며 개인 설정이 clone에 있다고 가정하지 않는다.
+
+## 과거 포트폴리오·구현/시연 기록
+
+아래는 담당 범위와 당시 시연·성과를 보존한 이력이다. 수치·영상·예전 실행 흐름은 현재 기능의
+공개 허용이나 이번 단계의 검사 결과가 아니다. 현재 개발은 위 문서 목록에서 시작한다.
+
 ## Top Supervisor · 가격/기술적 분석 에이전트
 
 > 사용자의 자연어 질문을 5개 전문 에이전트에 분배하고, 실제 시세를 바탕으로 기술적 국면·신호·신뢰도·리스크를 설명하는 서비스입니다.

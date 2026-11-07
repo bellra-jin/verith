@@ -1,5 +1,18 @@
 # veriθ Backend
 
+## 문서 탐색과 현재 범위
+
+[문서 목록/권위](../docs/documentation.md), [Backend 작성 가이드](docs/backend_coding_guidelines.md),
+[현재 책임/DB 경계](../docs/architecture/current-boundaries.md)를 먼저 읽는다.
+현재 공개 사용은 검증된 본인 Flow 조회·개별 삭제이며, 아래 과거 분석/관리 예시는 현재 허용 API가 아니다.
+[CF-001](../docs/contracts/CF-001-v1.1.shared-v1.md)의 저장 계약에
+[CF-002](../docs/contracts/CF-002-v0.6.shared-v1.md)의 인증/owner·차단 경계를 함께 적용한다.
+Fundamental의 마스터 SELECT 호환과 실제 role의 최소 권한 미확인은 책임 지도에서 구분한다.
+실제 .env·ignored Compose는 clone의 공용 환경 예제가 아니다. 아래 Docker/migration/seed/restore/sync
+명령은 별도 대상·권한·데이터 영향을 확인하는 관리 작업이며 기본 테스트 준비로 실행하지 않는다.
+이번 문서 단계에서는 기능/DB/Google/AI 검사를 재실행하지 않는다.
+
+
 FastAPI 백엔드 — 요청을 받아 AI 에이전트를 호출하고, 결과 JSON을 검증·저장하고, 프론트에 제공한다.
 
 - DB 구조·관계·제약 정본: [`docs/schema.md`](docs/schema.md)
@@ -18,7 +31,7 @@ FastAPI 백엔드 — 요청을 받아 AI 에이전트를 호출하고, 결과 J
 Backend 실행 명령은 `uv run uvicorn src.api.main:app --reload --port 8200`이다.
 브라우저/CORS 기본은 `http://localhost:3200`, Backend→AI 안내값은
 `AI_SERVICE_URL=http://localhost:9200`이다. 실제 AI는 이번 작업에서 기동/호출하지 않는다.
-Backend `DATABASE_URL`은 `postgresql+asyncpg://<user>:<password>@localhost:15432/<database>
+Backend `DATABASE_URL`은 `postgresql+asyncpg://<user>:<password>@localhost:15432/<database>`이다.
 `NEO4J_URI`는 `bolt://localhost:17687`을 host 안내로 사용한다. Compose 내부 포트는 유지한다.
 Google local callback/origin은 3200이며 AUTH 설정은 명시해야 한다.
 [비밀 없는 전체 안내](../docs/local_ports.md), [CF-002 검증 보고](docs/flow_auth_ownership.md).

@@ -1,5 +1,8 @@
 # Technical Report — Frontend API 계약 (정본)
 
+> **현재 적용 범위 (a5b60f2 / 2026-11-07 KST):** 이 문서는 Technical 응답/read-model 범위다. 현재 CF-002는 사용자 Technical 생성/조회·HTML/trace 경로를 비활성화하며 아래 계약의 존재가 공개 사용 허용을 뜻하지 않는다.
+> [문서 권위](../../docs/documentation.md)와 [현재 책임/DB 경계](../../docs/architecture/current-boundaries.md)를 함께 읽는다. 이번 문서 단계는 기능/DB 검사를 재실행하지 않았다.
+
 `backend/docs/technical_frontend_api_contract.md`
 
 **이 문서 하나로 프론트가 technical 화면(목록→상세→trace→follow-up)을 구현할 수 있게 하는 정본.** backend

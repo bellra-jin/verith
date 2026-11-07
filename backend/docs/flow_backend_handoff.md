@@ -1,5 +1,8 @@
 # Flow Backend Handoff
 
+> **현재 적용 범위 (a5b60f2 / 2026-11-07 KST):** 아래 초기 handoff와 CF-001 보완은 이력이다. 현재 인증/owner·공개 save 차단은 후속 CF-002를 적용한다.
+> [문서 권위](../../docs/documentation.md)와 [현재 책임/DB 경계](../../docs/architecture/current-boundaries.md)를 함께 읽는다. 이번 문서 단계는 기능/DB 검사를 재실행하지 않았다.
+
 > CF-001 보완: 현재 save-only 구현과 검증·호환·테스트 경계는
 > [flow_contract.md](flow_contract.md)를 따른다. 아래의 구현 전 설명과 data_status
 > 미정 설명은 과거 handoff 기록이다. 현재 AI storage-spec/export는
@@ -43,10 +46,10 @@ resolve가 없으면 unavailable/degraded 카드가 될 가능성이 높다.
 
 관련 근거:
 
-- AI 저장 명세: [ai/src/agents/flow/docs/storage-spec.md](/Users/parkjinhee/AI/verith/ai/src/agents/flow/docs/storage-spec.md)
-- backend root 테이블: [backend/db/models/flow/flow_report.py](/Users/parkjinhee/AI/verith/backend/db/models/flow/flow_report.py)
-- backend 해석 테이블: [backend/db/models/flow/report_interpretation.py](/Users/parkjinhee/AI/verith/backend/db/models/flow/report_interpretation.py)
-- backend 검증 테이블: [backend/db/models/flow/report_verification.py](/Users/parkjinhee/AI/verith/backend/db/models/flow/report_verification.py)
+- AI 저장 명세: [ai/src/agents/flow/docs/storage-spec.md](../../ai/src/agents/flow/docs/storage-spec.md)
+- backend root 테이블: [backend/db/models/flow/flow_report.py](../../backend/db/models/flow/flow_report.py)
+- backend 해석 테이블: [backend/db/models/flow/report_interpretation.py](../../backend/db/models/flow/report_interpretation.py)
+- backend 검증 테이블: [backend/db/models/flow/report_verification.py](../../backend/db/models/flow/report_verification.py)
 
 ---
 

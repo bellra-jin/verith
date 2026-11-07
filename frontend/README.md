@@ -1,5 +1,16 @@
 # Verith Frontend
 
+## 문서 탐색과 현재 범위
+
+[문서 권위/검증 상태](../docs/documentation.md), [Frontend 작성 가이드](docs/frontend_coding_guidelines.md),
+[현재 책임 지도](../docs/architecture/current-boundaries.md)를 먼저 읽는다.
+실제 route entry는 [src/app](src/app)이며 권장 구조 예시의 pages 폴더를 만들거나 파일을 옮기지 않는다.
+현재 사용자 Flow 경로와 비활성 Technical/다른 관점을 구분한다. 아래 실행 명령은 필요한 자격/대상을
+확인한 개발 안내이며 ST-001 문서 단계에서 서비스를 기동하지 않는다.
+기존 검사 도우미가 존재해도 수집 전 차단을 갖춘 새 공통 안전 entry가 완료됐다는 뜻은 아니다.
+전체 ESLint의 기존 실패·실제 로그인 미검증은 위 문서 목록에 보존한다.
+
+
 Next 16.2.10의 로컬 브라우저 주소는 **http://localhost:3200**이다.
 
 ```sh

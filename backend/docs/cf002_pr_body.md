@@ -1,5 +1,17 @@
 # CF-002: Google OIDC 세션과 Flow 소유권 경계 구현
 
+> **현재 상태 주석 · ST-001 1단계 / 2026-11-07T18:52:34+09:00**
+> 검토 head: `a5b60f2fd0b00efedae2c98a2004ede62470b094`. CF-002 구현은 사용자 commit
+> `7a5853d5f8725f593f647b2b0e5898dba50254fd`로 [PR #2](https://github.com/bellra-jin/verith/pull/2)에
+> 포함되어 develop에 병합됐다. PR 병합 시각 18:22:15 KST (`2026-11-07T09:22:15Z`, 전달된 원격 기록),
+> 병합 commit은 위 head이며 이번 fetch/로컬 그래프로 포함을 재확인했다.
+> 본문의 미커밋·PR 미생성·당시 대기/미실행 표현과 실행 명령은 **작성/실행 당시 이력**이다.
+> 현재 미커밋 작업은 별도 `docs/document-authority`의 ST-001 문서 수정이며 CF-002 구현과 구분한다.
+> 이 단계는 과거 기능 검사를 재실행하지 않았다. 자연 시간 만료·옛 cookie 재전송·A→B 교차 UI·
+> 개별 실제 HTTP/BFF 직접 관측·B 상세 본문 명시 확인의 미검증과 전체 ESLint 기존 실패는 유지한다.
+> [현재 문서 권위/검증 상태](../../docs/documentation.md).
+> 아래 Draft 본문은 작성 당시 초안이다. PR #2는 이미 병합됐으며 이 문서가 현재 PR 상태를 뜻하지 않는다.
+
 기존 무인증 리포트 API와 Backend를 거치지 않는 AI 프록시를 닫고, Google code+PKCE 로그인과 PostgreSQL 폐기 가능한 앱 세션으로 본인 Flow 결과의 목록/count·상세·개별 삭제를 보호합니다. 선행 CF-001 PR #1 병합 기준 develop `d8d800b104822dfc72e1a7b0daecfa1ac45b9e43`에서 시작했으며 CF-002 정본 v0.2→v0.6을 적용했습니다.
 
 ## 변경

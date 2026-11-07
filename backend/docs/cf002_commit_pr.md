@@ -1,5 +1,17 @@
 # CF-002 사용자 직접 commit/push·Draft PR 안내
 
+> **현재 상태 주석 · ST-001 1단계 / 2026-11-07T18:52:34+09:00**
+> 검토 head: `a5b60f2fd0b00efedae2c98a2004ede62470b094`. CF-002 구현은 사용자 commit
+> `7a5853d5f8725f593f647b2b0e5898dba50254fd`로 [PR #2](https://github.com/bellra-jin/verith/pull/2)에
+> 포함되어 develop에 병합됐다. PR 병합 시각 18:22:15 KST (`2026-11-07T09:22:15Z`, 전달된 원격 기록),
+> 병합 commit은 위 head이며 이번 fetch/로컬 그래프로 포함을 재확인했다.
+> 본문의 미커밋·PR 미생성·당시 대기/미실행 표현과 실행 명령은 **작성/실행 당시 이력**이다.
+> 현재 미커밋 작업은 별도 `docs/document-authority`의 ST-001 문서 수정이며 CF-002 구현과 구분한다.
+> 이 단계는 과거 기능 검사를 재실행하지 않았다. 자연 시간 만료·옛 cookie 재전송·A→B 교차 UI·
+> 개별 실제 HTTP/BFF 직접 관측·B 상세 본문 명시 확인의 미검증과 전체 ESLint 기존 실패는 유지한다.
+> [현재 문서 권위/검증 상태](../../docs/documentation.md).
+> **아래 고정 HEAD stage/commit/push/PR 명령은 과거 CF-002 초안이며 현재 실행 안내가 아니다. 재사용하지 않는다.**
+
 2026-11-07 최종 작업 상태 기준. 아래 명령은 **준비만 했고 실행하지 않았다**. zsh/macOS에서 블록별로 실행한다. 자동으로 브랜치를 전환하거나 stash/reset/force-push하지 않는다.
 
 - 작업 branch `feat/flow-auth-ownership`, 기준/현재 HEAD `d8d800b104822dfc72e1a7b0daecfa1ac45b9e43`, origin `https://github.com/bellra-jin/verith.git`, PR base `develop`.

@@ -1,6 +1,6 @@
 # veriθ Frontend — 코드 작성 규칙
 
-`docs/frontend_coding_guidelines.md`
+`frontend/docs/frontend_coding_guidelines.md`
 
 이 문서는 veriθ 프론트엔드를 구현할 때 지켜야 할 코드 작성 기준을 정리한다. 목적은 **UI 하드코딩, API 계약 불일치, 화면 로직 과밀, 분석값 임의 생성, 비밀값 노출, 재사용 불가능한 컴포넌트**를 방지하는 것이다.
 
@@ -12,14 +12,21 @@
 
 ### 1.1 문서가 먼저, 화면은 그다음
 
-프론트 화면 구조와 라벨은 문서가 정본이다.
+먼저 [문서 목록과 권위](../../docs/documentation.md)에서 도메인·버전·현재 허용 경로를 확인한다.
+없는 범용 docs 파일을 만들거나 Technical 계약을 Flow/인증 전체 정본으로 적용하지 않는다.
 
-- JSON 구조는 `docs/contracts.md`를 따른다.
-- API 요청·응답은 `docs/api_spec.md`를 따른다.
-- 화면 섹션과 라벨은 `docs/frontend_mapping.md`를 따른다.
-- enum 코드값과 한글 라벨은 `docs/enums.md`를 따른다.
+- Technical JSON은 [contracts](../../ai/src/agents/technical/docs/contracts.md),
+  AI 내부 API는 [api_spec](../../ai/src/agents/technical/docs/api_spec.md)를 따른다.
+- Technical Backend 조회/화면 응답은 [Frontend API 계약](../../backend/docs/technical_frontend_api_contract.md),
+  화면 섹션/라벨은 [frontend_mapping](../../ai/src/agents/technical/docs/frontend_mapping.md),
+  enum은 [enums](../../ai/src/agents/technical/docs/enums.md)를 해당 Technical 범위에서 사용한다.
+- Flow는 [CF-001 저장 계약](../../docs/contracts/CF-001-v1.1.shared-v1.md)과
+  [CF-002 인증/owner 계약](../../docs/contracts/CF-002-v0.6.shared-v1.md),
+  공통 카드는 [archive 계약](../../backend/docs/report_archive_api_contract.md)을 함께 확인한다.
 
-프론트가 임의로 새 필드나 새 라벨을 만들지 않는다.
+문서와 코드가 다르면 출처·해당 범위·변경 영향을 보고하고 계약을 먼저 맞춘다. 예전/다른 도메인
+문서를 이유로 임의 필드·라벨·인증 우회를 추가하지 않는다. 현재 사용자 기능은 본인 Flow 경로이며
+아래 Technical 예시는 재사용 원칙/과거 도메인 예시이지 현재 분석 실행 허용이 아니다.
 
 ### 1.2 프론트는 렌더링 계층이다
 
@@ -132,7 +139,9 @@ const finalRegime = report.regime.final_regime;
 
 ### 4.1 권장 구조
 
-실제 프로젝트 구조에 맞추되, 책임은 분리한다.
+아래 tree는 책임을 설명하는 **권장 예시**이며 현재 배치의 복사본/재배치 지시가 아니다.
+실제 Next App Router entry는 [src/app](../src/app), 코드 지침은 [AGENTS](../AGENTS.md)다.
+예시의 pages를 만들거나 현재 app 경로를 옮기지 않는다. 큰 파일/목표 폴더 구조 결정은 후속 비교 전 보류한다.
 
 ```text
 frontend/src/
@@ -224,7 +233,7 @@ export type TechnicalReportResponse = {
 };
 ```
 
-가능하면 `docs/contracts.md`와 1:1로 맞춘다.
+해당 도메인의 위 공유 계약과 1:1로 맞춘다. Technical 타입을 Flow에 강제로 적용하지 않는다.
 
 ### 5.3 로딩·에러·빈 상태를 반드시 둔다
 
@@ -240,7 +249,7 @@ export type TechnicalReportResponse = {
 - out_of_scope_ticker
 - template_fallback
 
-문서상 정상 상태인 `data_limited`, `stale_cache`, `regime_unavailable`, `out_of_scope_ticker`, `template_fallback`을 무조건 에러 화면으로 처리하지 않는다. (`out_of_scope_ticker`는 allowlist 밖 종목 안내, `template_fallback`은 LLM 검증 실패 후 템플릿으로 대체된 정상 문장이다 — `enums.md §8·§9`.)
+문서상 정상 상태인 `data_limited`, `stale_cache`, `regime_unavailable`, `out_of_scope_ticker`, `template_fallback`을 무조건 에러 화면으로 처리하지 않는다. (`out_of_scope_ticker`는 allowlist 밖 종목 안내, `template_fallback`은 LLM 검증 실패 후 템플릿으로 대체된 정상 문장이다 — [Technical enums §8·§9](../../ai/src/agents/technical/docs/enums.md).)
 
 ---
 
@@ -270,7 +279,7 @@ export const REGIME_LABELS = {
 
 컴포넌트는 이 상수를 가져다 쓴다.
 
-라벨 맵은 REGIME_LABELS 하나만이 아니다. `enums.md`에 정의된 모든 열거형이 중앙 상수 대상이다: regime, consensus(신호 종합), signal(지표별), trend(주/월봉 추세), alignment_flag, confidence_level, risk_flags, data_status, source(해석 출처), period(차트 기간). 각 라벨 맵의 코드값·한글 라벨은 `enums.md`를 1:1로 따르고, 프론트가 임의 라벨을 만들지 않는다. `neutral`은 regime이 아니라 `consensus`·`alignment_flag`에 속하는 값임에 주의한다(축을 섞지 않는다).
+라벨 맵은 REGIME_LABELS 하나만이 아니다. [Technical enums](../../ai/src/agents/technical/docs/enums.md)에 정의된 모든 열거형이 중앙 상수 대상이다: regime, consensus(신호 종합), signal(지표별), trend(주/월봉 추세), alignment_flag, confidence_level, risk_flags, data_status, source(해석 출처), period(차트 기간). 각 라벨 맵의 코드값·한글 라벨은 [Technical enums](../../ai/src/agents/technical/docs/enums.md)를 1:1로 따르고, 프론트가 임의 라벨을 만들지 않는다. `neutral`은 regime이 아니라 `consensus`·`alignment_flag`에 속하는 값임에 주의한다(축을 섞지 않는다).
 
 ### 6.2 투자 권유 표현 금지
 
@@ -287,7 +296,7 @@ export const REGIME_LABELS = {
 - 적중률
 - 실시간 (KIS는 준실시간이므로 "장중/준실시간"으로 표기)
 
-단, **과거 등락률·변동률처럼 데이터 기반 값은 허용**한다(`enums.md` 사용규약 3). 금지 대상은 미래 수익률을 예측·보장하는 표현이지, 이미 발생한 과거 데이터가 아니다.
+단, **과거 등락률·변동률처럼 데이터 기반 값은 허용**한다([Technical enums](../../ai/src/agents/technical/docs/enums.md) 사용규약 3). 금지 대상은 미래 수익률을 예측·보장하는 표현이지, 이미 발생한 과거 데이터가 아니다.
 
 대체 표현:
 

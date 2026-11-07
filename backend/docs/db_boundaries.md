@@ -1,5 +1,8 @@
 # CF-002 현재 DB 경계와 포트
 
+> **현재 적용 범위 (a5b60f2 / 2026-11-07 KST):** 아래 같은 서버의 역할별 DB와 경고-only fixture 설명은 과거 운영 이력이다. 현재 별도 일회용 자원 fail-closed 조건과 Fundamental 직접 SELECT의 최소 권한 미확인을 구분한다.
+> [문서 권위](../../docs/documentation.md)와 [현재 책임/DB 경계](../../docs/architecture/current-boundaries.md)를 함께 읽는다. 이번 문서 단계는 기능/DB 검사를 재실행하지 않았다.
+
 로컬 앱 PostgreSQL host mapping은 **15432:5432**이다. host DSN 안내는
 `postgresql+asyncpg://<user>:<password>@localhost:15432/<database>`이고 컨테이너 내부
 `postgres:5432`는 유지한다. 실제 private URL/자격·기존 컨테이너 전환은 미확인·미실행이다.

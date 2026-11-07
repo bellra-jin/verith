@@ -1,3 +1,15 @@
+# 과거 News PR 초안 · 현재 상태 주석
+
+확인 2026-11-07T18:52:34+09:00, 검토 head `a5b60f2fd0b00efedae2c98a2004ede62470b094`.
+이 파일은 과거 News 데이터 계층 초안이며 **CF-002 PR #2의 본문이 아니다**. 해당 과거 News PR의
+번호/병합 상태는 이번에 확인하지 않았다. 아래 이전 port·무인증/내부망 전제·실행/DB 명령은 이력이다.
+현재 CF-002는 commit `7a5853d5f8725f593f647b2b0e5898dba50254fd`로 [PR #2](https://github.com/bellra-jin/verith/pull/2)에
+병합되어 위 head에 포함됐다. News 관리/생성 경로는 현재 공개 차단이며 원문 실행 예시를 재사용하지 않는다.
+현재 미커밋은 ST-001 문서 작업뿐이다. 기능/DB/Google/AI 검사를 이번에 재실행하지 않았다.
+[현재 문서 목록/남은 검증](docs/documentation.md)을 따른다.
+
+---
+
 ## ⭐ Key Changes
 > 핵심 변경 사항을 적어주세요.
 

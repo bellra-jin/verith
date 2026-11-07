@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from db.base import Base
 
+# Auth
+from db.models.auth.models import AuthUser, AuthIdentity, AuthSession
+
 # Common
 from db.models.common.agent_report import AgentReport
 from db.models.common.stock import Stock
@@ -45,6 +48,9 @@ from db.models.flow.report_verification import FlowReportVerification
 from db.models.industry.industry_report import IndustryReport
 
 __all__ = [
+    "AuthUser",
+    "AuthIdentity",
+    "AuthSession",
     "Base",
     "AgentReport",
     "Stock",

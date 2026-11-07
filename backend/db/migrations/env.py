@@ -23,7 +23,6 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 from db.base import Base  # noqa: E402
 from db.models import registry  # noqa: E402,F401  (import 부작용으로 metadata 채움)
-from src.api.config import settings  # noqa: E402
 
 config = context.config
 target_metadata = Base.metadata
@@ -31,6 +30,8 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """offline 모드: DSN 문자열만으로 SQL 스크립트 생성."""
+    from src.api.config import settings
+
     context.configure(
         url=settings.DATABASE_URL,
         target_metadata=target_metadata,
@@ -54,13 +55,21 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_migrations_online() -> None:
     """online 모드: async 엔진으로 접속 후 run_sync 로 마이그레이션 실행."""
+    from src.api.config import settings
+
     connectable = create_async_engine(settings.DATABASE_URL, poolclass=pool.NullPool)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
 
-if context.is_offline_mode():
+if config.attributes.get("connection") is not None:
+    do_run_migrations(config.attributes["connection"])
+elif config.attributes.get("verified_test_mode"):
+    raise RuntimeError(
+        "Verified test migration requires the same pre-attested connection"
+    )
+elif context.is_offline_mode():
     run_migrations_offline()
 else:
     asyncio.run(run_migrations_online())

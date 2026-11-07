@@ -273,7 +273,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _load_env_from_dotenv()
-    uri = os.getenv("NEO4J_URI") or "bolt://localhost:7687"
+    uri = os.getenv("NEO4J_URI") or "bolt://localhost:17687"
     user = os.getenv("NEO4J_USER") or "neo4j"
     password = os.getenv("NEO4J_PASSWORD") or "verith1234"
 

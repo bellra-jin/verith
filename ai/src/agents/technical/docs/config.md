@@ -447,3 +447,18 @@ ticker 코드로 폴백한다.
 3. **confidence 요소는 모두 같은 방향.** 네 요소 전부 "높을수록 confidence 상승"으로 통일(`conflict_absence` 사용). 감점 요소를 그대로 더하지 않는다.
 4. **값 변경 시 테스트 동반.** 상수를 바꾸면 관련 검증 테스트(regime_test 등)의 기대값도 함께 검토한다.
 5. **전부 MVP v1 기준값.** 위 수치는 기술적 분석 표준·합리적 기본값이며, 백테스트·오류 분석으로 config 변경만으로 조정한다. 이전 목업 값과 충돌 시 이 문서를 기준으로 통일한다.
+
+
+## CF-002 v0.5 로컬 연결 안내
+
+AI FastAPI 실행 주소는 `http://localhost:9200` (`uv run uvicorn src.main:app --reload --port 9200`, ai 루트),
+Backend resolver/HTTP 경계는 `BACKEND_BASE_URL=http://localhost:8200`이다.
+Backend의 `AI_SERVICE_URL` 안내도 9200이다. News는 계속 Backend HTTP로만 DB에 접근한다.
+Fundamental의 `VERITH_DB_URL`/`DATABASE_URL`은 기존 소비자 드라이버 규약을 유지하며
+host 포트15432만 사용한다. 예: `postgresql://<user>:<password>@localhost:15432/<database>`.
+Industry의 host `NEO4J_URI=bolt://localhost:17687` (HTTP UI 17474), Technical의 선택적
+host cache는 `REDIS_URL=redis://localhost:16379/0`이다. REDIS_URL 미설정은 계속 cache 비활성이다.
+Compose 내부는 postgres:5432·redis:6379·neo4j:7687을 유지한다. 추론용 8001/v1이나 외부
+모델 서버 주소는 AI FastAPI 서비스 포트가 아니므로 바꾸지 않는다.
+기존 private 환경값은 미확인이다. 이 안내는 실제 AI/DB/Redis/Neo4j 기동·호출·계정 설정을
+실행했다는 뜻이 아니며, CF-002 사용자 경로의 새 분석/저장 차단은 그대로다.

@@ -109,6 +109,13 @@ INVALID_VALUES = [
 
 @pytest.fixture
 def memory(monkeypatch):
+    from src.api.services.auth_service import Principal
+    from datetime import UTC, datetime, timedelta
+
+    principal = Principal(
+        uuid4(), uuid4(), datetime.now(UTC) + timedelta(hours=1), b"x" * 32
+    )
+    monkeypatch.setattr(service_module, "validate_principal", AsyncMock())
     rows = SimpleNamespace(
         report=None, interpretation=None, verification=None, index=None
     )
@@ -127,6 +134,7 @@ def memory(monkeypatch):
     for name in (
         "ensure_stock",
         "add_report",
+        "get_owned_report",
         "get_report",
         "get_interpretation",
         "get_verification",
@@ -136,14 +144,15 @@ def memory(monkeypatch):
         method = AsyncMock()
         mocks[name] = method
         monkeypatch.setattr(service_module.flow_repo, name, method)
+    mocks["get_owned_report"].side_effect = lambda *args, **kwargs: rows.report
     mocks["add_report"].side_effect = store
     for name in ("report", "interpretation", "verification"):
         mocks[f"get_{name}"].side_effect = lambda *args, name=name: getattr(rows, name)
     mocks["index"] = AsyncMock(side_effect=store_index)
-    mocks["get_agent_indexes"].side_effect = lambda *args: (
+    mocks["get_agent_indexes"].side_effect = lambda *args, **kwargs: (
         [rows.index] if rows.index else []
     )
-    mocks["get_report_parts"].side_effect = lambda *args: (
+    mocks["get_report_parts"].side_effect = lambda *args, **kwargs: (
         [rows.report] if rows.report else [],
         [rows.interpretation] if rows.interpretation else [],
         [rows.verification] if rows.verification else [],
@@ -157,9 +166,19 @@ def memory(monkeypatch):
             side_effect=lambda *args, **kwargs: [rows.index] if rows.index else []
         ),
     )
-    session = SimpleNamespace(commit=AsyncMock())
+    monkeypatch.setattr(
+        service_module.flow_repo,
+        "list_owned_indexes",
+        service_module.agent_repo.list_reports,
+    )
+    session = SimpleNamespace(
+        commit=AsyncMock(), scalar=AsyncMock(return_value=None), rollback=AsyncMock()
+    )
     return SimpleNamespace(
-        service=FlowReportService(session), session=session, mocks=mocks, rows=rows
+        service=FlowReportService(session, principal=principal),
+        session=session,
+        mocks=mocks,
+        rows=rows,
     )
 
 
@@ -252,7 +271,9 @@ async def test_current_producer_payload_roundtrip_preserves_identity_values_peri
     )
     assert memory.rows.report.base_date == date(2026, 11, 5)
     assert (
-        memory.rows.index.owner_user_id is None
+        memory.rows.index.owner_user_id
+        == memory.rows.report.owner_user_id
+        == memory.service._principal.user_id
     )  # legacy, not authenticated ownership
     result = await client.get(f"/api/flow/reports/{report_id}")
     assert result.status_code == 200
@@ -643,13 +664,11 @@ async def test_new_snapshot_projection_damage_is_rejected_without_legacy_fallbac
 async def test_all_flow_list_paths_reject_inconsistent_snapshot(
     memory, payload, endpoint
 ):
-    from src.api.deps import get_technical_report_service
+    from src.api.routes.flow_reports import get_flow_report_service
     from src.api.routes.flow_reports import (
-        get_flow_report_service,
         router as flow_router,
     )
     from src.api.routes.reports import router as common_router
-    from src.api.services.technical_report_service import TechnicalReportService
 
     await memory.service.save_report(
         FlowReportSaveRequest(payload=payload, question="질문")
@@ -661,9 +680,7 @@ async def test_all_flow_list_paths_reject_inconsistent_snapshot(
     app.include_router(flow_router)
     app.include_router(common_router)
     app.dependency_overrides[get_flow_report_service] = lambda: memory.service
-    app.dependency_overrides[get_technical_report_service] = lambda: (
-        TechnicalReportService(memory.session, ai_client=None)
-    )
+    app.dependency_overrides[get_flow_report_service] = lambda: memory.service
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://unit"
     ) as client:

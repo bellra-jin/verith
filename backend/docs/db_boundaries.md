@@ -1,3 +1,20 @@
+# CF-002 현재 DB 경계와 포트
+
+로컬 앱 PostgreSQL host mapping은 **15432:5432**이다. host DSN 안내는
+`postgresql+asyncpg://<user>:<password>@localhost:15432/<database>`이고 컨테이너 내부
+`postgres:5432`는 유지한다. 실제 private URL/자격·기존 컨테이너 전환은 미확인·미실행이다.
+
+pytest는 앱 fallback 없이 승인된 **별도 일회용 자원·주소·제한 역할**만 사용한다.
+TEST_DATABASE_URL/TEST_DATABASE_APPROVAL 누락·앱과 같은 서버/별칭·읽기 전용 확인 실패는
+DDL/DML 전에 즉시 오류로 중단한다. 같은 인스턴스에 다른 DB명만 만든 것은 현재 격리 조건을
+충족하지 않는다. migration도 재확인한 동일 연결을 사용한다.
+[현재 검증 절차/증거](flow_auth_ownership.md), [포트 안내](../../docs/local_ports.md).
+포트 변경을 이유로 아래 과거의 DB 생성·관리·canonical 승격을 다시 실행하지 않는다.
+
+---
+
+## 과거 운영 기록 — 현재 테스트 준비 절차 아님
+
 # DB 역할 경계 (canonical / dev·smoke / test)
 
 `docs/db_boundaries.md`

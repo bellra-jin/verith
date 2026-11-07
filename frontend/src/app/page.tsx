@@ -1,55 +1,31 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
 import { AppShell } from "@/components/ui/app-shell";
-import { ArchiveCard } from "@/features/archive/components/archive-card";
-import { ArchiveTabs } from "@/features/archive/components/archive-tabs";
-import { DeleteAllReportsButton } from "@/features/archive/components/delete-all-reports-button";
-import { getArchiveReports } from "@/api/archive";
-import type { AgentType } from "@/types/archive";
+import { sessionBackendFetch } from "@/lib/session-backend";
+import { SessionControls } from "@/features/flow/components/session-controls";
+import { archiveHref, archivePagination, lastArchiveOffset, type ArchiveSearchParams } from "@/lib/archive-pagination";
 
-const DEFAULT_AGENT_TYPE: AgentType = "technical";
+export const dynamic = "force-dynamic";
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams?: Promise<{ agent_type?: string }>;
-}) {
-  const params = (await searchParams) ?? {};
-  const agentType = isAgentType(params.agent_type) ? params.agent_type : DEFAULT_AGENT_TYPE;
-  const archive = await getArchiveReports({ agentType, limit: 20, offset: 0 });
-
-  return (
-    <AppShell
-      title="리포트 보관함"
-      subtitle="agent_type 기준 공통 카드 리스트입니다. technical 상세 페이지는 바로 연결됩니다."
-    >
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <ArchiveTabs active={agentType} />
-          <div className="flex items-center gap-3">
-            {archive.items.length > 0 ? (
-              <DeleteAllReportsButton count={archive.total} agentType={agentType} />
-            ) : null}
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
-              총 {archive.total}건
-            </div>
-          </div>
-        </div>
-
-        {archive.items.length ? (
-          <div className="grid gap-6 xl:grid-cols-2">
-            {archive.items.map((item) => (
-              <ArchiveCard key={`${item.agent_type}-${item.report_id}`} item={item} />
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-[28px] border border-dashed border-slate-200 bg-white/70 px-6 py-20 text-center text-sm text-slate-400">
-            아직 표시할 리포트가 없습니다.
-          </div>
-        )}
-      </div>
-    </AppShell>
-  );
-}
-
-function isAgentType(value?: string): value is AgentType {
-  return ["technical", "fundamental", "news", "flow", "industry"].includes(value ?? "");
+export default async function Home({ searchParams }: { searchParams: Promise<ArchiveSearchParams> }) {
+  const page = archivePagination(await searchParams);
+  let sessionResponse: Response | null = null;
+  try { sessionResponse = await sessionBackendFetch("/api/auth/session"); } catch { /* safe closed screen */ }
+  if (!sessionResponse?.ok) return <AppShell title="Flow 보관함" subtitle="Google 로그인 후 본인 결과를 확인하세요."><Link href="/api/auth/login">Google로 로그인</Link><p>실제 로그인 설정과 검증은 준비 중입니다. 새 분석·저장·전체 삭제는 사용할 수 없습니다.</p></AppShell>;
+  const session = await sessionResponse.json() as { csrf_token: string };
+  const response = await sessionBackendFetch(`/api/reports/archive?agent_type=flow&limit=${page.limit}&offset=${page.offset}`);
+  if (!response?.ok) return <AppShell title="Flow 보관함" subtitle="결과를 불러올 수 없습니다."><SessionControls csrfToken={session.csrf_token} /></AppShell>;
+  const archive = await response.json() as { total: number; items: Array<{ report_id: string; stock: { stock_name: string | null }; card: { title: string } }> };
+  // A deletion can empty the last page. Return to the last remaining page (or zero).
+  if (page.offset > 0 && page.offset >= archive.total) redirect(archiveHref({ ...page, offset: lastArchiveOffset(archive.total, page.limit) }));
+  const returnQuery = archiveHref(page).slice(1);
+  return <AppShell title="내 Flow 보관함" subtitle={`${archive.total}개 결과`}>
+    <SessionControls csrfToken={session.csrf_token} />
+    <ul>{archive.items.map(item => <li key={item.report_id}><Link href={`/reports/flow/${item.report_id}${returnQuery}`}>{item.stock.stock_name} · {item.card.title}</Link></li>)}</ul>
+    {!archive.items.length && <p>저장된 본인 결과가 없습니다.</p>}
+    <nav aria-label="리포트 페이지">
+      {page.offset > 0 && <Link href={archiveHref({ ...page, offset: Math.max(0, page.offset - page.limit) })}>이전 페이지</Link>}
+      {page.offset + page.limit < archive.total && <Link href={archiveHref({ ...page, offset: page.offset + page.limit })}>다음 페이지</Link>}
+    </nav>
+  </AppShell>;
 }

@@ -13,22 +13,34 @@ FastAPI 백엔드 — 요청을 받아 AI 에이전트를 호출하고, 결과 J
 - Technical Follow-up answer 생성 경계(caller-provided 정책·미래 AI 경로): [`docs/technical_followup_answer_boundary.md`](docs/technical_followup_answer_boundary.md)
 - 리포트 보관함 공통 목록 API(agent_type 필터 카드 리스트): [`docs/report_archive_api_contract.md`](docs/report_archive_api_contract.md)
 
+## CF-002 로컬 포트 전환
+
+Backend 실행 명령은 `uv run uvicorn src.api.main:app --reload --port 8200`이다.
+브라우저/CORS 기본은 `http://localhost:3200`, Backend→AI 안내값은
+`AI_SERVICE_URL=http://localhost:9200`이다. 실제 AI는 이번 작업에서 기동/호출하지 않는다.
+Backend `DATABASE_URL`은 `postgresql+asyncpg://<user>:<password>@localhost:15432/<database>
+`NEO4J_URI`는 `bolt://localhost:17687`을 host 안내로 사용한다. Compose 내부 포트는 유지한다.
+Google local callback/origin은 3200이며 AUTH 설정은 명시해야 한다.
+[비밀 없는 전체 안내](../docs/local_ports.md), [CF-002 검증 보고](docs/flow_auth_ownership.md).
+기존 private override는 미확인이다. 아래 기존 관리 명령은 대상/영향을 확인한 별도 작업이며
+포트 변경을 이유로 컨테이너 재시작·migration·seed·restore를 자동 실행하지 않는다.
+
 ## 개발 환경
 
 ```bash
-# 저장소 루트에서 PostgreSQL(+pgvector) 기동 (host 포트 5433)
+# 저장소 루트에서 PostgreSQL(+pgvector) 기동 (host 포트 15432)
 docker compose up -d postgres
 
 cd backend
 uv sync
 # DATABASE_URL은 환경변수 또는 backend/.env로 주입
-# 호스트에서 compose DB에 연결할 때: postgresql+asyncpg://...@localhost:5433/...
+# 호스트에서 compose DB에 연결할 때: postgresql+asyncpg://...@localhost:15432/...
 uv run alembic upgrade head     # 스키마 적용
 ```
 
 `DATABASE_URL`은 필수이며 환경변수가 `backend/.env`보다 우선한다. 드라이버는 `asyncpg`이므로
 DSN 스킴은 `postgresql+asyncpg://`를 사용한다. 컨테이너 내부에서 연결할 때는 서비스명과 컨테이너
-포트 5432를 사용하고, 호스트에서 연결할 때는 compose host 포트 5433을 사용한다.
+포트 5432를 사용하고, 호스트에서 연결할 때는 compose host 포트 15432을 사용한다.
 
 ## Seed stocks
 
@@ -47,7 +59,7 @@ uv run python -m scripts.seed_stock_aliases
 ```
 
 주의:
-- PostgreSQL 이 실행 중이어야 하고, `DATABASE_URL`(포트 5433) 이 설정돼 있어야 한다.
+- PostgreSQL 이 실행 중이어야 하고, `DATABASE_URL`(포트 15432) 이 설정돼 있어야 한다.
 - 두 스크립트 모두 **idempotent** (`ON CONFLICT ... DO NOTHING`) — 여러 번 실행해도 기존 row 를 덮지 않는다.
 - `seed_stock_aliases` 는 참조 종목이 `stocks` 에 없으면 **부분 seed 없이 fail-fast** 하므로 반드시 `seed_stocks` 를 먼저 실행한다.
 - 별칭 정본은 `src/api/constants/stock_aliases.py`(변형만 — 공식 이름은 `stocks.stock_name`).
@@ -114,22 +126,26 @@ docker exec verith-postgres psql -U verith -d verith -c "SELECT COUNT(*) FROM st
 - 스키마는 dump 가 아니라 **Alembic** 이 관리하므로, 반드시 `uv run alembic upgrade head` 를 먼저 실행한다.
 - backend 가 이미 떠 있으면 restore 후 **재기동**하는 편이 안전하다.
 
-## 테스트
+## CF-002 테스트 진입 기준
 
-pytest 는 **전용 test DB(`TEST_DATABASE_URL`, 예: `verith_test`)** 를 써야 한다 — 공유 dev/smoke DB
-(`verith`)에 붙으면 운영 `--apply`/seed 커밋이 테스트 전제를 오염시킨다(conftest 가 미설정/앱DB동일 시
-경고). DB 역할·설정은 [`docs/db_boundaries.md`](docs/db_boundaries.md).
+단위 검사는 `.venv/bin/python -m pytest --confcutdir=tests/unit tests/unit -q`로 실행한다.
+실제 DB 검사는 명시적 TEST_DATABASE_URL과 승인된 별도 일회용 자원 manifest·제한 역할·
+readonly preflight/실연결 재확인이 필수다. 앱 DB와 같은 서버의 다른 DB명은 허용하지 않는다.
+[실제 검증 harness와 절차](docs/flow_auth_ownership.md)를 따른다. 기존 DB 생성·migration
+예시는 현재 테스트 준비 명령으로 복사 실행하지 않는다.
+
+## 관련 검사
 
 ```bash
 cd backend
-# 최초 1회: 전용 test DB 생성 + 스키마
-docker exec verith-postgres psql -U verith -d postgres -c "CREATE DATABASE verith_test;"
-DATABASE_URL=postgresql+asyncpg://verith:verith1234@localhost:5433/verith_test uv run alembic upgrade head
-# backend/.env 에 TEST_DATABASE_URL=…/verith_test 를 두면 자동 사용.
-uv run pytest
-uv run ruff check db src tests scripts
-uv run alembic check
+.venv/bin/python -m pytest --confcutdir=tests/unit tests/unit -q
 ```
+
+DB 검사는 별도 일회용 PostgreSQL 승인·제한 역할·manifest가 확인된 뒤에만
+[CF-002 검증 harness](docs/flow_auth_ownership.md)를 따른다. TEST_DATABASE_URL을 private .env에
+추가하거나 같은 앱 서버에 verith_test라는 이름만 만드는 것으로는 실행되지 않는다.
+미설정/같은 앱 대상은 경고가 아니라 setup error로 중단한다. 포트 패치 검증에서는
+DB migration/seed/기존 컨테이너 실행 없이 단위·정적 검사를 수행한다.
 
 마이그레이션 생성, downgrade 주의사항, 검증 SQL과 DB 트러블슈팅은
 [`docs/migrations.md`](docs/migrations.md)에 정리돼 있다.

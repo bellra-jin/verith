@@ -1,4 +1,4 @@
-# services/backend/client.py — 공용 HTTP 계층 (backend :8000)
+# services/backend/client.py — 공용 HTTP 계층 (backend :8200)
 """backend 와 통신하는 유일한 저수준 계층. 타임아웃·재시도·상태검사·JSON 파싱을 한 곳에 격리한다.
 
 ⚠️ HTTP 경계 규칙(절대규칙 1, TASK 08 §3.2): httpx 등 HTTP 라이브러리는 **오직 이 파일**에서만

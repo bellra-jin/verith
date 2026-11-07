@@ -31,7 +31,6 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from db.models.common.stock import Stock  # noqa: E402
 from db.models.common.stock_alias import StockAlias  # noqa: E402
-from db.session import async_session_factory, engine  # noqa: E402
 from src.api.constants.stock_aliases import ALIAS_SEED  # noqa: E402
 from src.api.text_normalize import normalize_stock_text  # noqa: E402
 
@@ -64,7 +63,11 @@ async def seed(session: AsyncSession) -> dict:
 
     referenced = {r["stock_code"] for r in rows}
     existing = set(
-        (await session.execute(select(Stock.stock_code).where(Stock.stock_code.in_(referenced)))).scalars()
+        (
+            await session.execute(
+                select(Stock.stock_code).where(Stock.stock_code.in_(referenced))
+            )
+        ).scalars()
     )
     missing = sorted(referenced - existing)
     if missing:
@@ -84,10 +87,16 @@ async def seed(session: AsyncSession) -> dict:
     result = await session.execute(stmt)
     inserted = len(list(result))
     await session.flush()
-    return {"requested": len(rows), "inserted": inserted, "skipped": len(rows) - inserted}
+    return {
+        "requested": len(rows),
+        "inserted": inserted,
+        "skipped": len(rows) - inserted,
+    }
 
 
 async def main() -> None:
+    from db.session import async_session_factory, engine
+
     async with async_session_factory() as session:
         summary = await seed(session)
         await session.commit()

@@ -75,9 +75,13 @@ async def test_postgres_legacy_v1_roundtrip(flow_db):
     )
     await flow_db.session.commit()
     flow_db.session.expire_all()
-    actual = await flow_db.service.get_report(report_id)
-    assert actual.report_id == report_id
-    assert actual.report == payload
+    assert await flow_db.service.get_report(report_id) is None
+    root = await flow_repo.get_report(flow_db.session, report_id)
+    interp = await flow_repo.get_interpretation(flow_db.session, report_id)
+    verif = await flow_repo.get_verification(flow_db.session, report_id)
+    from src.api.services.flow_report_service import FlowReportService
+
+    assert FlowReportService._reconstruct_payload(root, interp, verif, []) == payload
 
 
 @pytest.mark.parametrize("variant", ["normal", "limited", "additive"])
@@ -169,7 +173,6 @@ async def test_postgres_unsupported_stored_version_is_not_relabelled(flow_db):
 
 
 async def test_postgres_new_snapshot_lists_and_delete_cascade(flow_db):
-    from src.api.services.technical_report_service import TechnicalReportService
 
     payload = make_flow_payload()
     report_id = UUID(payload["report_id"])
@@ -178,9 +181,9 @@ async def test_postgres_new_snapshot_lists_and_delete_cascade(flow_db):
         FlowReportSaveRequest(payload=payload, question="합성 DB 검증")
     )
     flow_db.session.expire_all()
-    common = TechnicalReportService(flow_db.session, ai_client=None)
+    common = flow_db.service
     own_list = await flow_db.service.list_reports(stock_code=None, limit=20, offset=0)
-    common_list = await common.list_reports(
+    common_list = await common.list_common(
         agent_type="flow", client_session_id=None, stock_code=None, limit=20, offset=0
     )
     archive = await common.list_report_archive(agent_type="flow")
@@ -290,8 +293,7 @@ async def test_postgres_failed_save_can_be_rolled_back_without_partial_rows(
         await flow_db.service.save_report(
             FlowReportSaveRequest(payload=payload, question="합성 DB 검증")
         )
-    # The request's session owner must rollback on failure; no publish-retry service is implied.
-    await flow_db.session.rollback()
+    # Service rolls back the full failed write; no publish-retry service is implied.
     for model in (
         Stock,
         FlowReport,

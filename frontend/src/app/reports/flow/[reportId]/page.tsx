@@ -1,26 +1,29 @@
+export const dynamic = "force-dynamic";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
-import { getFlowReport } from "@/api/flow";
-import { BackendApiError } from "@/api/backend";
-import { FlowActions } from "@/features/flow/components/flow-actions";
+import type { FlowReportEnvelope } from "@/api/flow";
+import {archiveHref, archivePagination, type ArchiveSearchParams} from "@/lib/archive-pagination";
+import {sessionBackendFetch} from "@/lib/session-backend";
+import {SessionControls} from "@/features/flow/components/session-controls";
 import { FlowReportView } from "@/features/flow/components/flow-report-view";
 
 export default async function FlowReportPage({
-  params,
+  params, searchParams,
 }: {
   params: Promise<{ reportId: string }>;
+  searchParams: Promise<ArchiveSearchParams>;
 }) {
   const { reportId } = await params;
-  let envelope;
-  try {
-    envelope = await getFlowReport(reportId);
-  } catch (error) {
-    if (error instanceof BackendApiError && error.status === 404) {
-      notFound();
-    }
-    throw error;
-  }
+  const returnTo = archiveHref(archivePagination(await searchParams));
+  if (!/^[0-9a-fA-F-]{36}$/.test(reportId)) notFound();
+  const auth=await sessionBackendFetch('/api/auth/session');
+  if (!auth?.ok) redirect('/');
+  const session=await auth.json() as {csrf_token:string};
+  const response=await sessionBackendFetch(`/api/flow/reports/${reportId}`);
+  if (response?.status===404) notFound();
+  if (!response?.ok) redirect('/');
+  const envelope=await response.json() as FlowReportEnvelope;
 
   // 배경·카드 구성은 flow 목업(flow_sample) 디자인 언어: #F2F4F6 위에 흰 카드들.
   return (
@@ -42,7 +45,7 @@ export default async function FlowReportPage({
           <span className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">수급·자금흐름 리포트</span>
         </div>
 
-        <FlowActions reportId={reportId} />
+        <SessionControls csrfToken={session.csrf_token} reportId={reportId} returnTo={returnTo} />
         <FlowReportView payload={envelope.report} />
       </article>
     </div>

@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.common.agent_report import AgentReport
@@ -31,6 +31,12 @@ from src.api.schemas.flow_report import (
     FlowReportEnvelope,
     FlowReportListResponse,
     FlowReportSaveRequest,
+)
+
+from src.api.services.auth_service import (
+    Principal,
+    AuthenticationRequired,
+    validate_principal,
 )
 
 PAYLOAD_SNAPSHOT_KEY = "_flow_payload_snapshot"
@@ -51,11 +57,27 @@ class FlowStoredPayloadError(ValueError):
 
 
 class FlowReportService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self, session: AsyncSession, *, principal: Principal | None = None
+    ) -> None:
         self._session = session
+        self._principal = principal
+
+    async def _authorize(self, *, lock=False) -> Principal:
+        if self._principal is None:
+            raise AuthenticationRequired()
+        await validate_principal(self._session, self._principal, lock=lock)
+        return self._principal
 
     # ── 저장 ──────────────────────────────────────────────────────────────────
     async def save_report(self, req: FlowReportSaveRequest) -> FlowReportEnvelope:
+        try:
+            return await self._save_report(req)
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    async def _save_report(self, req: FlowReportSaveRequest) -> FlowReportEnvelope:
         # Revalidate even if a model was constructed unsafely or its nested dict mutated.
         # Nothing, including ensure_stock, can write before this boundary succeeds.
         try:
@@ -67,6 +89,7 @@ class FlowReportService:
             ):
                 code = ErrorCode.UNSUPPORTED_VERSION
             raise FlowPayloadError(code) from exc
+        principal = await self._authorize(lock=True)
         payload = deepcopy(validated.payload)
         report_id = UUID(payload["report_id"])
 
@@ -95,6 +118,7 @@ class FlowReportService:
 
         report = FlowReport(
             id=report_id,
+            owner_user_id=principal.user_id,
             ticker=ticker,
             stock_code=ticker,  # handoff §4.1 — stock_code = meta.ticker
             stock_name=stock_name,
@@ -138,8 +162,8 @@ class FlowReportService:
             agent_report_id=report_id,
             request_id=None,
             client_session_id=validated.client_session_id,
-            owner_user_id=None,
-            owner_session_id=None,
+            owner_user_id=principal.user_id,
+            owner_session_id=principal.session_id,
             stock_code=ticker,
             stock_name=stock_name,
             question=validated.question,
@@ -155,6 +179,15 @@ class FlowReportService:
                 "base_date": meta.get("base_date"),
             },
         )
+
+        # Root lock first for an existing ID; never adopt legacy or overwrite another owner.
+        existing = await self._session.scalar(
+            select(FlowReport).where(FlowReport.id == report_id).with_for_update()
+        )
+        if existing is not None:
+            raise FlowStoredPayloadError("결과 ID가 이미 존재합니다.")
+        if await flow_repo.get_agent_indexes(self._session, report_id):
+            raise FlowStoredPayloadError("결과 ID를 사용할 수 없습니다.")
 
         await flow_repo.ensure_stock(
             self._session, stock_code=ticker, stock_name=stock_name, market=market
@@ -172,7 +205,10 @@ class FlowReportService:
 
     # ── 조회 ──────────────────────────────────────────────────────────────────
     async def get_report(self, report_id: UUID) -> FlowReportEnvelope | None:
-        report = await flow_repo.get_report(self._session, report_id)
+        principal = await self._authorize()
+        report = await flow_repo.get_owned_report(
+            self._session, report_id, owner_user_id=principal.user_id
+        )
         if report is None:
             return None
         interp = await flow_repo.get_interpretation(self._session, report_id)
@@ -184,9 +220,10 @@ class FlowReportService:
     async def list_reports(
         self, *, stock_code: str | None, limit: int, offset: int
     ) -> FlowReportListResponse:
-        rows = await agent_repo.list_reports(
+        principal = await self._authorize()
+        rows = await flow_repo.list_owned_indexes(
             self._session,
-            agent_type="flow",
+            owner_user_id=principal.user_id,
             stock_code=stock_code,
             limit=limit,
             offset=offset,
@@ -197,8 +234,71 @@ class FlowReportService:
             items=items, limit=limit, offset=offset, count=len(items)
         )
 
+    async def list_common(
+        self,
+        *,
+        agent_type=None,
+        client_session_id=None,
+        stock_code=None,
+        limit=20,
+        offset=0,
+    ):
+        if agent_type not in (None, "flow"):
+            raise PermissionError("Only Flow is available")
+        principal = await self._authorize()
+        rows = await flow_repo.list_owned_indexes(
+            self._session,
+            owner_user_id=principal.user_id,
+            client_session_id=client_session_id,
+            stock_code=stock_code,
+            limit=limit,
+            offset=offset,
+        )
+        await self.validate_index_rows(rows)
+        return [AgentReportListItem.model_validate(row) for row in rows]
+
+    async def list_report_archive(
+        self,
+        *,
+        agent_type=None,
+        client_session_id=None,
+        stock_code=None,
+        limit=20,
+        offset=0,
+    ):
+        from src.api.services.technical_report_service import build_archive_item
+        from src.api.repositories import technical_report_repository as tr_repo
+        from src.api.schemas.report_archive import ArchiveListResponse
+
+        if agent_type not in (None, "flow"):
+            raise PermissionError("Only Flow is available")
+        principal = await self._authorize()
+        filters = dict(
+            owner_user_id=principal.user_id,
+            client_session_id=client_session_id,
+            stock_code=stock_code,
+        )
+        rows = await flow_repo.list_owned_indexes(
+            self._session, **filters, limit=limit, offset=offset
+        )
+        await self.validate_index_rows(rows)
+        total = await flow_repo.list_owned_indexes(self._session, **filters, count=True)
+        stocks = await tr_repo.get_stocks(
+            self._session, list({row.stock_code for row in rows if row.stock_code})
+        )
+        return ArchiveListResponse(
+            items=[
+                build_archive_item(row=row, stock=stocks.get(row.stock_code))
+                for row in rows
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
     async def validate_index_rows(self, rows: list[AgentReport]) -> None:
         """Shared by Flow and common lists; a missing marker cannot bypass validation."""
+        principal = await self._authorize()
         report_ids = list(
             {row.agent_report_id for row in rows if row.agent_type == "flow"}
         )
@@ -209,7 +309,9 @@ class FlowReportService:
             interpretations,
             verifications,
             indexes,
-        ) = await flow_repo.get_report_parts(self._session, report_ids)
+        ) = await flow_repo.get_report_parts(
+            self._session, report_ids, owner_user_id=principal.user_id
+        )
         root_by_id = {row.id: row for row in roots}
         interp_by_id = {row.report_id: row for row in interpretations}
         verif_by_id = {row.report_id: row for row in verifications}
@@ -229,18 +331,26 @@ class FlowReportService:
 
     # ── 삭제 ──────────────────────────────────────────────────────────────────
     async def delete_report(self, report_id: UUID) -> bool:
+        try:
+            return await self._delete_report(report_id)
+        except Exception:
+            await self._session.rollback()
+            raise
+
+    async def _delete_report(self, report_id: UUID) -> bool:
+        principal = await self._authorize(lock=True)
+        root = await flow_repo.get_owned_report(
+            self._session, report_id, owner_user_id=principal.user_id, lock=True
+        )
+        if root is None:
+            return False
         await flow_repo.delete_agent_index(self._session, report_id)
         deleted = await flow_repo.delete_root(self._session, report_id)
         await self._session.commit()
         return deleted > 0
 
     async def delete_all_reports(self) -> int:
-        """flow 리포트 전체 삭제(index 먼저, root 는 자식 CASCADE). 삭제 행수 반환."""
-        await agent_repo.delete_all_for_type(self._session, "flow")
-        result = await self._session.execute(delete(FlowReport))
-        deleted = result.rowcount or 0
-        await self._session.commit()
-        return deleted
+        raise PermissionError("Public bulk deletion is disabled")
 
     # ── payload 재구성(저장 시 3테이블로 분해한 것을 다시 payload 형태로) ───────
     @staticmethod

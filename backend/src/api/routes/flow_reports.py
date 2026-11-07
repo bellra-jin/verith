@@ -58,9 +58,15 @@ router = APIRouter(
 
 
 async def get_flow_report_service(
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> AsyncGenerator[FlowReportService, None]:
-    yield FlowReportService(session=session)
+    from src.api.routes.auth import request_principal
+
+    principal = await request_principal(
+        request, session, mutation=request.method == "DELETE"
+    )
+    yield FlowReportService(session=session, principal=principal)
 
 
 @router.post(

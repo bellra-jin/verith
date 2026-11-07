@@ -159,7 +159,7 @@ def get_neo4j_graph(**kwargs):
         raise RuntimeError(
             "Neo4j is not configured. Set these values in ai/.env: "
             "NEO4J_URI, NEO4J_USERNAME, and NEO4J_PASSWORD (start a local "
-            "instance with: docker run -d --name neo4j -p 7474:7474 -p 7687:7687 "
+            "instance with: docker run -d --name neo4j -p 17474:7474 -p 17687:7687 "
             "-e NEO4J_AUTH=neo4j/<password> neo4j:5)."
         )
     return Neo4jGraph(url=uri, username=username, password=password, **kwargs)

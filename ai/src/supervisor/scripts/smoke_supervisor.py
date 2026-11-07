@@ -5,7 +5,7 @@ resolve → planning → execution → technical adapter → technical output �
 
 실행:
     cd ai
-    # backend(:8000, /api/stocks/resolve)·OpenAI·KIS 접속이 준비돼 있어야 한다.
+    # backend(:8200, /api/stocks/resolve)·OpenAI·KIS 접속이 준비돼 있어야 한다.
     uv run python -m src.supervisor.scripts.smoke_supervisor "LG에너지솔루션 차트 어때?"
 
 **종목 범위:** technical 은 전체 종목 확장 구조로, 형식상 유효한(6자리) ticker 를 기본 지원한다

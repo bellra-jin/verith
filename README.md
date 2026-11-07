@@ -339,25 +339,29 @@ frontend/src/features/technical/ # technical 리포트 UI
 
 ## 11. 실행 방법
 
-> Git, Docker, uv, Node.js가 필요합니다. 환경 변수 파일과 `docker-compose.yml`은 저장소에 포함되어 있지 않습니다.
+CF-002 v0.5 로컬 포트는 Frontend **3200**, Backend **8200**, AI **9200**이다.
+PostgreSQL/Redis/Neo4j host mapping과 비밀 없는 설정 항목은 [로컬 포트 가이드](docs/local_ports.md)를 따른다.
+브라우저는 `http://localhost:3200`만 사용한다. `.env`/OAuth secret은 별도 private 설정이며
+이번 포트 패치가 기존 서비스 전환·Google 등록·DB migration/seed 실행을 뜻하지 않는다.
+기존 컨테이너 재생성/재기동은 연결 단절·private override 확인 후 별도 승인 대상이다.
 
 ```bash
-# 1. PostgreSQL · Redis
-docker compose up -d
+# 승인된 설정과 의존성 준비 후 각 터미널에서 실행하는 명령(이번 작업에서 실행하지 않음)
+cd ai
+uv run uvicorn src.main:app --reload --port 9200
 
-# 2. AI 서버 (:9000)
-cd ai && uv sync
-uv run uvicorn main:app --reload --port 9000
+cd backend
+uv run uvicorn src.api.main:app --reload --port 8200
 
-# 3. Backend (:8000)
-cd backend && uv sync
-uv run alembic upgrade head
-uv run uvicorn src.api.main:app --reload --port 8000
-
-# 4. Frontend (:3000)
-cd frontend && npm install
-npm run dev
+cd frontend
+npm run dev             # next dev -p 3200
+# production: npm run build && npm start  # next start -p 3200
 ```
+
+Next 서버는 `BACKEND_URL=http://localhost:8200`을 명시해야 한다. 누락 시 인증 경로는
+fallback 없이 닫힌다. Google 등록/교환용 외부 callback은
+`http://localhost:3200/api/auth/callback`이며 Backend 내부 8200 callback으로 바꾸지 않는다.
+현재 새 분석·공개 payload 저장·전체 삭제·직접 Supervisor AI proxy는 비활성이다.
 
 ### 담당 범위 테스트
 

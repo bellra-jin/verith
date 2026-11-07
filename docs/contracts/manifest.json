@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checked_at": "2026-11-07T19:05:06+09:00",
+  "checked_at": "2026-11-07T22:57:03+09:00",
   "derivation": "Reviewed technical summaries, not original instructions or runtime authorization",
   "application_order": [
     "CF-001",
@@ -8,10 +8,10 @@
   ],
   "work_item": {
     "id": "ST-001",
-    "source_version": "v1.0",
-    "source_sha256": "1b7975913e92ff08065b2094879075fbe796e6e57d6227890b8bc92a772c5010",
-    "reviewed_commit": "a5b60f2fd0b00efedae2c98a2004ede62470b094",
-    "stage": "1 documentation only"
+    "source_version": "v1.1",
+    "source_sha256": "9a7d519f8636e6ba127bb66e74c74ff70d84f50b8705814b91916599c2ef97be",
+    "reviewed_commit": "083dea8436b699aa3a52ddbf36848e8fe3535720",
+    "stage": "2 repository work guides only"
   },
   "snapshots": [
     {
@@ -79,6 +79,15 @@
       "source_version": "v0.1",
       "source_sha256": "87af33488984fb03ccbe2697de7e8293a49d1893ee30bbf07f96584fb1703ed0",
       "role": "Proposed stage scope; not completion evidence"
+    }
+  ],
+  "work_item_history": [
+    {
+      "id": "ST-001",
+      "source_version": "v1.0",
+      "source_sha256": "1b7975913e92ff08065b2094879075fbe796e6e57d6227890b8bc92a772c5010",
+      "reviewed_commit": "a5b60f2fd0b00efedae2c98a2004ede62470b094",
+      "stage": "1 documentation only"
     }
   ]
 }

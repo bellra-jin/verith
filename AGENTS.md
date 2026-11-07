@@ -50,9 +50,10 @@ Backend는 root owner와 정확히 한 index의 동일 owner를 SQL로 검사한
 
 ## 이번 단계와 후속
 
-ST-001 v1.1 2단계의 기준은 `083dea8436b699aa3a52ddbf36848e8fe3535720`이며
-현재 결과는 [2단계 기록](docs/work/ST-001-stage-2.md)에 남긴다. 1단계 PR #3 병합과
-이 단계 문서 검토는 실제 기능/인증/공개 검증 완료가 아니다.
-3-A 공용 환경 예제 → 3-B Backend/Frontend 공통 안전 entry → 3-C AI 안전 entry는 **미구현 후속**이다.
-이 단계 검토/사용자 병합 후 최신 develop·별도 branch에서 진행하고 현재 branch에 누적하지 않는다.
+ST-001 v1.3 3-A의 기준은 `6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef`이며
+현재 결과는 [3-A 기록](docs/work/ST-001-stage-3-A.md)에 남긴다. [2단계 기록](docs/work/ST-001-stage-2.md)은
+PR #4 병합 이력이다. [공용 환경 안내·예제](docs/development.md)는 비밀 없는 참고이며 실제 환경/실행 승인이 아니다.
+문서·예제 검토는 실제 기능/인증/공개 검증 완료가 아니다.
+3-B Backend/Frontend 공통 안전 entry → 3-C AI 안전 entry는 **미구현 후속**이다.
+3-A 검토/사용자 병합 후 최신 develop·별도 branch에서 진행하고 현재 branch에 누적하지 않는다.
 큰 파일/코드 디렉터리 재배치 구조는 비교 판단 전 보류한다. 현재 지도는 파일 이동 지시가 아니다.

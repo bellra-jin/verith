@@ -51,5 +51,6 @@ SQL로 적용한다. legacy NULL owner를 자동 연결하거나 노출하지 �
   직접 생성 소유 증명 runner도 기존 container 채택/일반 guard 우회가 아니다. 실제 실행은 별도 대상/권한 조건을 따른다.
 
 3-B의 수집 전 보호를 갖춘 Backend/Frontend 공통 안전 entry는 **미구현 후속**이다.
-문서만 바꾸는 이 단계에는 unit/build/lint·앱/DB/Google/AI/Docker·migration/seed를 실행하지 않는다.
+3-A [환경 안내](../docs/development.md)·[Backend 예제](../docs/examples/backend.env.example)는 비밀 없는 참고이며
+실제 설정/실행 승인이 아니다. 문서·예제만 바꾸는 이 단계에는 unit/build/lint·앱/DB/Google/AI/Docker·migration/seed를 실행하지 않는다.
 과거 통과/실패·실제 인증의 남은 검증은 [문서 목록](../docs/documentation.md#검증-상태와-이력)에 구분한다.

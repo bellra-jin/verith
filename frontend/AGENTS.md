@@ -30,6 +30,7 @@ Frontend 작업 디렉터리에서 `node scripts/check-local-ports.mjs`를 사�
 현재 도우미의 지정 디렉터리 재귀 복사는 .env 제외만으로 다른 key/dump/log·symlink 자료의 안전한
 제외까지 보장하지 않는다. 복사 범위/자원 경계를 먼저 검토하며 불확실하면 실행하지 말고 보고한다.
 
-3-B의 수집 전 공통 안전 entry·3-A 환경 예제는 **미구현 후속**이다. 이 문서 단계에서는 위 명령이나
+3-A [환경 안내](../docs/development.md)·[Frontend 예제](../docs/examples/frontend.env.example)는 비밀 없는 참고이며
+실제 설정/실행 승인이 아니다. 3-B의 수집 전 공통 안전 entry는 **미구현 후속**이다. 이 단계에서는 위 명령이나
 unit/build/lint·실제 Backend/Google/AI·DB/Docker를 실행하지 않는다. 전체 ESLint의 기존 실패와
 실제 인증 미검증은 [검증 상태](../docs/documentation.md#검증-상태와-이력)에 보존한다.

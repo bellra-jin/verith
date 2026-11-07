@@ -1,7 +1,7 @@
 # 문서 목록과 권위
 
-문서 목록 버전 2 / 확인일 2026-11-07, Asia/Seoul (+09:00).
-현재 작업 기준 `083dea8436b699aa3a52ddbf36848e8fe3535720` (ST-001 1단계 PR #3 병합).
+문서 목록 버전 3 / 확인일 2026-11-07, Asia/Seoul (+09:00).
+현재 작업 기준 `6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef` (ST-001 2단계 PR #4 병합).
 CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작업 기준 갱신을 이유로 바꾸지 않는다.
 문서가 있다는 사실은 해당 기능의 공개 허용·검증 완료·실제 환경 설정을 뜻하지 않는다.
 
@@ -12,7 +12,7 @@ CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작�
    [현재 책임/DB 경계](architecture/current-boundaries.md)를 확인한다.
 2. 아래 표에서 수정할 도메인의 계약과 코드 기준을 고른다. Technical 계약을 Flow나 전체 서비스 계약으로 확대하지 않는다.
 3. [포트/설정 안내](local_ports.md)와 서비스별 [Frontend](../frontend/README.md)/[Backend](../backend/README.md)
-   README를 확인한다. 서비스 실행·migration·seed·DB/Google/AI 검사는 문서 열람의 부수 작업이 아니다.
+   README, [공용 환경 참고](development.md)를 확인한다. 서비스 실행·migration·seed·DB/Google/AI 검사는 문서 열람의 부수 작업이 아니다.
 4. [검증 상태와 이력](#검증-상태와-이력)을 확인하고 필요한 승인/격리와 실행 범위가 없으면 실제 자원 검사를 시작하지 않는다.
 
 ## 권위와 충돌 처리
@@ -36,6 +36,7 @@ CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작�
 | 종목 식별/마스터 | [stock_resolver](../backend/docs/stock_resolver.md), [KIS master](../backend/docs/stock_master_sync.md), [DART corp code](../backend/docs/dart_corp_code_sync.md) | 종목 resolver·종목 마스터·법인 식별 레이어를 구분. 관리 sync는 수동 별도 작업 |
 | Fundamental 직접 DB | [현재 관찰·호환·미확인 경계](architecture/current-boundaries.md#fundamental-직접-db-호환-경로) | SELECT로 필드 3개를 읽는 경로가 존재. 실제 최소 권한은 미확인. 새 API/자격/권한 변경 없음 |
 | 개발 작성 가이드 | [Frontend](../frontend/docs/frontend_coding_guidelines.md), [Backend](../backend/docs/backend_coding_guidelines.md) | 현재 도메인 링크/실제 entry 참조. 예시 구조를 실제 재배치 지시로 쓰지 않음 |
+| 공용 환경 참고 | [개발 안내](development.md), [Frontend](examples/frontend.env.example), [Backend](examples/backend.env.example), [AI](examples/ai.env.example), [명시 Compose](examples/compose.local.example.yaml) | ST-001 v1.3 / 3-A. 비밀 없는 참고, 실제 설정/기동 검증/안전 bootstrap 아님 |
 | 구현/실행 이력 | [CF-001](../backend/docs/flow_contract.md), [CF-002](../backend/docs/flow_auth_ownership.md), [Google 검증 기록](../backend/docs/google_login_check.md) | 각 보고 시점·합성/실제·실패/미검증을 보존. 상단 현재 상태 주석과 본문 이력 분리 |
 | 과거 PR 초안 | [CF-002 실행 명령](../backend/docs/cf002_commit_pr.md), [CF-002 PR 본문](../backend/docs/cf002_pr_body.md), [News 초안](../PR_DESCRIPTION.md) | **현재 실행 안내 아님**. 고정 HEAD stage/실제 자원 명령을 재사용하지 않음 |
 
@@ -46,23 +47,23 @@ CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작�
 논리 문서명·버전·source hash는 manifest의 reference_documents에 기록한다.
 상세설계의 전체 실행/복구·다중 관점 목표를 현재 구현 완료로 읽지 않는다.
 
-현재 문서 작업 지시는 **ST-001_문서_정본과_안전한_개발_기반_정리.md v1.1 / 2단계**,
-source SHA-256 `9a7d519f8636e6ba127bb66e74c74ff70d84f50b8705814b91916599c2ef97be`다.
-1단계는 commit `7aab357ae9e358dc7ab34320e4e5eecc1ae56288`/PR #3으로 병합됐고,
-이번 작업 기준은 위 `083dea8`이며 새 미커밋은 2단계의 작업 안내 문서다.
-manifest의 기존 v1.0 work_item은 work_item_history에 원형 보존하고 CF snapshot bytes/출처/버전/
+현재 문서 작업 지시는 **ST-001_문서_정본과_안전한_개발_기반_정리.md v1.3 / 3-A**,
+source SHA-256 `73f4c0b6d98fa3e33fc6d1d8f9fc0892f94608175eff3024d47a85300fbf1099`다.
+1단계 PR #3과 2단계 commit `9bf536e53ca7dab75d35b43200198c298a54ec0e`/PR #4가 병합됐고,
+이번 작업 기준은 위 `6308d8c`이며 새 미커밋은 3-A 환경 참고와 최소 상태 갱신이다.
+manifest의 기존 v1.0·v1.1 work_item은 work_item_history에 원형 보존하고 CF snapshot bytes/출처/버전/
 hash/reviewed SHA와 reference_documents는 유지한다.
 
-root·Backend·AI AGENTS를 추가하고 Frontend 기존 Next 블록은 보존했다. 이 단계의 문서 구현과
-독립 검토 수용은 구분한다. **3-A 공용 환경 예제·3-B Backend/Frontend 공통 안전 entry·3-C AI 안전
-entry는 아직 미구현 후속**이며 이 단계 검토/사용자 병합 후 최신 develop의 별도 branch에서
-3-A→3-B→3-C 순서로 진행한다. 없는 예제/script의 실행 링크를 제공하지 않는다.
+root·서비스 AGENTS는 2단계 병합 이력이며 Frontend 기존 Next 블록은 계속 보존한다. 3-A 공용 환경
+예제를 작성했으며 정적 검사·독립 검토 수용·실제 기동 검증은 구분한다. **3-B Backend/Frontend 공통 안전
+entry·3-C AI 안전 entry는 아직 미구현 후속**이며 3-A 검토/사용자 병합 후 최신 develop의 별도 branch에서
+3-B→3-C 순서로 진행한다. 없는 script를 현재 실행 가능한 것처럼 안내하지 않는다.
 큰 파일/폴더 재배치 구조는 비교 검토 전 **후보**이며 미확정이다.
 
 ## 검증 상태와 이력
 
-ST-001 2단계는 허용된 9개 문서의 링크/anchor·작업 이력/source hash·기존 Next 블록/CF bytes 보존·
-개인/비밀 제외·허용범위 밖/runtime diff 0을 직접 검사한다.
+ST-001 3-A는 허용된 16파일의 source 대조·예제 비확장 파싱·링크/anchor·작업 이력/source hash·
+기존 Next 블록/CF bytes 보존·개인/비밀 제외·허용범위 밖/runtime diff 0을 정적으로 검사한다.
 기능 테스트·서비스 실행·DB/Google/AI 검사를 재실행하지 않는다. 아래 기능 수치는 병합된
 **과거 CF 보고서 확인**이며 이번 문서 단계의 실행 결과가 아니다.
 
@@ -83,7 +84,8 @@ ST-001 2단계는 허용된 9개 문서의 링크/anchor·작업 이력/source h
 
 1단계의 210개 독립 검토와 병합 전 작성/검사는 [1단계 기록](work/ST-001-stage-1.md)의 이력이다.
 작성 채팅의 병합 tree 확인은 local path 190개 존재 검사이며 anchor/전체 재검사는 아니었다는
-전달 기록과 구분한다. 이번 추가 문서의 직접 검사는 [2단계 기록](work/ST-001-stage-2.md)에 있다.
+전달 기록과 구분한다. [2단계 기록](work/ST-001-stage-2.md)의 148개 검사/독립 재검토는 과거 이력이다.
+이번 예제의 직접 검사는 [3-A 기록](work/ST-001-stage-3-A.md)에 있다.
 
 ## 공유본 갱신 절차
 

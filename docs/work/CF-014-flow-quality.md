@@ -1,0 +1,68 @@
+# CF-014 Flow 근거 검증과 선택형 해석
+
+기준 develop `546413090dbb7059d677d545489a43e55eca1446`, branch
+`fix/flow-grounded-interpretation`. CF-014 v1.1 정본 SHA-256은
+`3d61b387bf675b004f4ad13e39f38741708c241895cb84873b8629aba62dd4c6`이다.
+기능/문서 18경로와 원격 CI workflow 1경로의 총 19경로다.
+
+연속일수 원자료 독립 검증과 [신규 해석 정책](../contracts/flow-interpretation-policy-v1.md)을
+구현한다. LLM의 ID 선택과 코드의 문장 구성을 분리하고 최대 3회 후 fact_only로
+후퇴한다. 수급 계산·v1 payload·관측창·저장/조회/구 snapshot 복구는 유지한다.
+소진율은 원자료 전체로부터 producer와 같은 최근 5행을 비교한다.
+
+## 검증 상태
+
+최종 source에서 기존 보호 입구 `quality-self` **2/2**, `quality-unit` 단일
+`test_cf014_flow_quality.py` **77/77**이 각각 exit0으로 통과했다.
+unit의 `guard_violations=0`, 양쪽 자기 임시 root 제거를 확인했다.
+초기 self2 통과 후 독립 source 검토의 raw19/daily20 불일치 보완으로 source/pin이
+변경되어 self2만 영향 재검증했다. unit은 보완된 source에서 한 번 실행했다.
+기존 전체 suite·PG·Frontend type/lint/build·앱·브라우저는 반복하지 않았다.
+AI 제품/prompt 14개와 기존 worker origin 호환용 pinned token_cache 1개만 복사한다.
+호환 모듈은 import만 하며 캐시 연산을 수행하지 않는다. 보호 worker·OS/FS/network
+guard는 변경하지 않는다. pure 함수 및 고정 AST 함수 실행은 전체 pandas/graph,
+LangChain/공급자 실행과 구분한다. 실제 KIS/OpenAI·키/개인 설정·DB·브라우저 검사는 없다.
+
+## 원격 CI
+
+`PR safe checks / flow-quality`는 develop 대상 PR의 draft 단계부터 실행한다.
+공개 표준 macos-15, Python 3.12.10 arm64, uv 0.13.7을 고정하고 기존 Verith Backend
+lock의 wheel만 설치한다. 원격 캐시·프로젝트 설치·sdist build·Python 자동 다운로드는
+사용하지 않는다. 이후 기존 보호 입구의 focused self/unit만 clean env로 실행한다.
+원격 최신 head의 실제 job/guard 결과 확인 전에는 병합하지 않는다.
+
+공식 tag를 직접 조회해 checkout v6.0.2 `de0fac2e4500dabe0009e67214ff5f5447ce83dd`,
+setup-python v6.0.0 `e797f83bcb11b83ae66e0230d6156d7c80228e7c`, setup-uv v10.3.2
+`07a047e608db84b3d8c06cd9a7c7dcc9c355c18e`를 pin했다.
+uv arm64 archive checksum은 [공식 0.13.7 release](https://github.com/astral-sh/uv/releases/tag/0.13.7)의
+[checksum](https://releases.astral.sh/github/uv/releases/download/0.13.7/uv-aarch64-apple-darwin.tar.gz.sha256)을 사용한다.
+로컬 통과와 원격 실행 성공은 별개이며, 현재 원격 결과는 PR 게시 후 확인할 예정이다. native canary나 runtime/dependency metadata
+보호 실패는 해당 원인으로 보고하며 조건 완화로 통과시키지 않는다.
+
+
+## 범위·호환·source 검토
+
+기존 수급 계산·관측창·payload exporter·config source는 불변이다. AI/Backend DTO와
+Backend domain은 SPEC 상수 외 AST가 기준과 같고, Gate2 규칙3 이후 bytes는 동일하다.
+Gate2 규칙2만 strict 원자료/날짜/주체/threshold 대조로 연결한다. 신규 bank의 소진율
+창을 실제 producer의 최근5행으로 맞추고, raw/daily 창 불일치는 bank 거부로 처리했다.
+구 SPEC stored snapshot의 adapter freeze/from_stored에서 원 ID/JSON/hash를 유지했다.
+
+실행 검사는 실제 pure helper·Gate3·payload/adapter와 고정 workflow/facts/rule2 AST
+함수 실행이다. pandas 계산 전체·graph·LangChain·LLM/실제 KIS 품질을 실행한 결과로
+확대하지 않는다. runtime fingerprint/caps 및 미실행 wiring은 source/AST 확인이다.
+AI 기존 Gate3 테스트의 기대를 새 정책에 맞췄으나 raw AI pytest는 실행하지 않았다.
+독립 source 검토와 개발측의 위 직접 실행을 구분한다.
+
+정책 source SHA-256 `4cf9fa103736cc5c852eb96cbb1f42253ad875f89bccf3dcd47a43bb76f6fd22`,
+prompt SHA-256 `9e8a04b6d7d0f534d54552e78ed489cb74f3cc7160fbd379b030758ae891406c`.
+실행 로그·source 목록은 자기 checkpoint에 보존한다. 새 소스 변경이 없으면 통과한
+로컬 검사를 반복하지 않는다.
+
+## PR 본문
+
+<!-- CF014_PR_BODY_START -->
+신규 Flow 해석에서 LLM은 검증 fact ID만 선택하고 코드는 확정일·주체·원자료 관측창·단위를 결합한 3문단을 구성합니다. 원자료 연속 순매수 길이와 신호를 독립 검증하고, 빈/잘린 선택 응답도 최대3회 뒤 기존 fact_only로 후퇴합니다. 기존 계산/v1 payload·관측창·원 SPEC 저장본의 복구는 유지합니다.
+
+검증: 보호 focused self 2/2, 단일 unit 77/77, guard0, 자기 임시 root 정리. pure 함수/고정 AST 및 합성 stored snapshot 확인이며 실제 KIS/OpenAI·pandas/graph·DB·브라우저 품질 검증은 아닙니다. 신규 PR CI는 macos-15에서 고정 공식 action·Python/uv와 Verith lock wheel 설치 후 같은 보호 focused self/unit을 실행합니다. 최신 PR head의 실제 원격 결과를 확인한 뒤 병합합니다.
+<!-- CF014_PR_BODY_END -->

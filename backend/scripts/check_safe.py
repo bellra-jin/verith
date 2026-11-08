@@ -123,7 +123,7 @@ CF008_SOURCES = frozenset({'backend/src/modules/flow/api/synthetic_demo_router.p
 NEW.update(CF008_SOURCES)
 CF012_SOURCES = frozenset({'backend/tests/unit/test_cf012_flow_analysis.py', 'backend/src/modules/flow/application/analysis_service.py', 'backend/src/modules/flow/api/analysis_schemas.py', 'backend/db/models/flow/analysis_run.py', 'backend/db/migrations/versions/20261108_c12001a7e0001_flow_analysis_runs.py', 'backend/src/modules/flow/domain/analysis.py', 'backend/src/modules/flow/api/analysis_router.py', 'backend/scripts/cf012_analysis_check.py', 'backend/src/modules/flow/infrastructure/analysis_repository.py'})
 NEW.update(CF012_SOURCES)
-CF012_INPUTS = {'ai/src/agents/flow/api/http.py': 'ab949f3dd353e1fa8a496e58f36383f2c3baeac632076cea3a9607c8553538c5', 'ai/src/agents/flow/api/schemas.py': 'a7544de75f4ac7e6049c7d384f75753fccf5bbbc5e3f9f2c17512b232adb6a62', 'ai/src/agents/flow/application/execution_runtime.py': '213bcbdb3709fdf4c388c2cadbd07c3e3648854d6dacc4753ac356800ec8c817', 'ai/src/shared/runtime/deadline.py': '4a51cd138da3a37d158e03019e4b38c203bd276948a21987b0d07d35a68cb60e'}
+CF012_INPUTS = {'ai/src/agents/flow/api/http.py': 'ab949f3dd353e1fa8a496e58f36383f2c3baeac632076cea3a9607c8553538c5', 'ai/src/agents/flow/api/schemas.py': '002c327b4d37778468b7af645287085bd74b0e0ee96efe39a1d40b4ac7211b89', 'ai/src/agents/flow/application/execution_runtime.py': '93d5cf58e5946922298b2f811faff6ab1bc42906fd354d008c825bc28b022fbf', 'ai/src/shared/runtime/deadline.py': '4a51cd138da3a37d158e03019e4b38c203bd276948a21987b0d07d35a68cb60e'}
 NEW.update(CF012_INPUTS)
 NEW.update({"backend/tests/unit/test_runner_owned_database.py", "backend/scripts/runner_owned_database.py", "backend/scripts/google_login_workspace.py"})
 OWNED_TESTS = ("tests/unit/test_runner_owned_database.py",)
@@ -137,7 +137,7 @@ NEW.update(CF013_SOURCES)
 CF013_TESTS = ("tests/unit/test_cf013_analysis_contracts.py",)
 CF012_TESTS = ("tests/unit/test_cf012_flow_analysis.py", "tests/unit/test_flow_contract.py")
 UNIT += ("tests/unit/test_cf012_flow_analysis.py",)
-CF005_INPUTS = {"ai/src/agents/flow/domain/observation_window.py": "acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27"}
+CF005_INPUTS = {"ai/src/agents/flow/domain/observation_window.py": 'acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27'}
 CF005_SOURCE_ONLY = frozenset({
     "ai/src/agents/flow/domain/verification/signals.py",
     "ai/src/agents/flow/infrastructure/render/builder.py",
@@ -148,10 +148,15 @@ CF005_SOURCE_ONLY = frozenset({
 NEW.update(CF005_INPUTS)
 NEW.update(CF005_SOURCE_ONLY)
 NEW.add("backend/tests/unit/test_cf005_flow_observation.py")
-CF004_INPUTS = {"ai/src/agents/flow/infrastructure/token_cache.py": "3e090e2992aa9a0c7f78f644132765e616c002b35b5994ebc71a3f2fd26bad7f"}
+CF004_INPUTS = {"ai/src/agents/flow/infrastructure/token_cache.py": '3e090e2992aa9a0c7f78f644132765e616c002b35b5994ebc71a3f2fd26bad7f'}
 NEW.update(CF004_INPUTS)
 NEW.add("backend/tests/unit/test_cf004_kis_token_cache.py")
-FLOW_INPUTS = {'ai/src/agents/flow/api/payload.py': 'e3076a97d9c4c5cc6159f0488f351b07613353dbe67371a001ff6ee995479fc2', 'ai/src/agents/flow/domain/models.py': '5d3e2c5a243a0faed6f638f2af802a138d338e5bc324ebab3b2573810162fd12'}
+FLOW_INPUTS = {'ai/src/agents/flow/api/payload.py': 'e3076a97d9c4c5cc6159f0488f351b07613353dbe67371a001ff6ee995479fc2', 'ai/src/agents/flow/domain/models.py': '41377f16336cc0401c82d390cde04727cc8aa2e53f6d114b025aa62d0de4f894'}
+CF014_INPUTS = {'ai/src/agents/flow/domain/verification/consecutive.py': '35c8e994f01aa8447b117c0ef9a4746fe66f8b4687091bfa2d042eb3eab2bede', 'ai/src/agents/flow/domain/interpretation_claims.py': '4cf9fa103736cc5c852eb96cbb1f42253ad875f89bccf3dcd47a43bb76f6fd22', 'ai/src/agents/flow/domain/verification/signals.py': '3f4e26fabbb2b64163bb1f8c0a77665316cd61a70d9eb1458d201f6395f57aaa', 'ai/src/agents/flow/domain/verification/interpretation.py': '863adcb582b601eacadb3fe894e92d9669670fbfd6c5f712841a64ba1bcfdd60', 'ai/src/agents/flow/domain/models.py': '41377f16336cc0401c82d390cde04727cc8aa2e53f6d114b025aa62d0de4f894', 'ai/src/agents/flow/application/workflow.py': '03816e283c8f5ba0718738b4b71b79fc48d82f0240159fc23d0bc5259838809b', 'ai/src/agents/flow/infrastructure/llm/explain.py': 'f5821e79de672a03ef4a6f92f6ffe1df769dde9961e78a538506ba41dba95003', 'ai/src/agents/flow/prompts/explain.txt': '9e8a04b6d7d0f534d54552e78ed489cb74f3cc7160fbd379b030758ae891406c', 'ai/src/agents/flow/api/schemas.py': '002c327b4d37778468b7af645287085bd74b0e0ee96efe39a1d40b4ac7211b89', 'ai/src/agents/flow/application/execution_runtime.py': '93d5cf58e5946922298b2f811faff6ab1bc42906fd354d008c825bc28b022fbf', 'ai/src/agents/flow/domain/observation_window.py': 'acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27', 'ai/src/agents/flow/domain/signals.py': '15de1236f86a78a14e5d5106247d0329167e12eb390b29ebf97cd5cd012ae2be', 'ai/src/agents/flow/config.py': '91c95356110d0294051eb7871bfb06100ebd003ccb0f2da33c6add2b0594b637', 'ai/src/agents/flow/api/payload.py': 'e3076a97d9c4c5cc6159f0488f351b07613353dbe67371a001ff6ee995479fc2'}
+CF014_COMPAT = dict(CF004_INPUTS)  # Existing exact origin invariant, no cache operations.
+CF014_TESTS = ("tests/unit/test_cf014_flow_quality.py",)
+NEW.update(CF014_INPUTS)
+NEW.add("backend/tests/unit/test_cf014_flow_quality.py")
 REMOVED_SOURCES = frozenset(['backend/src/api/access_boundary.py', 'backend/src/api/auth/google.py', 'backend/src/api/clients/ai_client.py', 'backend/src/api/clients/dart_corp_code_client.py', 'backend/src/api/clients/kis_master_client.py', 'backend/src/api/config.py', 'backend/src/api/constants/importance.py', 'backend/src/api/constants/kis_master.py', 'backend/src/api/constants/stock_aliases.py', 'backend/src/api/constants/stock_match.py', 'backend/src/api/constants/stocks.py', 'backend/src/api/repositories/agent_report_repository.py', 'backend/src/api/repositories/corp_code_repository.py', 'backend/src/api/repositories/flow_report_repository.py', 'backend/src/api/repositories/fundamental_report_repository.py', 'backend/src/api/repositories/industry_report_repository.py', 'backend/src/api/repositories/news_graph_repository.py', 'backend/src/api/repositories/news_report_repository.py', 'backend/src/api/repositories/news_repository.py', 'backend/src/api/repositories/stock_repository.py', 'backend/src/api/repositories/technical_report_repository.py', 'backend/src/api/routes/auth.py', 'backend/src/api/routes/flow_reports.py', 'backend/src/api/routes/fundamental_reports.py', 'backend/src/api/routes/industry_reports.py', 'backend/src/api/routes/news.py', 'backend/src/api/routes/reports.py', 'backend/src/api/routes/stocks.py', 'backend/src/api/routes/technical_reports.py', 'backend/src/api/schemas/agent_report.py', 'backend/src/api/schemas/ai_fundamental_output.py', 'backend/src/api/schemas/ai_technical_output.py', 'backend/src/api/schemas/flow_execution.py', 'backend/src/api/schemas/flow_payload.py', 'backend/src/api/schemas/flow_report.py', 'backend/src/api/schemas/fundamental_report.py', 'backend/src/api/schemas/industry_report.py', 'backend/src/api/schemas/news.py', 'backend/src/api/schemas/news_report.py', 'backend/src/api/schemas/report_archive.py', 'backend/src/api/schemas/stock_resolve.py', 'backend/src/api/schemas/technical_report.py', 'backend/src/api/services/auth_service.py', 'backend/src/api/services/corp_code_sync_service.py', 'backend/src/api/services/dart_corp_code_parser.py', 'backend/src/api/services/flow_report_service.py', 'backend/src/api/services/fundamental_report_service.py', 'backend/src/api/services/importance.py', 'backend/src/api/services/industry_report_service.py', 'backend/src/api/services/news_cleanup_service.py', 'backend/src/api/services/news_graph_query_service.py', 'backend/src/api/services/news_query_service.py', 'backend/src/api/services/news_report_service.py', 'backend/src/api/services/news_service.py', 'backend/src/api/services/stock_master_parser.py', 'backend/src/api/services/stock_resolver_service.py', 'backend/src/api/services/stock_sync_service.py', 'backend/src/api/services/technical_report_service.py', 'backend/src/api/text_normalize.py', 'ai/src/agents/flow/schemas.py', 'ai/src/agents/flow/export/to_json.py'])
 EXTRA = {"backend/tests/fixtures/kis_master.py", "backend/tests/fixtures/dart_corp_code.py","backend/tests/db_safety.py", "backend/tests/fixtures/flow_payload.py",
          "backend/tests/fixtures/ai_output.py", "backend/tests/conftest.py",
@@ -350,7 +355,7 @@ def source_allowed(p):
         or p.startswith("backend/tests/") and p.endswith("/__init__.py"))
 
 
-def selected_sources(repo):
+def selected_sources(repo, *, quality_only=False):
     raw = subprocess.check_output(["/usr/bin/git", "ls-files", "--stage", "-z"], cwd=repo,
                                   env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"})
     selected = set()
@@ -363,10 +368,13 @@ def selected_sources(repo):
             selected.add(p)
     required = EXTRA | FLOW_INPUTS.keys() | CF004_INPUTS.keys() | CF005_INPUTS.keys() | {"backend/"+u for u in UNIT}
     if not required <= selected | NEW: raise UnsafeCheck("required selected source missing from index or exact new inputs")
-    return sorted(selected | NEW)
+    result = selected | NEW
+    if quality_only:
+        result = {p for p in result if not p.startswith("ai/") or p in CF014_INPUTS or p in CF014_COMPAT}
+    return sorted(result)
 
 
-def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False):
+def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False):
     if not sys.flags.isolated or not sys.flags.no_site:
         raise UnsafeCheck("use the documented clean env -i Python -I -S launch")
     if set(os.environ) - {"LANG", "TZ", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}:
@@ -389,9 +397,9 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
         policy = prove_os_boundary(owned, executable, sandbox_profile(owned.path, runtime, site, executable), children)
         checkout = owned.path / "checkout"
         fingerprints = {}
-        for p in selected_sources(repo):
+        for p in selected_sources(repo, quality_only=quality_only):
             data = regular_bytes(repo, p)
-            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS)[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             target = checkout / p
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -405,7 +413,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
             cap = {"root": str(owned.path), "source": str(checkout / "backend"),
                    "site": str(site), "runtime": str(runtime), "mode": mode,
                    "parent_pid": os.getpid(), "lifetime": 90 if mode == "self-test" else 300,
-                   "tests": list(CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only}
+                   "tests": list(CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only}
             capfile = owned.path / "capability.json"
             capfile.write_text(json.dumps(cap))
             worker = checkout / "backend/scripts/safe_checks_bootstrap.py"
@@ -424,16 +432,16 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit"))
+    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit"))
     values = list(sys.argv[1:] if argv is None else argv)
-    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"]]:
+    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"]]:
         parser.error("unsupported mode or extra arguments")
     args = parser.parse_args(values)
     if args.mode == "list":
         print("self-test: synthetic guards only\nunit: fixed six complete files plus audited pure stock/technical files (no DB/external)")
         return 0
     try:
-        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"})
+        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self","quality-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit","quality-self","quality-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"}, quality_only=args.mode in {"quality-self","quality-unit"})
     except (UnsafeCheck, OSError, subprocess.SubprocessError) as exc:
         print(f"SAFE_CHECK_BLOCKED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 78

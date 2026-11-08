@@ -17,6 +17,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from .interpretation_claims import FactBank
+
 
 # ── 입력 계약 ──────────────────────────────────────────────
 class AgentInput(BaseModel):
@@ -61,6 +63,10 @@ class SupplyDemandState(BaseModel):
     interpretation: Optional[str] = None
     gate3: Optional[GateResult] = None
     explain_retries: int = 0
+    explain_attempts: int = 0
+    fact_bank: Optional[FactBank] = None
+    fact_selection: Optional[tuple[str, ...]] = None
+    selection_invalid: bool = False
 
     # render
     html: Optional[str] = None

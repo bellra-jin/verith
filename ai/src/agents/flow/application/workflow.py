@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+import math
+
 from langgraph.graph import END, START, StateGraph
 
 from .. import config
 from ..infrastructure import stock_master
 from ..infrastructure.kis_client import fetch_daily_quotes, fetch_supply_demand
+from ..domain.interpretation_claims import build_bank, parse_selection, compose, SelectionInvalid
 from ..domain.signals import COL_OWNERSHIP
 from ..domain.signals import compute_signals
 from .validation import verify_input
@@ -59,6 +62,24 @@ def validate_node(state: SupplyDemandState) -> dict:
     return {"gate1": gate1, "base_date": base_date, "input": updated}
 
 
+def _interpretation_evidence(df, quotes, ownership):
+    """Read each column scalar without mixed-row integer coercion; no source I/O."""
+    def scalar(value):
+        if hasattr(value, "item"):
+            value = value.item()
+        return value if type(value) in (int, float) and math.isfinite(value) else None
+    def rows(frame, columns):
+        if frame is None:
+            return None
+        dates = [index.date().isoformat() for index in frame.index]
+        values = {column: [scalar(v) for v in frame[column].tolist()] for column in columns if column in frame.columns}
+        return [dict(date=day, **{column: items[i] for column, items in values.items()}) for i, day in enumerate(dates)]
+    return {"supply": rows(df, ("개인", "외국인", "기관", "거래대금")),
+            "quotes": rows(quotes, ("종가", "전일비", "등락률")),
+            "ownership": (None if ownership is None else
+                [{"date": index.date().isoformat(), "value": scalar(value)} for index, value in ownership.items()])}
+
+
 def collect_node(state: SupplyDemandState, execution_context=None) -> dict:
     """수집 + 계산 + 게이트2. df·quotes·ownership 은 이 함수 지역변수로만 존재.
 
@@ -86,23 +107,34 @@ def collect_node(state: SupplyDemandState, execution_context=None) -> dict:
     signals = compute_signals(df, ownership, quotes)
     gate2 = verify_signals(df, signals, ownership, quotes)
     # market 은 표시 전용 원본 문자열(숫자 아님) — 게이트2 대상이 아니다.
+    meta = {**_meta(state), "base_date": confirmed.isoformat(), "market": market}
+    bank = build_bank(signals, _interpretation_evidence(df, quotes, ownership), meta,
+                      gate2_passed=gate2.passed, recent_days=config.RECENT_DAYS,
+                      trend_days=config.TREND_DAYS, threshold=config.CONSECUTIVE_THRESHOLD)
     return {"signals": signals, "gate2": gate2, "market": market,
-            "base_date": confirmed}
+            "base_date": confirmed, "fact_bank": bank}
 
 
 def explain_node(state: SupplyDemandState, execution_context=None) -> dict:
-    """해석 생성. 재진입(이미 해석이 있던 경우)이면 재시도이므로 카운터 +1."""
-    retries = state.explain_retries
-    if state.interpretation is not None:                 # 앞선 시도가 있었다 → 재시도
-        retries += 1
-    kwargs = {} if execution_context is None else {'execution_context':execution_context}
-    interpretation = explain(state.signals, state.gate2, _meta(state), **kwargs)
-    return {"interpretation": interpretation, "explain_retries": retries}
+    """Every provider response consumes an attempt, including empty/invalid JSON."""
+    attempts = state.explain_attempts + 1
+    kwargs = {} if execution_context is None else {'execution_context': execution_context}
+    raw = explain(state.signals, state.gate2, _meta(state), bank=state.fact_bank, **kwargs)
+    try:
+        selection = parse_selection(raw, state.fact_bank)
+        interpretation = compose(state.fact_bank, selection, _meta(state), state.signals)
+        invalid = False
+    except SelectionInvalid:
+        selection, interpretation, invalid = None, None, True
+    return {"interpretation": interpretation, "fact_selection": selection,
+            "selection_invalid": invalid, "explain_attempts": attempts,
+            "explain_retries": max(0, attempts - 1)}
 
 
 def gate3_node(state: SupplyDemandState) -> dict:
-    """게이트3 — 해석↔팩트 대조. 판정만 상태에 올린다."""
-    gate3 = verify_interpretation(state.interpretation, state.signals)
+    gate3 = verify_interpretation(state.interpretation, state.signals,
+        bank=state.fact_bank, selection=state.fact_selection, meta=_meta(state),
+        invalid_selection=state.selection_invalid)
     return {"gate3": gate3}
 
 
@@ -119,7 +151,7 @@ def render_node(state: SupplyDemandState) -> dict:
 # ── 조건부 엣지(게이트 분기) ───────────────────────────────
 def route_after_collect(state: SupplyDemandState) -> str:
     """게이트2 통과면 해석으로, 실패면 해석 건너뛰고 바로 render(팩트만)."""
-    return "explain" if (state.gate2 and state.gate2.passed) else "render"
+    return "explain" if (state.gate2 and state.gate2.passed and state.fact_bank is not None) else "render"
 
 
 def route_after_gate3(state: SupplyDemandState) -> str:
@@ -129,7 +161,7 @@ def route_after_gate3(state: SupplyDemandState) -> str:
     """
     if state.gate3 and state.gate3.passed:
         return "render"
-    if state.explain_retries < config.MAX_EXPLAIN_RETRIES:
+    if state.explain_attempts < 1 + config.MAX_EXPLAIN_RETRIES:
         return "explain"                                 # 재시도
     return "render"                                      # 해석 생략 후퇴
 

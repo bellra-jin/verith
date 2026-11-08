@@ -162,3 +162,5 @@ v1.7 진단 한정 실행은 self-test 20개·unit 35개 통과, build는 거부
 - [분석 adapter 공통 계약](contracts/analysis-adapter-v1.md)
 - [재무 adapter 필드맵·stage 인수 조건](examples/fundamental-analysis-adapter.md)
 - [CF-013 구현·집중 검증](work/CF-013-analysis-contracts.md)
+
+- CF-014: [선택형 해석 정책](contracts/flow-interpretation-policy-v1.md) · [구현/검증 및 원격 CI](work/CF-014-flow-quality.md)

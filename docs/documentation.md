@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-010 Docker 합성 HTTP 검증 상태
+
+CF-009 PR #13 병합 `8d4b2f8f9ce916eeca77de55adbfb68d3006afce`의 source/Verith lock을 별도 자기 Docker에서 검증한 [고정 runner·실행 기록](work/CF-010-docker-synthetic-demo.md)을 따른다. v1.2 회차의 network-off와 production build·실제 Next 합성 HTTP 두 시험(exit0/tests2/pass2)은 통과했으나, 기본 Node 출력과 TAP 전용 parser의 형식 불일치로 전체 runner는 exit1이다. HTTP 뒤 container source/hash·network 최종 검사는 미실행이며 완료 수용은 보류한다. 자기 CID 제거·부재/label0과 host source101 불변은 확인했다. 이전 namespace 실패는 당시 이력이고 자동 반복은 하지 않았다. 다음 실행용 명령에는 TAP reporter만 명시했으며 실제 재실행은 하지 않았다. Mac guard 정책·실제 Backend/DB·Google/provider·React/브라우저 수용과 구분한다.
+
 ## CF-009 보호 시험 flag 전달
 
 CF-008 PR #12 병합 `fb29bf322024f93507d45a8e57ee8605414e5b40` 위에서 보호 preload와 fork 환경의 exact demo flag 검증·부모 값 보존을 보완했다. [구현·self-test·미검증 경계](work/CF-009-flow-demo-test-flag.md)를 따른다. 순수 함수/제한 VM·forkPlan 반환값 검증이며 실제 Next worker·HTTP·React/브라우저 전달 성공을 뜻하지 않는다. 기존 build 입력 차단은 그대로이며 아래 CF-008의 flag 삭제 설명은 당시 이력이다.

@@ -1,0 +1,738 @@
+{
+  "base": "8d4b2f8f9ce916eeca77de55adbfb68d3006afce",
+  "derived": [
+    {
+      "role": "ownership",
+      "sha256": "410ae9cf16096bcca4cb1c3ed660ecc10f89b44a27f011fb4bc84fbab9f8ff3d",
+      "size": 161,
+      "target": ".cf010-owner.json"
+    },
+    {
+      "role": "readiness",
+      "sha256": "754633155ac0962e51a06f91a1f5a5cd2d9ba3a8f5729eaf927eaf86959c6a9f",
+      "size": 156,
+      "target": "src/app/cf010-ready/route.ts"
+    }
+  ],
+  "files": [
+    {
+      "role": "configuration",
+      "sha256": "870f1adccecf3051cbcd9fd307cef51d7633cf510979c181a81f4b1797273493",
+      "size": 465,
+      "source": "frontend/eslint.config.mjs",
+      "target": "eslint.config.mjs"
+    },
+    {
+      "role": "configuration",
+      "sha256": "4273f2ed2527d20ba219d0b554ceb7b2f6a99ae3c66963928084c29fd6185c63",
+      "size": 177,
+      "source": "frontend/next.config.ts",
+      "target": "next.config.ts"
+    },
+    {
+      "role": "configuration",
+      "sha256": "bb3a6a2b6c2e6374a4fa43ab8d3022ea678b0e60a003ff2b2aafb5610a7c7fed",
+      "size": 254104,
+      "source": "frontend/package-lock.json",
+      "target": "package-lock.json"
+    },
+    {
+      "role": "configuration",
+      "sha256": "5dcc4949fad70a41d4c4fe5639f63931fcaf99accd3019a53052c00a4e697ef5",
+      "size": 707,
+      "source": "frontend/package.json",
+      "target": "package.json"
+    },
+    {
+      "role": "configuration",
+      "sha256": "dfac7ac2d86d326a0e5adb024e7943c181393ed17a5fcb8f0315b24c7da6ddde",
+      "size": 94,
+      "source": "frontend/postcss.config.mjs",
+      "target": "postcss.config.mjs"
+    },
+    {
+      "role": "asset",
+      "sha256": "2b67812c325c199a02536cdbeea0c593a72f707d323b72ee3e08dbab06753bd4",
+      "size": 391,
+      "source": "frontend/public/file.svg",
+      "target": "public/file.svg"
+    },
+    {
+      "role": "asset",
+      "sha256": "b614b9bf183925957661ac851498fe1d8029fd43a62fbfed86f9e2624a57e7cf",
+      "size": 1035,
+      "source": "frontend/public/globe.svg",
+      "target": "public/globe.svg"
+    },
+    {
+      "role": "asset",
+      "sha256": "55995dfad6ecb4945a1e856ddca03c5e16aa5bf13fd21b4df6a74ae79357bcfc",
+      "size": 1375,
+      "source": "frontend/public/next.svg",
+      "target": "public/next.svg"
+    },
+    {
+      "role": "asset",
+      "sha256": "f081337b2fee635b455b63275406a3e7f39d6a014e25ad90dab5a67e62a12ac4",
+      "size": 128,
+      "source": "frontend/public/vercel.svg",
+      "target": "public/vercel.svg"
+    },
+    {
+      "role": "asset",
+      "sha256": "644768c4aaeb4767bce293344eeb0c125fb804a94d801440424072202d85e3a1",
+      "size": 385,
+      "source": "frontend/public/window.svg",
+      "target": "public/window.svg"
+    },
+    {
+      "role": "product",
+      "sha256": "6d8ac5b9ae4e6a29ede634ed556b5cfedf521a62a314c164faa16e077dee814c",
+      "size": 646,
+      "source": "frontend/src/app/api/auth/[action]/route.ts",
+      "target": "src/app/api/auth/[action]/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/flow/reports/route.ts",
+      "target": "src/app/api/flow/reports/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/fundamental/reports/[reportId]/html/route.ts",
+      "target": "src/app/api/fundamental/reports/[reportId]/html/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/fundamental/reports/route.ts",
+      "target": "src/app/api/fundamental/reports/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/industry/reports/[reportId]/html/route.ts",
+      "target": "src/app/api/industry/reports/[reportId]/html/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/industry/reports/route.ts",
+      "target": "src/app/api/industry/reports/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/news/reports/route.ts",
+      "target": "src/app/api/news/reports/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "97c30e6378df6a1311873afc0d7aca1692126e0d395c62f754a0f85e1059dfa1",
+      "size": 1510,
+      "source": "frontend/src/app/api/private/[...path]/route.ts",
+      "target": "src/app/api/private/[...path]/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/supervisor/analyze/route.ts",
+      "target": "src/app/api/supervisor/analyze/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c5df03aeaad2836721540bbe6a2ccb3d61e395ea1a74deb8411c407f6d651bd6",
+      "size": 335,
+      "source": "frontend/src/app/api/technical/reports/route.ts",
+      "target": "src/app/api/technical/reports/route.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "2b8ad2d33455a8f736fc3a8ebf8f0bdea8848ad4c0db48a2833bd0f9cd775932",
+      "size": 25931,
+      "source": "frontend/src/app/favicon.ico",
+      "target": "src/app/favicon.ico"
+    },
+    {
+      "role": "product",
+      "sha256": "7e336f5e03453f964851e8ec2c9fdb43278b8d9fd6bd3bdc19275f7ad37c9328",
+      "size": 2050,
+      "source": "frontend/src/app/flow/demo/page.tsx",
+      "target": "src/app/flow/demo/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "6031c4d0c08388f9c257166d42e906a8038b49bdf15937952fa6628752334f0e",
+      "size": 1191,
+      "source": "frontend/src/app/globals.css",
+      "target": "src/app/globals.css"
+    },
+    {
+      "role": "product",
+      "sha256": "00a6d04d4472ded4f1da30b03c29c00d3228ca10a5e1d4a20b6b44a9d0597b58",
+      "size": 429,
+      "source": "frontend/src/app/layout.tsx",
+      "target": "src/app/layout.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "7f4579915fa6fa3a22e5489256818bdce5c4db357f1c4f6a1e144dd8ef403ccd",
+      "size": 2857,
+      "source": "frontend/src/app/page.tsx",
+      "target": "src/app/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "547ee502d56bcf0cb495650e28538ab4598693ba9421aa271b9fd785b82ca535",
+      "size": 2594,
+      "source": "frontend/src/app/reports/flow/[reportId]/page.tsx",
+      "target": "src/app/reports/flow/[reportId]/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "643ef709612f6bb3cce1b4fe3a30f79bede1ae717f68ab51ca99552a718bd7eb",
+      "size": 2582,
+      "source": "frontend/src/app/reports/fundamental/[reportId]/page.tsx",
+      "target": "src/app/reports/fundamental/[reportId]/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "eea05630362a080b093ee2b9844d95be928cbfcc4d01c6072c8aa4391d9dda64",
+      "size": 2218,
+      "source": "frontend/src/app/reports/industry/[reportId]/page.tsx",
+      "target": "src/app/reports/industry/[reportId]/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "15d54e5b9e8b8d31e0c9a8fbf753577d0440109bff7c0b12329d5c3c7ad7b0cd",
+      "size": 3433,
+      "source": "frontend/src/app/reports/news/[reportId]/page.tsx",
+      "target": "src/app/reports/news/[reportId]/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "bedf2d49c39279b62baadc63a2069e4abc82035d5bbf64d7aacb05d29f3f66e9",
+      "size": 6149,
+      "source": "frontend/src/app/reports/technical/[reportId]/page.tsx",
+      "target": "src/app/reports/technical/[reportId]/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "562349185e74641c3c782d37dad5028b8b01050d157d9e69656151f4e7e663f4",
+      "size": 5972,
+      "source": "frontend/src/app/reports/technical/demo/page.tsx",
+      "target": "src/app/reports/technical/demo/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "b2176adea80a5a56ee939d0ab294ac42669f1170c882cebaf3b10c1ad8f317fc",
+      "size": 462,
+      "source": "frontend/src/app/research/page.tsx",
+      "target": "src/app/research/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "1d3068c9638c28bacb1d12440eb65aafdf05cec016044751ad06d3c64a7b9774",
+      "size": 378,
+      "source": "frontend/src/app/unavailable/page.tsx",
+      "target": "src/app/unavailable/page.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "87b602dc176f43b09636fab10955a9b1fc2a0bc9236963fddd14d288dc7be3d6",
+      "size": 895,
+      "source": "frontend/src/features/archive/api/reports.ts",
+      "target": "src/features/archive/api/reports.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "cee5c3f6d8611b511266d11e26c22bbf6490126ed304852306324dc3f770eca5",
+      "size": 3606,
+      "source": "frontend/src/features/archive/components/archive-card.tsx",
+      "target": "src/features/archive/components/archive-card.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "d773a843caf36c7f03d0999893db13ba38e79943cd395ef163d9b147ad4e25b7",
+      "size": 1034,
+      "source": "frontend/src/features/archive/components/archive-tabs.tsx",
+      "target": "src/features/archive/components/archive-tabs.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "8d9ee9b5c087beefaa5dba9aea4d154166501c4a79e82bfa3786cbbb5a018d43",
+      "size": 2476,
+      "source": "frontend/src/features/archive/components/delete-all-reports-button.tsx",
+      "target": "src/features/archive/components/delete-all-reports-button.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "3dc9c66aece8ba4af44e57e2400b0466e6dfa130a751670fcd4ea8605d62e09c",
+      "size": 2477,
+      "source": "frontend/src/features/archive/components/delete-report-button.tsx",
+      "target": "src/features/archive/components/delete-report-button.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "1963861d533a1676e615fd51999499c5ebca1823b6e6298796f4a5f683fce85b",
+      "size": 1033,
+      "source": "frontend/src/features/archive/lib/pagination.ts",
+      "target": "src/features/archive/lib/pagination.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "5540c5b9981e8eb399c0d8ae335537184788b6131d3261d1c8769c0d4d9c6222",
+      "size": 668,
+      "source": "frontend/src/features/archive/lib/report-links.ts",
+      "target": "src/features/archive/lib/report-links.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "2aebea56b104da9df70fb4553da37849c931ce89b6dddb8b870b6c0268ca770a",
+      "size": 947,
+      "source": "frontend/src/features/flow/api/create-report.ts",
+      "target": "src/features/flow/api/create-report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "e13108e7fc3f1681794c306bfb6469a8668660f4c52fd95b982b4e539797488c",
+      "size": 2765,
+      "source": "frontend/src/features/flow/api/reports.ts",
+      "target": "src/features/flow/api/reports.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "791210c56da7813aed3121a56efa40c10b7b6eaf5fb382e66ee9fe522db8a55c",
+      "size": 2398,
+      "source": "frontend/src/features/flow/components/flow-actions.tsx",
+      "target": "src/features/flow/components/flow-actions.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "101671b4c795aab112bda6ae1e675420752f76305e6ae26cd70edd4b1731d4e0",
+      "size": 42612,
+      "source": "frontend/src/features/flow/components/flow-report-view.tsx",
+      "target": "src/features/flow/components/flow-report-view.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "f13be20fc4fe6ed5085c468c97eb8e6c21ec55c596b214efb7d25e509a352491",
+      "size": 838,
+      "source": "frontend/src/features/flow/components/session-controls.tsx",
+      "target": "src/features/flow/components/session-controls.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "7d35dd02756a273ee590daf593c76cba119a611e3c56732cd04d56b2ca252d49",
+      "size": 9441,
+      "source": "frontend/src/features/flow/components/synthetic-demo.tsx",
+      "target": "src/features/flow/components/synthetic-demo.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "5496c23157ca7618d3601392b90892666682198a9720da32b7d3b5bc475e116d",
+      "size": 7148,
+      "source": "frontend/src/features/flow/lib/observation-window.ts",
+      "target": "src/features/flow/lib/observation-window.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "4adbff71c6f47cde0148554b530b9cba23a176984fc02acffb0fe19e7a095734",
+      "size": 10103,
+      "source": "frontend/src/features/flow/lib/synthetic-demo.ts",
+      "target": "src/features/flow/lib/synthetic-demo.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "64b68da0824f5f9308ae01d21c65af97fae022902d917278eda39eb4396288fa",
+      "size": 1013,
+      "source": "frontend/src/features/fundamental/api/create-report.ts",
+      "target": "src/features/fundamental/api/create-report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "b4439114d55b55fbc1901393503058aec489325546f6d2e3e7dc66ca9d291a76",
+      "size": 1433,
+      "source": "frontend/src/features/fundamental/api/reports.ts",
+      "target": "src/features/fundamental/api/reports.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "c621e5808a40a8c137e37e34642383ace580b3a787fb4935570d0f17e063fbc6",
+      "size": 2693,
+      "source": "frontend/src/features/fundamental/components/fundamental-actions.tsx",
+      "target": "src/features/fundamental/components/fundamental-actions.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "13f9b04e6cdea14167be893a9d357497bd6e2eaf730e7147057d14aab9de4358",
+      "size": 990,
+      "source": "frontend/src/features/industry/api/create-report.ts",
+      "target": "src/features/industry/api/create-report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "964754adade3f4cb171a0132345ffae879fc624947ba44f8510dda1748d24bbc",
+      "size": 3337,
+      "source": "frontend/src/features/industry/api/reports.ts",
+      "target": "src/features/industry/api/reports.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "a879a36943406df4ad9df0d93c89550cddb3dfd6382bb7c308f0cb04c068ead5",
+      "size": 2507,
+      "source": "frontend/src/features/industry/components/industry-actions.tsx",
+      "target": "src/features/industry/components/industry-actions.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "20b53e5f818c39fa82165be583037be5976f9d2be59463da9993b0ed87504372",
+      "size": 36937,
+      "source": "frontend/src/features/industry/components/industry-report-view.tsx",
+      "target": "src/features/industry/components/industry-report-view.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "2e914493b52fe1e1d27d255e6f5bf83b68afc3e9b61f716b34dea716e1adf9ad",
+      "size": 1084,
+      "source": "frontend/src/features/news/api/create-report.ts",
+      "target": "src/features/news/api/create-report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "57778c0499789f04a8bb5664be638afaa1030b9686f8a4b4f935246080aa49c0",
+      "size": 1028,
+      "source": "frontend/src/features/news/api/reports.ts",
+      "target": "src/features/news/api/reports.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "dc1a39b1882d4f608d16a1bd16ecb36549f73fdd1f52b3d35518240d3c5ad81e",
+      "size": 2341,
+      "source": "frontend/src/features/news/components/answer-text.tsx",
+      "target": "src/features/news/components/answer-text.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "d9d9de8043f90dffa2d317882be8a98d9fc867ea8f30c66b60ab522428cb749e",
+      "size": 2327,
+      "source": "frontend/src/features/news/components/news-actions.tsx",
+      "target": "src/features/news/components/news-actions.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "8c0dc837782e1e9efea35fe9361fa334cbe8bde73665221c111a34ee2d0116bc",
+      "size": 7073,
+      "source": "frontend/src/features/news/components/news-report-view.tsx",
+      "target": "src/features/news/components/news-report-view.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "0c1bcf1baed7fb0460fe90f56f14b836c5016f35459990149b8e77eef71b65e8",
+      "size": 1809,
+      "source": "frontend/src/features/news/components/news-sentiment-bar.tsx",
+      "target": "src/features/news/components/news-sentiment-bar.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "33cc2795a59f063c05f2254031ffadba462e86f51eadd3b5e21c684536aed4d6",
+      "size": 1244,
+      "source": "frontend/src/features/news/model/types.ts",
+      "target": "src/features/news/model/types.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "7c4ad751050553b4c5a4dbf6f7053c4b16e2a8197b2b5d17bc825dcf56259659",
+      "size": 403,
+      "source": "frontend/src/features/supervisor/api/analyze.ts",
+      "target": "src/features/supervisor/api/analyze.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "b8ecb62d9f3565a2416dc4273e9c6215f291e983676e2a6c6b17978384af56d1",
+      "size": 3449,
+      "source": "frontend/src/features/supervisor/components/composer.tsx",
+      "target": "src/features/supervisor/components/composer.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "6d7196c3d8aa7da844036231d9d7aefe05d1335261eaeaa6ef00e568bec30d86",
+      "size": 4198,
+      "source": "frontend/src/features/supervisor/components/pipeline-box.tsx",
+      "target": "src/features/supervisor/components/pipeline-box.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "4592cd39802f01514438abb4be44304bb2b36f70a905d9cccf4f685df30c9468",
+      "size": 13709,
+      "source": "frontend/src/features/supervisor/components/research-view.tsx",
+      "target": "src/features/supervisor/components/research-view.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "e838a553f2444a48b68d8fdedcda7b7de7e8a1a2c8ceee9b2945f232df673062",
+      "size": 5699,
+      "source": "frontend/src/features/supervisor/components/result-message.tsx",
+      "target": "src/features/supervisor/components/result-message.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "74e99b3d452386f72a30ddd0c71c2ac80b0cc3587848d5b8967748e257623db5",
+      "size": 2616,
+      "source": "frontend/src/features/supervisor/lib/agents.ts",
+      "target": "src/features/supervisor/lib/agents.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "1ad4fcd46ce6714faedfa86b5ec22b479b00320df177888472105b1d17d94949",
+      "size": 1592,
+      "source": "frontend/src/features/supervisor/mock-data/demo-analyze.ts",
+      "target": "src/features/supervisor/mock-data/demo-analyze.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "e62f60a5680f91d9fb688d7d73b7852644f39d4cefe211e28c7834f4bd5eb576",
+      "size": 1915,
+      "source": "frontend/src/features/supervisor/model/types.ts",
+      "target": "src/features/supervisor/model/types.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "ce12a9ec18e529a2fa18580daa5d1093dd87809fc5c454c312748d055d3128cf",
+      "size": 894,
+      "source": "frontend/src/features/technical/api/create-report.ts",
+      "target": "src/features/technical/api/create-report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "f26fed8bf519f2f0f500141d7325da18981ec4951acf0c309418f0d3622d8e27",
+      "size": 1707,
+      "source": "frontend/src/features/technical/api/reports.ts",
+      "target": "src/features/technical/api/reports.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "5daf640fbdd6c171b02c532937b681cfe12fefe0e07442d86c3e6347740dafd7",
+      "size": 28363,
+      "source": "frontend/src/features/technical/components/indicator-card.tsx",
+      "target": "src/features/technical/components/indicator-card.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "3ea29dde0f7e06693db3e192bbd32c117589f9757b27e189da6f29c8af4f3ebc",
+      "size": 44081,
+      "source": "frontend/src/features/technical/components/technical-chart-panel.tsx",
+      "target": "src/features/technical/components/technical-chart-panel.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "5e11726bac899e5cdeb02c0d87ef8ca206b6bc5bcf3d32e80c7dad367afe9fdf",
+      "size": 3784,
+      "source": "frontend/src/features/technical/components/technical-followups.tsx",
+      "target": "src/features/technical/components/technical-followups.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "6375479ab42280a36dc00d621cb20959039dd6d1c0d9bf4de0fd5b75d11f9d4f",
+      "size": 10172,
+      "source": "frontend/src/features/technical/components/technical-hero.tsx",
+      "target": "src/features/technical/components/technical-hero.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "4573845b09d78aee26ddfc74184310b211b2190d0b9210764ee0489b29e49caf",
+      "size": 11174,
+      "source": "frontend/src/features/technical/components/technical-signal-risk-grid.tsx",
+      "target": "src/features/technical/components/technical-signal-risk-grid.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "49f4ac40ee802f1da51d2cdb113beaecf4a8ebc5bee38d58bf01a6683cd3e572",
+      "size": 13850,
+      "source": "frontend/src/features/technical/components/technical-summary-sections.tsx",
+      "target": "src/features/technical/components/technical-summary-sections.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "a700ee1b182afeeda88d66f0435ab260e827025df6a0ab02400fa81399a5f10e",
+      "size": 12188,
+      "source": "frontend/src/features/technical/components/technical-trace-drawer.tsx",
+      "target": "src/features/technical/components/technical-trace-drawer.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "0dd4ef52e818e28f946e04158f21a9694251555cc4cfdfd04d2c8a0c6a2d53e1",
+      "size": 4039,
+      "source": "frontend/src/features/technical/components/technical-trust-cards.tsx",
+      "target": "src/features/technical/components/technical-trust-cards.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "a1817e28ec601fbbce46e90e434361e505fd414e278bb35fc90880c8cf6ee1dc",
+      "size": 8365,
+      "source": "frontend/src/features/technical/lib/chart.ts",
+      "target": "src/features/technical/lib/chart.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "a9c96733dbc97578205b0043332f04a853ea265ded86ce519aaf6dddb177695d",
+      "size": 2937,
+      "source": "frontend/src/features/technical/lib/labels.ts",
+      "target": "src/features/technical/lib/labels.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "05b4ffd45f7838cc784e86d2c06ce8c6cc8821f66e5dc4274ea8c437ecbb43a2",
+      "size": 11712,
+      "source": "frontend/src/features/technical/mock-data/demo-overrides.ts",
+      "target": "src/features/technical/mock-data/demo-overrides.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "6257385212e8b17a59c6c1c84c299fb16d8caffa06a031ac3a40e85872b56026",
+      "size": 19500,
+      "source": "frontend/src/features/technical/mock-data/demo-report.ts",
+      "target": "src/features/technical/mock-data/demo-report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "8d7cd828b1423731d30408611ae184bc174db202859e8fba203ef8bef7678459",
+      "size": 9566,
+      "source": "frontend/src/features/technical/model/types.ts",
+      "target": "src/features/technical/model/types.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "5e7ace1d57be2a7f15a6deb0c90f342479308295647801b7607428f329eecb12",
+      "size": 668,
+      "source": "frontend/src/proxy.ts",
+      "target": "src/proxy.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "0c4b2cc56eb3b9c90b0e5a067100caf3f27fa68f94c1467ff67da032f11b3e7f",
+      "size": 888,
+      "source": "frontend/src/shared/api/backend.ts",
+      "target": "src/shared/api/backend.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "564b3afe5c1dd6492b918336ebce3f0c420ccac9e9620041337cf3dcbf7f503f",
+      "size": 926,
+      "source": "frontend/src/shared/contracts/report.ts",
+      "target": "src/shared/contracts/report.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "8021e2e0aae569db4dc3a5a7954c7e6e6508bb31afc9d6af3be9f695a88e6ee3",
+      "size": 1352,
+      "source": "frontend/src/shared/lib/format.ts",
+      "target": "src/shared/lib/format.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "e3c6b22994a300ae206122541d9a637ad5f7fe5a94178ce95b4caa4a6be17dac",
+      "size": 380,
+      "source": "frontend/src/shared/server/disabled-feature.ts",
+      "target": "src/shared/server/disabled-feature.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "06168e92dcc108c21fd6f581983453cadb417379d03f758b8709b8b5700ed201",
+      "size": 128,
+      "source": "frontend/src/shared/server/flow-demo-config.ts",
+      "target": "src/shared/server/flow-demo-config.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "bab8b9a003bb38ee4ef00905513669a977ad5f778868d6fa3d3343f77353c9c2",
+      "size": 1341,
+      "source": "frontend/src/shared/server/session-backend.ts",
+      "target": "src/shared/server/session-backend.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "0d4ef9eb23af641200592e501d4ac05f7846e2faac20e30a05764ca8597cafac",
+      "size": 4479,
+      "source": "frontend/src/shared/server/session-proxy.ts",
+      "target": "src/shared/server/session-proxy.ts"
+    },
+    {
+      "role": "product",
+      "sha256": "8ca03061c2abaddcca9a1daa7053b11c8837d35d5d775ef699cd4d0cf7427b86",
+      "size": 1710,
+      "source": "frontend/src/shared/ui/app-shell.tsx",
+      "target": "src/shared/ui/app-shell.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "56d6552a10ca81cc7dd62462b8d286cbee5f34922f5ec85b3509a624d6a15f03",
+      "size": 883,
+      "source": "frontend/src/shared/ui/bold-text.tsx",
+      "target": "src/shared/ui/bold-text.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "77f7b4a87a11e7a52eb0570e6c3db333f558b4dace943ccfb6f2ea5ae7030992",
+      "size": 809,
+      "source": "frontend/src/shared/ui/section-card.tsx",
+      "target": "src/shared/ui/section-card.tsx"
+    },
+    {
+      "role": "product",
+      "sha256": "51256ea7482e93f9583053c96838c7bc93ed9c6526bfb941cc361afb981b6b3d",
+      "size": 709,
+      "source": "frontend/src/shared/ui/status-badge.tsx",
+      "target": "src/shared/ui/status-badge.tsx"
+    },
+    {
+      "role": "adapter",
+      "sha256": "ad75b9c6fa3c1521588adb1fc2d663a6ca0b87d6437a4ae4129919fe855360c7",
+      "size": 6362,
+      "source": "frontend/tests/helpers/docker-synthetic-demo-http.mjs",
+      "target": "docker-tests/helpers/safe-http.mjs"
+    },
+    {
+      "role": "http-test",
+      "sha256": "703741869f2082d4040be6ec4e6eaf04a2ba6a8d90f2f782db02614dbf6b3047",
+      "size": 3801,
+      "source": "frontend/tests/integration/bff/ports-http.test.mjs",
+      "target": "docker-tests/integration/bff/ports-http.test.mjs"
+    },
+    {
+      "role": "http-test",
+      "sha256": "cde9a45de44a04c8a95663f6997e975f245d6826143e698ec2cc3b82728602e6",
+      "size": 4639,
+      "source": "frontend/tests/integration/bff/synthetic-demo-http.test.mjs",
+      "target": "docker-tests/integration/bff/synthetic-demo-http.test.mjs"
+    },
+    {
+      "role": "configuration",
+      "sha256": "5c51df4c59f4510d8c7dadf07a5c32132228826a3b331da5e286207b4df7ef9c",
+      "size": 670,
+      "source": "frontend/tsconfig.json",
+      "target": "tsconfig.json"
+    }
+  ],
+  "image": "sha256:50e2bfc1d63c54b4925099d98a484ac1bcaa54a93e8efce53706f8a92fecf615",
+  "lock_sha256": "bb3a6a2b6c2e6374a4fa43ab8d3022ea678b0e60a003ff2b2aafb5610a7c7fed",
+  "package_sha256": "5dcc4949fad70a41d4c4fe5639f63931fcaf99accd3019a53052c00a4e697ef5",
+  "platform": "linux/arm64",
+  "repo_digest": "node@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
+  "runner_sha256": "4f3a421ccfe54a4120902df2f02fdfa57bd8af5e1f81bd9407b446a31e7c8db2",
+  "schema": 1,
+  "suite": [
+    "docker-tests/integration/bff/ports-http.test.mjs",
+    "docker-tests/integration/bff/synthetic-demo-http.test.mjs"
+  ],
+  "task": "CF-010"
+}

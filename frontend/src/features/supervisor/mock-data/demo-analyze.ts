@@ -1,4 +1,4 @@
-import type { SupervisorAnalyzeResponse } from "@/types/supervisor";
+import type { SupervisorAnalyzeResponse } from "@/features/supervisor/model/types";
 
 // 실제 supervisor /analyze 를 "LG에너지솔루션 분석해줘"로 돌린 결과(2026-07-09, 5/5 success).
 // 백엔드 proxy 가 아직 없어 라이브 호출 대신 이 검증된 실물을 데모로 쓴다(api/supervisor.ts).

@@ -1,10 +1,10 @@
 "use client";
 
 import { Check, Gauge, Sparkles, TrendingUp, TrendingDown, Minus } from "lucide-react";
-import type { TechnicalReportReadModel } from "@/types/technical";
-import { formatDateTime } from "@/lib/format";
-import { signalLabel } from "@/lib/technical-labels";
-import { BoldText } from "@/lib/bold-text";
+import type { TechnicalReportReadModel } from "@/features/technical/model/types";
+import { formatDateTime } from "@/shared/lib/format";
+import { signalLabel } from "@/features/technical/lib/labels";
+import { BoldText } from "@/shared/ui/bold-text";
 
 // 신호 흐름 요약(interpretation_text)의 5구조 라벨을 파싱해 블록으로 분리한다(마크다운 파서 없이).
 // 라벨이 없으면 null → 호출부가 기존 plain text 로 렌더(하위호환).

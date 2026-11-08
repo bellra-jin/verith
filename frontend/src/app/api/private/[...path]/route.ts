@@ -1,4 +1,4 @@
-import { sessionProxy } from '@/lib/session-proxy';
+import { sessionProxy } from '@/shared/server/session-proxy';
 async function handle(request: Request, context:{params:Promise<{path:string[]}>}) {
   const {path}=await context.params;
   const route=path.join('/');

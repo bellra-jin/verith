@@ -1,8 +1,8 @@
 "use client";
 
 import { MessageSquare, HelpCircle, Sparkles } from "lucide-react";
-import { formatDateTime } from "@/lib/format";
-import type { TechnicalReportFollowupsReadModel } from "@/types/technical";
+import { formatDateTime } from "@/shared/lib/format";
+import type { TechnicalReportFollowupsReadModel } from "@/features/technical/model/types";
 
 export function TechnicalFollowups({
   followups,

@@ -4,12 +4,12 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
 
-import { deleteAllTechnicalReports } from "@/api/technical";
-import { deleteAllNewsReports } from "@/api/news";
-import { deleteAllIndustryReports } from "@/api/industry";
-import { deleteAllFundamentalReports } from "@/api/fundamental";
-import { deleteAllFlowReports } from "@/api/flow";
-import type { AgentType } from "@/types/archive";
+import { deleteAllTechnicalReports } from "@/features/technical/api/reports";
+import { deleteAllNewsReports } from "@/features/news/api/reports";
+import { deleteAllIndustryReports } from "@/features/industry/api/reports";
+import { deleteAllFundamentalReports } from "@/features/fundamental/api/reports";
+import { deleteAllFlowReports } from "@/features/flow/api/reports";
+import type { AgentType } from "@/shared/contracts/report";
 
 const LABEL: Record<AgentType, string> = {
   technical: "기술",

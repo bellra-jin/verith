@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 
-import type { IndustryPayload } from "@/api/industry";
+import type { IndustryPayload } from "@/features/industry/api/reports";
 
 // industry 리포트를 payload(research-report.v1 JSON)에서 그린다 — iframe(AI HTML) 제거.
 // 디자인·로직은 AI 템플릿(ai/src/agents/industry/make_report/report_template.html 의 dc-script,

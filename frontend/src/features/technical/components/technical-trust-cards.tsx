@@ -1,9 +1,9 @@
 import { BarChart3, Link2, ShieldCheck, Sparkles } from "lucide-react";
 
-import { formatPercent, formatSignedScore } from "@/lib/format";
-import type { TechnicalReportReadModel } from "@/types/technical";
-import { SectionCard } from "@/components/ui/section-card";
-import { consensusLabel, verificationLabel } from "@/lib/technical-labels";
+import { formatPercent, formatSignedScore } from "@/shared/lib/format";
+import type { TechnicalReportReadModel } from "@/features/technical/model/types";
+import { SectionCard } from "@/shared/ui/section-card";
+import { consensusLabel, verificationLabel } from "@/features/technical/lib/labels";
 
 export function TechnicalTrustCards({ report }: { report: TechnicalReportReadModel }) {
   const cards = [

@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getIndustryReport } from "@/api/industry";
-import { BackendApiError } from "@/api/backend";
+import { getIndustryReport } from "@/features/industry/api/reports";
+import { BackendApiError } from "@/shared/api/backend";
 import { IndustryActions } from "@/features/industry/components/industry-actions";
 import { IndustryReportView } from "@/features/industry/components/industry-report-view";
 

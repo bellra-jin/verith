@@ -14,9 +14,14 @@ import {
   Ruler,
   CandlestickChart,
 } from "lucide-react";
-import type { IndicatorCard } from "@/types/technical";
-import { formatNumber } from "@/lib/format";
-import { BoldText } from "@/lib/bold-text";
+import type { IndicatorCard } from "@/features/technical/model/types";
+import { formatNumber } from "@/shared/lib/format";
+import { BoldText } from "@/shared/ui/bold-text";
+
+function annotationText(value: unknown, fallback: string) {
+  if (value === null || value === undefined) return fallback;
+  return typeof value === "string" || typeof value === "number" ? value : null;
+}
 
 // Format Volume helper to "만주" units
 function formatVolume(val: number | null): string {
@@ -294,7 +299,7 @@ export function IndicatorCardComponent({
                       <span className="font-bold text-[#334155] flex items-center gap-1 font-tabular">
                         {cross.date?.replace(/-/g, ".")}
                         <span className="text-xs text-[#94a3b8] font-semibold ml-0.5">
-                          {cross.meta?.pair ?? "5MA▲20MA"}
+                          {annotationText(cross.meta?.pair, "5MA▲20MA")}
                         </span>
                       </span>
                     </div>
@@ -347,13 +352,13 @@ export function IndicatorCardComponent({
                             <tr key={idx} className="border-b border-[#f1f5f9] last:border-b-0 text-[#475569]">
                               <td className="p-2 font-semibold font-tabular">{dateStr}</td>
                               <td className="p-2 text-right font-tabular">
-                                {row.ma5 ? formatNumber(row.ma5) : ""}
+                                {typeof row.ma5 === "number" && row.ma5 ? formatNumber(row.ma5) : ""}
                               </td>
                               <td className="p-2 text-right font-bold text-[#4f46e5] font-tabular">
-                                {row.ma20 ? formatNumber(row.ma20) : ""}
+                                {typeof row.ma20 === "number" && row.ma20 ? formatNumber(row.ma20) : ""}
                               </td>
                               <td className="p-2 text-right font-tabular">
-                                {row.ma60 ? formatNumber(row.ma60) : ""}
+                                {typeof row.ma60 === "number" && row.ma60 ? formatNumber(row.ma60) : ""}
                               </td>
                             </tr>
                           );
@@ -402,7 +407,7 @@ export function IndicatorCardComponent({
                       <span className="font-bold text-[#334155] font-tabular">
                         {oSold ? (
                           <>
-                            RSI {oSold.meta?.rsi ?? "28"}
+                            RSI {annotationText(oSold.meta?.rsi, "28")}
                             <span className="text-xs text-[#94a3b8] font-semibold ml-1.5">
                               {oSold.date?.replace(/-/g, ".")}
                             </span>
@@ -424,7 +429,7 @@ export function IndicatorCardComponent({
                       <span className="font-bold text-[#334155] font-tabular">
                         {oBought ? (
                           <>
-                            RSI {oBought.meta?.rsi ?? "72"}
+                            RSI {annotationText(oBought.meta?.rsi, "72")}
                             <span className="text-xs text-[#94a3b8] font-semibold ml-1.5">
                               {oBought.date?.replace(/-/g, ".")}
                             </span>

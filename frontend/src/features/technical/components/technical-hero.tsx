@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useState } from "react";
 import { ChevronLeft, Share2, Download, Calendar, ShieldCheck, Link2, ShieldAlert } from "lucide-react";
 
-import { formatDateTime, formatNumber } from "@/lib/format";
-import type { TechnicalReportReadModel, TechnicalChartsReadModel } from "@/types/technical";
-import { consensusLabel, regimeLabel, verificationLabel } from "@/lib/technical-labels";
+import { formatDateTime, formatNumber } from "@/shared/lib/format";
+import type { TechnicalReportReadModel, TechnicalChartsReadModel } from "@/features/technical/model/types";
+import { consensusLabel, regimeLabel, verificationLabel } from "@/features/technical/lib/labels";
 
 export function TechnicalHero({
   report,

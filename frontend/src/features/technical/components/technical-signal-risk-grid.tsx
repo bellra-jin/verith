@@ -1,10 +1,10 @@
 "use client";
 
 import { Calculator, GitBranch, ShieldAlert, Info, AlertTriangle } from "lucide-react";
-import type { TechnicalReportReadModel } from "@/types/technical";
-import { formatNumber } from "@/lib/format";
-import { riskLabel, signalLabel } from "@/lib/technical-labels";
-import { BoldText } from "@/lib/bold-text";
+import type { TechnicalReportReadModel } from "@/features/technical/model/types";
+import { formatNumber } from "@/shared/lib/format";
+import { riskLabel, signalLabel } from "@/features/technical/lib/labels";
+import { BoldText } from "@/shared/ui/bold-text";
 import { IndicatorCardComponent } from "./indicator-card";
 
 const INDICATOR_MAP: Record<string, { name: string; weight: string; icon: string }> = {

@@ -1,4 +1,4 @@
-import type { TechnicalReportReadModel } from "@/types/technical";
+import type { TechnicalReportReadModel } from "@/features/technical/model/types";
 
 export function applyLgEnergyDemoOverrides(report: TechnicalReportReadModel): TechnicalReportReadModel {
   return {

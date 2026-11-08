@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import clsx from "clsx";
 
-import type { AgentType } from "@/types/archive";
+import type { AgentType } from "@/shared/contracts/report";
 
 const tabs: Array<{ key: AgentType; label: string }> = [
   { key: "technical", label: "기술" },

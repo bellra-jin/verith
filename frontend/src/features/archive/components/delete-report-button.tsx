@@ -4,12 +4,12 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
 
-import { deleteTechnicalReport } from "@/api/technical";
-import { deleteNewsReport } from "@/api/news";
-import { deleteIndustryReport } from "@/api/industry";
-import { deleteFundamentalReport } from "@/api/fundamental";
-import { deleteFlowReport } from "@/api/flow";
-import type { AgentType } from "@/types/archive";
+import { deleteTechnicalReport } from "@/features/technical/api/reports";
+import { deleteNewsReport } from "@/features/news/api/reports";
+import { deleteIndustryReport } from "@/features/industry/api/reports";
+import { deleteFundamentalReport } from "@/features/fundamental/api/reports";
+import { deleteFlowReport } from "@/features/flow/api/reports";
+import type { AgentType } from "@/shared/contracts/report";
 
 async function deleteByType(agentType: AgentType, reportId: string): Promise<void> {
   if (agentType === "news") return deleteNewsReport(reportId);

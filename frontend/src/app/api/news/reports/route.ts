@@ -4,4 +4,4 @@ export {
   unavailableFeature as PUT, unavailableFeature as PATCH,
   unavailableFeature as DELETE, unavailableFeature as HEAD,
   unavailableFeature as OPTIONS,
-} from "@/lib/disabled-feature";
+} from "@/shared/server/disabled-feature";

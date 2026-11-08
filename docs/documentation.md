@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-007 현재 내부 실행 기준
+
+CF-006 PR #10 병합 `70d49b3eacccabd1db7bf2ea53cf678102f81bc7` 위에서 합성 입력→명시 opt-in→fake 일회 실행→내부 결과 원자 저장→본인 재조회를 연결한다. [내부 계약](../backend/docs/flow_fake_execution.md)·[구현/검증](work/CF-007-flow-fake-execution.md)을 따른다. 공개 API/기존 보관함 게시·실제 KIS/AI는 포함하지 않으며 아래 이전 결과와 구분한다.
+
 ## CF-006 현재 입력 준비 기준
 
 PR #9 병합 `5c980528c01991cd3e71fb8d4eab448c56c90f0c` 위에서 합성 입력 snapshot 봉인·실제 principal/owner 재조회만 추가한다. [내부 계약](../backend/docs/flow_input_snapshot.md)·[구현/검증/실패 이력](work/CF-006-flow-input-snapshot.md)을 따른다. 공개 API·receipt_only 상태·AI 실행·원 payload는 불변이며, 아래 이전 단계 수치는 각 당시 이력이다.

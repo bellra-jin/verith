@@ -295,3 +295,10 @@ preflight 및 실제 SQLAlchemy 연결 재확인 후 동일 연결을 Alembic에
 `c6001a7e0001`은 기존 `flow_runs`에 `UNIQUE(id, owner_user_id)`만 더하고 `flow_input_snapshots`를 추가한다. 기존 receipt 값·상태·요청 키를 수정하지 않는다.
 
 새 열은 id UUID PK, run_id/owner_user_id UUID, contract_version integer, mode TEXT, input_json TEXT, input_sha256 VARCHAR(64), sealed_at TIMESTAMPTZ이며 전부 NOT NULL이다. UNIQUE(run_id), (run_id,owner_user_id) composite FK/ON DELETE RESTRICT, version1/synthetic_only/finite 시각/UTF-8 128KiB/body version·mode/실제 SHA CHECK가 적용된다. no-op UPDATE·DELETE도 전용 trigger로 거부한다. domain의 canonical/schema/source 검증은 별도로 필요하다. 기존 receipt 자체의 DB 불변성이나 관리자 ALTER/DROP/TRUNCATE 차단을 추가한 것은 아니다. [내부 계약](flow_input_snapshot.md)을 따른다.
+
+
+## CF-007 내부 fake 실행/결과
+
+`flow_fake_executions`(c7001)은 input_snapshot_id UNIQUE FK/RESTRICT로 봉인 입력당 단일 실행권/결과를 저장한다. owner/run은 기존 input/run JOIN으로 판단하고 parent 열/제약을 추가하지 않는다. id/input/version/engine/claim/start/deadline은 불변, 상태는 running→succeeded/failed/timed_out 단1회이며 DELETE는 모든 상태에서 거부한다.
+
+DB clock 기준10초 deadline·finite시각·상태별 결과/hash/error/finished NULL조합과 canonical 결과 object/UTF-8크기/hash/ID 관계를 검사한다. succeeded만 결과가 있다. token 원문은 저장하지 않고 digest32bytes만 보존한다. 기존 receipt/payload/report/index/stock은 바꾸지 않으며 관리자 DDL/장기 purge 정책은 별도다. [내부 계약](flow_fake_execution.md)을 따른다.

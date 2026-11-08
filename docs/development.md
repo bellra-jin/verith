@@ -1,3 +1,9 @@
+## CF-007 내부 fake 실행/저장
+
+[내부 계약](../backend/docs/flow_fake_execution.md)·[작업 기록](work/CF-007-flow-fake-execution.md)을 따른다. 봉인 합성 입력에 strict opt-in한 실제 owner의 fake 일회 실행/내부 결과 저장·재조회만 연결한다. 공개 route/BFF/UI/기존 보관함·실제 KIS/AI는 포함하지 않는다. receipt의 pending은 계속 receipt_only다.
+
+기존 보호 self/unit과 고정 `--verify-flow-fake-execution-db` mode를 사용한다. clean env·정확한 기존 Python/dependency·새 owned PG proof/attestation·자기 HOME·finally 정리를 전제로 하며 일반 pytest/app DB/실환경으로 대체하지 않는다. 실제 launcher와 결과는 작업 기록에 남긴다. 아래 이전 단계는 당시 이력이다.
+
 ## CF-006 내부 합성 입력 준비
 
 공개 route/실행권 없이 receipt의 입력 준비본만 봉인·본인 재조회한다. [내부 계약](../backend/docs/flow_input_snapshot.md)·[작업 기록](work/CF-006-flow-input-snapshot.md)을 따른다. 기존 보호 self/unit과 고정 DB-only `--verify-flow-input-snapshot-db`만 해당 검증 입구다. DB-only는 clean env·기존 Python `-I -S -B`·정확한 site-packages launcher, 검증된 local Docker/기존 image·새 소유 PG·attested 연결·자기 HOME·finally 정리를 전제로 한다. 실제 launcher는 작업 기록에 있다. 일반 앱/pytest/.env/기존 DB로 대체하지 않는다.

@@ -58,6 +58,28 @@ class EntryBoundary(unittest.TestCase):
         modules["agents.flow.infrastructure.token_cache"].__spec__.origin = str(ai / "agents/flow/infrastructure/adjacent.py")
         self.assertFalse(valid_flow_origins(source, modules))
 
+    def test_cf007_exact_sources_selection_and_fixed_revision_modes(self):
+        from scripts import check_safe as controller
+        expected = {
+            "backend/src/modules/flow/domain/fake_execution.py",
+            "backend/src/modules/flow/application/fake_execution_service.py",
+            "backend/src/modules/flow/infrastructure/fake_execution_repository.py",
+            "backend/db/models/flow/fake_execution.py",
+            "backend/db/migrations/versions/20261108_c7001a7e0001_flow_fake_execution.py",
+            "backend/scripts/cf007_fake_execution_check.py",
+            "backend/tests/unit/test_cf007_flow_fake_execution.py",
+        }
+        self.assertEqual(controller.CF007_SOURCES, expected)
+        self.assertEqual(controller.UNIT.count("tests/unit/test_cf007_flow_fake_execution.py"), 1)
+        for name in expected:
+            self.assertTrue(controller.source_allowed(name))
+            self.assertFalse(controller.source_allowed(name + ".adjacent"))
+        root = Path(__file__).resolve().parents[2]
+        source = (root / "scripts/cf002_interactive_login.py").read_text()
+        self.assertIn('target not in {"head", "c6001a7e0001"}', source)
+        self.assertIn('migrate_owned(second_proof, target="c6001a7e0001")', source)
+        self.assertLess(source.index("result = asyncio.run(asyncio.wait_for(verify_fake_execution(proof)"), source.index("project = prepare_projects"))
+
     def test_cf006_exact_sources_fixed_selection_and_db_only_order(self):
         import ast
         from scripts import check_safe as controller

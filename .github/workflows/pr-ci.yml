@@ -39,6 +39,27 @@ jobs:
           UV_NO_CACHE: 'true'
         run: |
           uv sync --locked --group dev --no-install-project --no-build --no-python-downloads --python "$pythonLocation/bin/python" --link-mode copy
+      - name: Read-only runtime metadata
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S - "$GITHUB_WORKSPACE" <<'PY'
+          import json, os, stat, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          executable = (root / 'backend/.venv/bin/python').resolve(strict=True)
+          paths = [('executable', executable), ('runtime', executable.parent.parent.resolve(strict=True)),
+                   ('site', (root / f'backend/.venv/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages').resolve(strict=True))]
+          bad = False
+          for label, path in paths:
+              metadata = path.stat()
+              owner_ok = metadata.st_uid in {0, os.getuid()}
+              write_bits_ok = not (metadata.st_mode & 0o022)
+              bad |= not (owner_ok and write_bits_ok)
+              print(json.dumps(dict(label=label, canonical_path=str(path), runner_uid=os.getuid(),
+                                    uid=metadata.st_uid, mode=oct(stat.S_IMODE(metadata.st_mode)),
+                                    owner_ok=owner_ok, write_bits_ok=write_bits_ok)))
+          if bad:
+              raise SystemExit(78)  # Preserve the original metadata gate; no test dispatch.
+          PY
       - name: Protected focused self
         run: |
           env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" quality-self

@@ -78,7 +78,20 @@ minor-version link 생성 경로에 맞춰 자기 root의
 모두 일치할 때 지원한다. 그 외 절대 링크·모든 root 외부 escape는 계속 거부한다.
 뜻밖의 거부는 자기 root 상대경로/고정 사유/대상 상대경로만 기록하고 외부 대상은
 고정 redaction한다. 기존 metadata/OS/FS/network guard와 제품 source는 변경하지 않는다.
-후속 실제 결과는 별도로 확인한다.
+[고정 링크 보완 회차](https://github.com/bellra-jin/verith/actions/runs/42504899058)는
+head `593ae4e833af7646d40a66f36c1ba8df196dec96` / checkout merge
+`c33b805cf92f8157e938e413d05d00f462ac5d59`에서 `runtime/.lock`의 추가
+ENTRY_METADATA 검사로 중단했다. 당시 uid/mode 값은 로그에 없으며 wheel/self/unit은 0이다.
+
+공식 [managed root lock 생성](https://raw.githubusercontent.com/astral-sh/uv/0.13.7/crates/uv-python-managed/src/managed.rs)과
+[LockedFile 구현](https://raw.githubusercontent.com/astral-sh/uv/0.13.7/crates/uv-fs/src/locked_file.rs)을 대조했다.
+이 파일은 설치 경쟁 제어용 regular file이며 Unix 생성 코드의 DESIRED_MODE는 0666이다.
+그 공식 값과 당시 미수집 원격 값을 혼동하지 않는다. 후속 검사는 실제 .lock의 종류/소유/비실행과
+uid/mode를 확인하되 권한이나 내용을 변경하지 않는다. 새0700 root·설치 root 및 모든 디렉터리의
+소유/안전 권한, 전체 링크 탈출 검사는 유지한다. 실행 입력으로 신뢰하는 정확한 patch runtime
+subtree 전체에 regular/directory 타입·소유·group/other-write 금지를 적용한다.
+부모 경계 안의 설치 관리 파일은 Python 실행 입력으로 사용하지 않는다. 기존 repo guard의
+canonical executable/runtime/site 검사는 그대로이며 후속 결과는 별도로 확인한다.
 
 ## 범위·호환·source 검토
 

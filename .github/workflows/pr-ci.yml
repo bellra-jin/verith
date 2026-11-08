@@ -52,7 +52,10 @@ jobs:
           root = Path(sys.argv[1])
           assert root.is_absolute() and not root.is_symlink() and root.resolve(strict=True) == root
           assert root.stat().st_uid == os.getuid() and stat.S_IMODE(root.stat().st_mode) == 0o700
-          runtime = root / 'runtime/cpython-3.12.10-macos-aarch64-none'
+          install_root = root / 'runtime'
+          assert install_root.is_dir() and not install_root.is_symlink()
+          assert install_root.stat().st_uid == os.getuid() and not install_root.stat().st_mode & 0o022
+          runtime = install_root / 'cpython-3.12.10-macos-aarch64-none'
           minor_link = root / 'runtime/cpython-3.12-macos-aarch64-none'
           def reject(path, reason, target=None):
               relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else '<outside-owned-root>'
@@ -63,6 +66,12 @@ jobs:
           assert runtime.is_dir() and not runtime.is_symlink()
           executable = (runtime / 'bin/python3.12').resolve(strict=True)
           assert executable.is_relative_to(runtime) and executable.is_file()
+          manager_lock = install_root / '.lock'
+          lock_meta = manager_lock.lstat()
+          assert stat.S_ISREG(lock_meta.st_mode) and lock_meta.st_uid == os.getuid()
+          assert not lock_meta.st_mode & 0o111
+          print(json.dumps(dict(path='runtime/.lock', role='uv installation coordination; not executable input',
+                                uid=lock_meta.st_uid, mode=oct(stat.S_IMODE(lock_meta.st_mode)))))
           for current, directories, files in os.walk(root, followlinks=False):
               for path in [Path(current), *(Path(current)/name for name in directories+files)]:
                   metadata = path.lstat()
@@ -80,7 +89,11 @@ jobs:
                   else:
                       if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
                           reject(path, 'ENTRY_TYPE')
-                      if metadata.st_uid != os.getuid() or metadata.st_mode & 0o022:
+                      if metadata.st_uid != os.getuid():
+                          reject(path, 'ENTRY_OWNER')
+                      # Manager files are not interpreter inputs. Protect every
+                      # parent directory and the entire exact patch runtime.
+                      if (path.is_relative_to(runtime) or stat.S_ISDIR(metadata.st_mode)) and metadata.st_mode & 0o022:
                           reject(path, 'ENTRY_METADATA')
           with open(sys.argv[2], 'a', encoding='utf-8') as target:
               target.write(f'CF014_PYTHON={executable}\nCF014_PYTHON_OWNER={root}\n')

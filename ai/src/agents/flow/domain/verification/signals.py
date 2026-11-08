@@ -22,6 +22,7 @@ import pandas as pd
 from .. import signals as sig
 from ... import config
 from ..models import GateResult
+from .consecutive import verify_consecutive
 
 # 규칙 6a 항등식 허용오차(백만원). KIS 필드별 반올림 관측치 ±1 → 여유 5.
 _DETAIL_IDENTITY_TOL = 5.0
@@ -78,18 +79,22 @@ def verify_signals(
                 f"강도 정합: {subject} ratio={claimed} 이(가) 원본 대조값 {expected:.6f} 과 불일치"
             )
 
-    # ── 규칙 2: 연속일수 범위 ────────────────────────────
+    # ── 규칙 2: 원자료 연속일수·threshold 독립 대조 ─────────
     consecutive = signals.get("consecutive", {})
     for subject in sig.SUBJECTS:
-        days = consecutive.get(subject, {}).get("days")
-        if days is None:
-            failures.append(f"연속일수 범위: {subject} days 가 신호에 없음")
-        elif days > n_rows:
-            failures.append(
-                f"연속일수 범위: {subject} days={days} 가 데이터 행 수 {n_rows} 를 초과(불가능)"
-            )
+        claim = consecutive.get(subject, {}) if type(consecutive) is dict else {}
+        try:
+            dates = [index.date().isoformat() for index in df.index]
+            values = [value.item() if hasattr(value, "item") else value for value in df[subject].tolist()]
+            valid = type(claim) is dict and verify_consecutive(
+                values, claim.get("days"), claim.get("signal"), config.CONSECUTIVE_THRESHOLD,
+                dates=dates, subject=subject)
+        except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
+            valid = False
+        if valid:
+            checks.append(f"연속일수 정합: {subject} 제공 관측 내 원자료 길이·threshold 일치")
         else:
-            checks.append(f"연속일수 범위: {subject} days={days} 가 행 수 {n_rows} 이내")
+            failures.append(f"연속일수 정합: {subject} 원자료·주장 또는 날짜 문맥 불일치")
 
     # ── 규칙 3: 구도 부호 정합 ───────────────────────────
     claimed_alignment = signals.get("alignment")

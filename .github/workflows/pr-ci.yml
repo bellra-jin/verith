@@ -1,0 +1,136 @@
+name: PR safe checks
+
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-safe-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  flow-quality:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout PR source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Select Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12.10'
+          architecture: arm64
+      - name: Set up pinned uv
+        id: uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: '0.13.7'
+          checksum: 81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731
+          enable-cache: false
+          activate-environment: false
+      - name: Install digest-verified owned Python
+        run: |
+          set -euo pipefail
+          umask 077
+          cf014_root="$(mktemp -d "$RUNNER_TEMP/cf014-python.XXXXXXXX")"
+          mkdir "$cf014_root/home" "$cf014_root/tmp"
+          # uv 0.13.7 embeds this exact CPython 3.12.10 arm64 artifact:
+          # 20250529/cpython-3.12.10%2B20250529-aarch64-apple-darwin-install_only_stripped.tar.gz
+          # SHA256 2579c9ffcbb0a745f1de3d645612c7466269eb9a23316a54ece49d50c1c9122f
+          env -i LANG=en_US.UTF-8 TZ=UTC HOME="$cf014_root/home" TMPDIR="$cf014_root/tmp" UV_PYTHON_INSTALL_MIRROR=https://github.com/astral-sh/python-build-standalone/releases/download "${{ steps.uv.outputs.uv-path }}" --no-cache --no-config python install --install-dir "$cf014_root/runtime" --no-bin cpython-3.12.10-macos-aarch64-none
+          # The setup-python interpreter only inspects files here; protected tests
+          # exclusively use the verified, isolated installation below.
+          "$pythonLocation/bin/python" -I -S - "$cf014_root" "$GITHUB_ENV" <<'PY'
+          import json, os, stat, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          assert root.is_absolute() and not root.is_symlink() and root.resolve(strict=True) == root
+          assert root.stat().st_uid == os.getuid() and stat.S_IMODE(root.stat().st_mode) == 0o700
+          install_root = root / 'runtime'
+          assert install_root.is_dir() and not install_root.is_symlink()
+          assert install_root.stat().st_uid == os.getuid() and not install_root.stat().st_mode & 0o022
+          runtime = install_root / 'cpython-3.12.10-macos-aarch64-none'
+          minor_link = root / 'runtime/cpython-3.12-macos-aarch64-none'
+          def reject(path, reason, target=None):
+              relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else '<outside-owned-root>'
+              target_label = (target.relative_to(root).as_posix() if target.is_relative_to(root)
+                              else '<outside-owned-root>') if target is not None else None
+              print(json.dumps(dict(path=relative, reason=reason, target=target_label)))
+              raise SystemExit(78)
+          assert runtime.is_dir() and not runtime.is_symlink()
+          executable = (runtime / 'bin/python3.12').resolve(strict=True)
+          assert executable.is_relative_to(runtime) and executable.is_file()
+          manager_lock = install_root / '.lock'
+          lock_meta = manager_lock.lstat()
+          assert stat.S_ISREG(lock_meta.st_mode) and lock_meta.st_uid == os.getuid()
+          assert not lock_meta.st_mode & 0o111
+          print(json.dumps(dict(path='runtime/.lock', role='uv installation coordination; not executable input',
+                                uid=lock_meta.st_uid, mode=oct(stat.S_IMODE(lock_meta.st_mode)))))
+          for current, directories, files in os.walk(root, followlinks=False):
+              for path in [Path(current), *(Path(current)/name for name in directories+files)]:
+                  metadata = path.lstat()
+                  if stat.S_ISLNK(metadata.st_mode):
+                      raw_target = Path(os.readlink(path))
+                      try:
+                          target = path.resolve(strict=True)
+                      except (OSError, RuntimeError):
+                          reject(path, 'LINK_UNRESOLVED')
+                      if not target.is_relative_to(root):
+                          reject(path, 'LINK_ESCAPE', target)
+                      if raw_target.is_absolute() and not (path == minor_link and raw_target == runtime
+                              and target == runtime.resolve(strict=True)):
+                          reject(path, 'UNEXPECTED_ABSOLUTE_LINK', target)
+                  else:
+                      if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
+                          reject(path, 'ENTRY_TYPE')
+                      if metadata.st_uid != os.getuid():
+                          reject(path, 'ENTRY_OWNER')
+                      # Manager files are not interpreter inputs. Protect every
+                      # parent directory and the entire exact patch runtime.
+                      if (path.is_relative_to(runtime) or stat.S_ISDIR(metadata.st_mode)) and metadata.st_mode & 0o022:
+                          reject(path, 'ENTRY_METADATA')
+          with open(sys.argv[2], 'a', encoding='utf-8') as target:
+              target.write(f'CF014_PYTHON={executable}\nCF014_PYTHON_OWNER={root}\n')
+          print('Owned runtime paths/links/uid/mode verified; toolcache unchanged')
+          PY
+      - name: Install Verith locked wheels
+        working-directory: backend
+        env:
+          UV_NO_CACHE: 'true'
+        run: |
+          uv sync --locked --group dev --no-install-project --no-build --no-python-downloads --python "$CF014_PYTHON" --link-mode copy
+      - name: Read-only runtime metadata
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S - "$GITHUB_WORKSPACE" "$CF014_PYTHON_OWNER" <<'PY'
+          import json, os, stat, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          executable = (root / 'backend/.venv/bin/python').resolve(strict=True)
+          assert executable.is_relative_to(Path(sys.argv[2]))  # No toolcache fallback.
+          assert sys.version_info[:3] == (3, 12, 10)
+          paths = [('executable', executable), ('runtime', executable.parent.parent.resolve(strict=True)),
+                   ('site', (root / f'backend/.venv/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages').resolve(strict=True))]
+          bad = False
+          for label, path in paths:
+              metadata = path.stat()
+              owner_ok = metadata.st_uid in {0, os.getuid()}
+              write_bits_ok = not (metadata.st_mode & 0o022)
+              bad |= not (owner_ok and write_bits_ok)
+              print(json.dumps(dict(label=label, canonical_path=str(path), runner_uid=os.getuid(),
+                                    uid=metadata.st_uid, mode=oct(stat.S_IMODE(metadata.st_mode)),
+                                    owner_ok=owner_ok, write_bits_ok=write_bits_ok)))
+          if bad:
+              raise SystemExit(78)  # Preserve the original metadata gate; no test dispatch.
+          PY
+      - name: Protected focused self
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" quality-self
+      - name: Protected focused unit
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" quality-unit

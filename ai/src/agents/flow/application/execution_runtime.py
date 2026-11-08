@@ -75,6 +75,7 @@ class FlowExecutionRuntime:
                     from .. import config
                     if (config.INTERPRETER_MODEL!=request.spec['model'] or config.INTERPRETER_PROVIDER!=request.spec['provider'] or config.MAX_EXPLAIN_RETRIES!=request.spec['explain_regenerations']):raise EngineUnavailable()
                     if hashlib.sha256(Path(config.__file__).read_bytes()).hexdigest()!=request.spec['config_sha256'] or hashlib.sha256((Path(config.__file__).parent/'prompts/explain.txt').read_bytes()).hexdigest()!=request.spec['prompt_sha256']:raise EngineUnavailable()
+                    if (request.spec['policy']!='flow.fact-selection.v1' or hashlib.sha256((Path(config.__file__).parent/'domain/interpretation_claims.py').read_bytes()).hexdigest()!=request.spec['policy_sha256']):raise EngineUnavailable()
                     from .agent import run
                     value=run(query=request.question,stock_name=request.stock_name,ticker=request.ticker,
                               base_date=request.candidate_date,execution_context=context)

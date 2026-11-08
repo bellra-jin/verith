@@ -541,10 +541,47 @@ class CF013Boundary(unittest.TestCase):
         self.assertLessEqual(names,{'dataclasses','datetime','hashlib','json','math','re','typing','uuid'})
 
 
+class CF014Boundary(unittest.TestCase):
+    def test_exact_fifteen_pins_and_single_focused_collection(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        self.assertEqual(len(c.CF014_INPUTS),14)
+        self.assertEqual(c.CF014_COMPAT,c.CF004_INPUTS)
+        self.assertEqual(c.CF014_TESTS,("tests/unit/test_cf014_flow_quality.py",))
+        root=Path(__file__).resolve().parents[3]
+        expected=set(c.CF014_INPUTS)|set(c.CF014_COMPAT)
+        for name in expected:
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),(c.CF014_INPUTS|c.CF014_COMPAT)[name])
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):
+            copied=c.selected_sources(Path('/synthetic'),quality_only=True)
+        self.assertEqual({p for p in copied if p.startswith('ai/')},expected)
+        self.assertEqual(len(expected),15)
+
+    def test_pure_loader_is_closed_and_dangerous_sources_remain_static(self):
+        import ast
+        root=Path(__file__).resolve().parents[3]
+        source=(root/'backend/tests/unit/test_cf014_flow_quality.py').read_text()
+        self.assertIn('_module.__path__ = []',source)
+        self.assertNotIn('sys.path.append',source)
+        self.assertNotIn('flow_app(',source)
+        for name in ('workflow','explain','signals'):
+            self.assertNotIn('from agents.flow.application.'+name,source)
+        self.assertNotIn('from agents.flow.domain.signals import',source)
+        self.assertIn('domain/verification/consecutive.py',__import__('scripts.check_safe',fromlist=['CF014_INPUTS']).CF014_INPUTS.keys().__str__())
+        imports=[n for n in ast.parse((root/'ai/src/agents/flow/domain/interpretation_claims.py').read_text()).body if isinstance(n,(ast.Import,ast.ImportFrom))]
+        names={n.module for n in imports if isinstance(n,ast.ImportFrom)}|{a.name for n in imports if isinstance(n,ast.Import) for a in n.names}
+        self.assertLessEqual(names,{'dataclasses','hashlib','json','math','re','observation_window','verification.consecutive'})
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
     adapter_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf013_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    quality_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf014_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

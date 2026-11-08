@@ -9,11 +9,12 @@ from sqlalchemy import select,func
 from db.models.common.stock import Stock
 from src.modules.auth.application.session_service import AuthenticationRequired,Principal,validate_principal
 from src.modules.flow.api.analysis_schemas import AnalysisRequest,AnalysisView
-from src.modules.flow.api.schemas import FlowReportSaveRequest
 from src.modules.flow.domain.execution import ContractViolation,ErrorCode,SafeError
-from src.modules.flow.domain.analysis import OPERATION,SPEC,ai_request,canonical,candidate,sha,stored_response,validate_response
+from src.modules.flow.domain.analysis import OPERATION,SPEC,canonical,candidate,sha
 from src.modules.flow.infrastructure import analysis_repository as repository
-from src.modules.flow.application.report_service import FlowReportService,FlowReportIdConflict
+from src.modules.flow.application.report_service import FlowReportIdConflict
+from src.modules.analysis.application.ports import AnalysisAdapter
+from src.modules.flow.application.analysis_adapter import FlowAnalysisAdapter
 from src.modules.flow.infrastructure import report_repository
 from db.models.flow.flow_report import FlowReport
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +30,9 @@ class AnalysisError(ValueError):
 class AnalysisService:
     def __init__(self,session,*,principal,client):
         self.session,self.principal,self.client=session,principal,client
+
+    def _adapter(self,row)->FlowAnalysisAdapter:
+        return FlowAnalysisAdapter(row,owner_user_id=self.principal.user_id)
 
     async def _authorize(self):
         if not isinstance(self.principal,Principal):raise AuthenticationRequired()
@@ -84,7 +88,10 @@ class AnalysisService:
             await repository.expire(self.session,row)
             if row.state=='result_ready':return await self._publish(row)
             view=self._view(row);dispatch=winner and row.state=='running'
-            request=ai_request(row) if dispatch else None
+            request=None
+            if dispatch:
+                adapter:AnalysisAdapter=self._adapter(row)
+                request=adapter.build_request()
             await self.session.commit() # An ambiguous ACK must never dispatch.
         except asyncio.CancelledError:
             await self._rollback();raise
@@ -124,12 +131,14 @@ class AnalysisService:
             if not hmac.compare_digest(row.claim_digest,hashlib.sha256(token).digest()):raise AnalysisError(ErrorCode.RESULT_CONTRACT_INVALID,id)
             if row.state!='running':
                 view=self._view(row);await self.session.commit();return view
-            try:ref,input_text,result_text=validate_response(row,response,self.principal.user_id)
+            try:
+                adapter:AnalysisAdapter=self._adapter(row)
+                frozen=adapter.validate_and_freeze(response)
             except ContractViolation:
                 row.state='failed';row.error_code=ErrorCode.RESULT_CONTRACT_INVALID.value
                 view=self._view(row);await self.session.commit();return view
-            row=await repository.accept(self.session,row,hashlib.sha256(token).digest(),report_id=ref.report_id,
-                input_json=input_text,input_sha256=sha(input_text),result_json=result_text,result_sha256=sha(result_text))
+            row=await repository.accept(self.session,row,hashlib.sha256(token).digest(),report_id=frozen.report_id,
+                input_json=frozen.input_json,input_sha256=frozen.input_sha256,result_json=frozen.result_json,result_sha256=frozen.result_sha256)
             if row is None:
                 row=await self._locked(id);await repository.expire(self.session,row)
                 view=self._view(row);await self.session.commit();return view
@@ -151,12 +160,12 @@ class AnalysisService:
     async def _publish(self,row):
         if row.state!='result_ready':
             view=self._view(row);await self.session.commit();return view
-        ref,_,_=validate_response(row,stored_response(row),self.principal.user_id)
-        request=ai_request(row)
-        analysis_id,report_id=row.id,ref.report_id
+        flow=self._adapter(row)
+        adapter:AnalysisAdapter=flow
+        frozen=flow.from_stored(row)
+        analysis_id,report_id=row.id,frozen.report_id
         try:
-            await FlowReportService(session=self.session,principal=self.principal).stage_report(
-                FlowReportSaveRequest(payload=stored_response(row)['payload'],question=request['question']))
+            await adapter.stage(self.session,self.principal,frozen)
         except (FlowReportIdConflict,IntegrityError) as error:
             # A legacy/concurrent publisher owns that UUID. Preserve its data and
             # terminally reject this publication: deleting the old report must not

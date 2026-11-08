@@ -127,6 +127,14 @@ CF012_INPUTS = {'ai/src/agents/flow/api/http.py': 'ab949f3dd353e1fa8a496e58f3638
 NEW.update(CF012_INPUTS)
 NEW.update({"backend/tests/unit/test_runner_owned_database.py", "backend/scripts/runner_owned_database.py", "backend/scripts/google_login_workspace.py"})
 OWNED_TESTS = ("tests/unit/test_runner_owned_database.py",)
+CF013_SOURCES = frozenset({
+    "backend/src/modules/analysis/domain/contracts.py", "backend/src/modules/analysis/application/ports.py",
+    "backend/src/modules/flow/application/analysis_adapter.py", "backend/examples/analysis/fundamental_adapter.py",
+    "backend/examples/analysis/fundamental-response.v1.json", "backend/tests/unit/test_cf013_analysis_contracts.py",
+    "backend/scripts/cf013_contract_check.py",
+})
+NEW.update(CF013_SOURCES)
+CF013_TESTS = ("tests/unit/test_cf013_analysis_contracts.py",)
 CF012_TESTS = ("tests/unit/test_cf012_flow_analysis.py", "tests/unit/test_flow_contract.py")
 UNIT += ("tests/unit/test_cf012_flow_analysis.py",)
 CF005_INPUTS = {"ai/src/agents/flow/domain/observation_window.py": "acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27"}
@@ -358,7 +366,7 @@ def selected_sources(repo):
     return sorted(selected | NEW)
 
 
-def execute(repo, modes, *, analysis_only=False, owned_only=False):
+def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False):
     if not sys.flags.isolated or not sys.flags.no_site:
         raise UnsafeCheck("use the documented clean env -i Python -I -S launch")
     if set(os.environ) - {"LANG", "TZ", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}:
@@ -397,7 +405,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False):
             cap = {"root": str(owned.path), "source": str(checkout / "backend"),
                    "site": str(site), "runtime": str(runtime), "mode": mode,
                    "parent_pid": os.getpid(), "lifetime": 90 if mode == "self-test" else 300,
-                   "tests": list(OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only}
+                   "tests": list(CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only}
             capfile = owned.path / "capability.json"
             capfile.write_text(json.dumps(cap))
             worker = checkout / "backend/scripts/safe_checks_bootstrap.py"
@@ -416,16 +424,16 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit"))
+    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit"))
     values = list(sys.argv[1:] if argv is None else argv)
-    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"]]:
+    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"]]:
         parser.error("unsupported mode or extra arguments")
     args = parser.parse_args(values)
     if args.mode == "list":
         print("self-test: synthetic guards only\nunit: fixed six complete files plus audited pure stock/technical files (no DB/external)")
         return 0
     try:
-        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode=="analysis-self" else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit")
+        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"})
     except (UnsafeCheck, OSError, subprocess.SubprocessError) as exc:
         print(f"SAFE_CHECK_BLOCKED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 78

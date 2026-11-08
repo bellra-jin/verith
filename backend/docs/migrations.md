@@ -122,3 +122,10 @@ Compose 내부는 `postgres:5432` 그대로다. 포트 패치는 실제 migratio
 `c6001a7e0001`의 parent는 `c3001a7e0001`이다. 신규 snapshot/제약/trigger를 한 transaction에서 만들고 기존 receipt/auth/report/index/stock을 backfill하지 않는다. 기존 pgcrypto만 사용한다.
 
 downgrade는 flow_runs ACCESS EXCLUSIVE → flow_input_snapshots ACCESS EXCLUSIVE 순서로 잠근 뒤 nonempty면 거부한다. 빈 경우에만 이번 테이블·함수·parent UNIQUE를 제거한다. 직접 DELETE/TRUNCATE나 trigger 해제로 시험을 정리하지 않는다. 실제 owned PG에서 기존 receipt upgrade 보존·빈 왕복·신규 CREATE 직후 rollback·첫 봉인/downgrade 양방향을 확인했으며 [실행 이력](../../docs/work/CF-006-flow-input-snapshot.md)에 실패와 최종 source 차이를 분리했다. 운영 DB 실행 안내나 장기 purge 정책이 아니다.
+
+
+## CF-007 revision
+
+새 `c7001a7e0001`의 parent는 `c6001a7e0001`이다. 새 실행/결과 테이블과 전용 trigger/function만 생성하며 기존 행/backfill·공유 extension 변경은 없다. downgrade 잠금은 flow_runs→flow_input_snapshots→flow_fake_executions 순서다. running/failed/timed_out도 포함한 실행행이 존재하면 고정 거부하고 내용/revision을 보존한다. 실행행이 없으면 기존 입력 snapshot이 있어도 새 객체만 제거한다.
+
+고정 runner의 기존 CF003/006 mode는 caller가 c6001을 선택하고 새 fake mode는 head에서 정확 c7001을 확인한다. CLI 임의 revision은 받지 않는다. 새 DDL 주입은 새 checker의 FLOW_FAKE_EXECUTIONS CREATE 직후 전용 예외이며 기존 checker 훅을 확장하지 않는다. [결과](../../docs/work/CF-007-flow-fake-execution.md)와 [내부 계약](flow_fake_execution.md)을 확인한다.

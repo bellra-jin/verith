@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-009 보호 시험 flag 전달
+
+CF-008 PR #12 병합 `fb29bf322024f93507d45a8e57ee8605414e5b40` 위에서 보호 preload와 fork 환경의 exact demo flag 검증·부모 값 보존을 보완했다. [구현·self-test·미검증 경계](work/CF-009-flow-demo-test-flag.md)를 따른다. 순수 함수/제한 VM·forkPlan 반환값 검증이며 실제 Next worker·HTTP·React/브라우저 전달 성공을 뜻하지 않는다. 기존 build 입력 차단은 그대로이며 아래 CF-008의 flag 삭제 설명은 당시 이력이다.
+
 ## CF-008 현재 합성 웹 기준
 
 CF-007 PR #11 병합 `d5c0a1dea251728598fb45556303d77b0ab2c014` 위에서 default-off 합성 데모의 Backend/BFF/UI를 연결한다. [웹 계약](../backend/docs/flow_synthetic_demo.md)·[source/검증/실행 한계](work/CF-008-flow-synthetic-demo.md)를 따른다. 실키/API/기존 보관함 게시는 포함하지 않으며 Next HTTP·실제 React/브라우저 증거와 helper/source 검사를 구분한다. 기존 build guard 및 demo flag 전달 제약은 미해소다.

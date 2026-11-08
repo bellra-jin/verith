@@ -23,8 +23,8 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / 'frontend'
 PREPARED_PARENT = Path('/tmp').resolve()
-BASE = '8d4b2f8f9ce916eeca77de55adbfb68d3006afce'
-BRANCH = 'test/flow-docker-synthetic-http'
+BASE = '233f674c1fd42d2bb75c995df415c3629ef519cd'
+BRANCH = 'test/flow-docker-http-completion'
 REMOTE = 'https://github.com/bellra-jin/verith.git'
 IMAGE = 'sha256:50e2bfc1d63c54b4925099d98a484ac1bcaa54a93e8efce53706f8a92fecf615'
 DIGEST = 'node@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9'

@@ -2,7 +2,7 @@
 
 ## CF-010 Docker 합성 HTTP 검증 상태
 
-CF-009 PR #13 병합 `8d4b2f8f9ce916eeca77de55adbfb68d3006afce`의 source/Verith lock을 별도 자기 Docker에서 검증한 [고정 runner·실행 기록](work/CF-010-docker-synthetic-demo.md)을 따른다. v1.2 회차의 network-off와 production build·실제 Next 합성 HTTP 두 시험(exit0/tests2/pass2)은 통과했으나, 기본 Node 출력과 TAP 전용 parser의 형식 불일치로 전체 runner는 exit1이다. HTTP 뒤 container source/hash·network 최종 검사는 미실행이며 완료 수용은 보류한다. 자기 CID 제거·부재/label0과 host source101 불변은 확인했다. 이전 namespace 실패는 당시 이력이고 자동 반복은 하지 않았다. 다음 실행용 명령에는 TAP reporter만 명시했으며 실제 재실행은 하지 않았다. Mac guard 정책·실제 Backend/DB·Google/provider·React/브라우저 수용과 구분한다.
+CF-010 PR #14 병합 뒤 최신 develop `233f674c1fd42d2bb75c995df415c3629ef519cd`의 [후속 실제 회차](work/CF-010-docker-synthetic-demo.md)는 **전체 exit0**으로 완료했다. Verith lock 기반 ignore-scripts 설치와 network-off 후 production build·TAP 두 HTTP 시험·사후 container source/hash·사후 network-off·host source 확인·자기 CID 제거/부재/label0이 통과했다. runner의 BASE·BRANCH 고정값 두 개와 실행 manifest·문서2개만 갱신했다. 이전 PR의 exit1/미실행은 당시 이력으로 보존한다. 실제 Backend/DB·Google/provider·React/브라우저와 Mac harness 자체 수용은 별도다.
 
 ## CF-009 보호 시험 flag 전달
 

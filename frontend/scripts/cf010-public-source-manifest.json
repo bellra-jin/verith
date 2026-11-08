@@ -1,9 +1,9 @@
 {
-  "base": "8d4b2f8f9ce916eeca77de55adbfb68d3006afce",
+  "base": "233f674c1fd42d2bb75c995df415c3629ef519cd",
   "derived": [
     {
       "role": "ownership",
-      "sha256": "410ae9cf16096bcca4cb1c3ed660ecc10f89b44a27f011fb4bc84fbab9f8ff3d",
+      "sha256": "7cb763cd446e657b6b0e8b3ecbbc4834f0092e0692abdc713ce3561abd2e67ea",
       "size": 161,
       "target": ".cf010-owner.json"
     },
@@ -728,7 +728,7 @@
   "package_sha256": "5dcc4949fad70a41d4c4fe5639f63931fcaf99accd3019a53052c00a4e697ef5",
   "platform": "linux/arm64",
   "repo_digest": "node@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9",
-  "runner_sha256": "4f3a421ccfe54a4120902df2f02fdfa57bd8af5e1f81bd9407b446a31e7c8db2",
+  "runner_sha256": "9652e5a66d4144a08d4ee9f536fb58a73ef1fab6eba067323b505886aa45067d",
   "schema": 1,
   "suite": [
     "docker-tests/integration/bff/ports-http.test.mjs",

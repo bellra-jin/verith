@@ -1,6 +1,6 @@
 # CF-010 · Docker Flow 합성 HTTP 검증
 
-**현재 CF-010 v1.2 회차에서 production build와 실제 Next 합성 HTTP 두 시험은 exit0으로 통과했다. 전체 runner는 출력 형식 불일치로 exit1이며 완료 수용은 보류한다.** Node 기본 요약의 tests2/pass2/fail0을 기존 TAP 전용 parser가 거부했다. network-off와 source 전달 전 hash는 통과했고 자기 CID는 제거·부재/owner label0을 확인했다. HTTP 뒤 container source/hash·network 최종 검사는 이 parser 실패로 미실행이다. 자동 재실행·추가 설치 없이 아래 실제 결과를 보존한다. 이전 namespace 실패는 당시 이력이다.
+**현재 PR #14 병합 후 완료 회차는 전체 exit0이다.** production build·TAP2/2·사후 container source/hash·사후 network-off·host source 확인과 자기 CID 제거/부재를 모두 완료했다. 이전 PR #14의 exit1·미실행 항목은 당시 이력으로 보존하고 아래 후속 결과와 구분한다. 실제 Backend/DB/provider·React/브라우저·Mac harness 자체 수용은 포함하지 않는다.
 
 ## 기준·정확한 범위
 
@@ -227,3 +227,46 @@ gh pr create --repo bellra-jin/verith --base develop --head test/flow-docker-syn
 
 정확6파일·source/hash·명령·각 phase/cleanup 및 미검증 범위는 docs/work/CF-010-docker-synthetic-demo.md에 기록했다.
 <!-- CF010_PR_BODY_END -->
+
+
+## PR #14 이후 남은 항목 완료 — 2026-11-08 KST
+
+최신 origin/develop과 clean develop `233f674c1fd42d2bb75c995df415c3629ef519cd`를 fetch/ff-only로 확인했다. PR #14 merge의 부모는 `8d4b2f8f9ce916eeca77de55adbfb68d3006afce`와 `0f056106e460b94aad3f4bbbcb11c02fb04b2d77`이며 기존 동결6파일 hash가 모두 같았다. 새 `test/flow-docker-http-completion`에서 runner의 BASE·BRANCH 두 고정값만 변경했다. 역치환하면 병합본 runner bytes와 일치한다. 이미지/lock/source·설정·보호/소유/정리 predicate·이미 병합된 TAP 명령은 불변이다. prepare로 실행 manifest를 갱신했으며 실제 변경은 runner/manifest/현재 문서2개, 총4개다.
+
+한 회만 실행한 prepared는 `/private/tmp/cf010-prepared-_ukaqrka`, runner SHA `9652e5a66d4144a08d4ee9f536fb58a73ef1fab6eba067323b505886aa45067d`, manifest `a04db014e4e8a00f78c0ebe0ea762b27b187bdbdbc9a9f6f93f8a7a90cbd7de9`, plan `b79c0e1422e44417aba77bfcf2cd41e0333fcd478ac58b0cd9961680a2d4db7b`다. launcher는 기존 clean env의 `/usr/bin/python3 -I -S -B frontend/scripts/check-docker-synthetic-demo.py run --prepared /private/tmp/cf010-prepared-_ukaqrka`이며 **session4917 최종 chunk b94e48·프로세스 exit0**이다.
+
+| 실제 단계 | 결과 (KST) |
+|---|---|
+| image·설치 | 기존 고정 공식 image/digest Linux arm64·Node24.22.2/npm11.19.1. Verith lock407개 ignore-scripts 설치, 21:42:04.623269→21:42:11.833331,7.209초·exit0. package/lock hash 유지 |
+| network-off | 설치 후 Docker 연결0·외부 IPv4/6 route0, lo 활성/loopback-only·허용 template9 DOWN/API가 보고한 사용 가능 주소0. source 전송 전·HTTP 전·후 모두 exit0. 실제 주소/MAC 출력 없음 |
+| production build | 21:42:12.259351→21:42:27.073885,14.814초·exit0. Next16.2.10 compile/generated types/static11/11/traces 통과 |
+| HTTP·집계 | 21:42:27.158722→21:42:28.390960,1.232초·exit0. 실제 TAP tests2/pass2/fail0/cancelled0/skipped0/todo0·엄격한 집계 통과 |
+| 사후 확인 | 21:42:28.472213 source_after exit0: container source101+derived2 전후 hash 일치. 21:42:28.570598 network_after exit0. host source/artifacts/runner 대조 뒤21:42:28.743471 verification_passed |
+| 정리 | 정확 CID `7ae71a7bc4b2b4baef49bc2a91cf70dcaafcdcebedaab235d259671c5cc0bbd8`, owner `cf010-b0ab6ba20ca055e7b95b6f0a`, Created `2026-11-08T12:42:03.859947375Z`. finally21:42:28.910986 rm_exit0·명시적 absence=true·owner label0 |
+
+기록은 해당 prepared에 보존했다. events SHA `a2daf5f4ea290ba7144302ca69f6004539756849318654e02c5f1828a1d01fb9`, HTTP `edfbb9b8e080a4e139fea9b3b6f0be36d65c6bf3c8b285cbe5f9a8772b445d3a`, build `f23d6eed3b82897f2e37693ba75b9d6eea1cafd70d95bd4cef938a60c6d7efa9`, source_after `d27709e230b6e04d3d95dbfd09fbeadcbfa602f89cfc5e26f0f960119209178c`, network_after `79bcbae6ec3c7bbf6569e1c33f8088640a4e0cd0f91b7710dfca2b912ca6f387`다. 독립 검토자는 기록/hash를 읽기 대조했으며 runtime 재실행이 아니다. 이 새 성공은 이전 실패를 소급 변경하지 않는다. 실제 사용자 인증/Backend/DB·외부 provider·React 이벤트/브라우저와 Mac harness는 여전히 별도 미검증이다. 자기 container만 제거했고 cached image/Docker 앱은 유지했다.
+
+사용자 직접 Git 인계 checkpoint는 `/private/tmp/cf010-completion-jsk4p9v4`다. 아래 명령은 준비만 했으며 실행하지 않았다. 현재 exact4/hash와 staged 상태가 바뀌면 먼저 검토한다.
+
+```sh
+cd /Users/parkjinhee/AI/verith_refactor/verith
+cf010_checkpoint=/private/tmp/cf010-completion-jsk4p9v4
+python3 "$cf010_checkpoint/reviewguard.py"
+git diff --check
+git diff
+git add --pathspec-from-file="$cf010_checkpoint/stage-pathspec.nul" --pathspec-file-nul
+python3 "$cf010_checkpoint/reviewguard.py" --staged
+git diff --cached --check
+git diff --cached
+git commit -m "test(flow): complete Docker HTTP post-run verification"
+git push -u origin test/flow-docker-http-completion
+gh pr create --repo bellra-jin/verith --base develop --head test/flow-docker-http-completion --draft --title "test(flow): complete Docker HTTP post-run verification" --body-file "$cf010_checkpoint/review-pr-body.md"
+```
+
+<!-- CF010_COMPLETION_PR_BODY_START -->
+CF-010 PR #14에서 남긴 TAP 집계와 사후 container 검증을 실제 한 회로 완료했다. runner는 병합된 최신 develop/전용 test branch에 맞춰 BASE·BRANCH 고정값 두 개만 바꾸고 실행 manifest와 기록을 갱신했다. 제품 코드·lock·설정·보호 조건은 그대로다.
+
+실행 프로세스 exit0. 고정 Verith lock407개 ignore-scripts 설치 뒤 network-off에서 production build(compile/generated types/static11/11/traces)·실제 Next+fake HTTP TAP2/2가 통과했다. 사후 container source101+derived2 hash·사후 network-off·host source 확인과 정확 CID 제거/부재/label0도 완료했다. 이전 실패 이력은 보존했다.
+
+실제 Backend/session/owner/DB·외부 provider·React 이벤트/브라우저와 Mac harness 자체 수용은 포함하지 않는다. 상세 source/로그 hash와 정리는 docs/work/CF-010-docker-synthetic-demo.md의 PR #14 후속 절에 있다.
+<!-- CF010_COMPLETION_PR_BODY_END -->

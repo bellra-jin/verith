@@ -58,6 +58,18 @@ class EntryBoundary(unittest.TestCase):
         modules["agents.flow.infrastructure.token_cache"].__spec__.origin = str(ai / "agents/flow/infrastructure/adjacent.py")
         self.assertFalse(valid_flow_origins(source, modules))
 
+    def test_cf008_exact_copy_unit_and_default_off_gate(self):
+        from scripts import check_safe as controller
+        expected={"backend/src/modules/flow/api/synthetic_demo_schemas.py","backend/src/modules/flow/api/synthetic_demo_router.py","backend/src/modules/flow/application/synthetic_demo_service.py","backend/tests/unit/test_cf008_flow_synthetic_demo.py","backend/scripts/cf008_synthetic_demo_check.py"}
+        self.assertEqual(controller.CF008_SOURCES,expected)
+        self.assertEqual(controller.UNIT.count("tests/unit/test_cf008_flow_synthetic_demo.py"),1)
+        for name in expected:
+            self.assertTrue(controller.source_allowed(name));self.assertFalse(controller.source_allowed(name+'.adjacent'))
+        root=Path(__file__).resolve().parents[2]
+        self.assertIn('FLOW_SYNTHETIC_DEMO_ENABLED: bool = False',(root/'src/shared/config.py').read_text())
+        source=(root/'scripts/cf002_interactive_login.py').read_text()
+        self.assertLess(source.index('verify_synthetic_demo(proof)'),source.index('project = prepare_projects'))
+
     def test_cf007_exact_sources_selection_and_fixed_revision_modes(self):
         from scripts import check_safe as controller
         expected = {

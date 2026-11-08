@@ -57,6 +57,42 @@ def public_contract_capture(monkeypatch):
     return {"openapi": main.app.openapi(), "schemas": schemas, "payload": make_flow_payload()}
 
 
+def project_cf008_exact_additions(api):
+    """Independently inspect the three exact new components, never prefix-filter."""
+    from src.modules.flow.api.synthetic_demo_schemas import DemoRequest, DemoRunView, DemoResponse, DEMO_PATH
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.openapi.models import Schema
+    components=api['components']['schemas']
+    names={'DemoRequest','DemoRunView','CommonResponse_DemoRunView_'}
+    request=components['DemoRequest'];view=components['DemoRunView']
+    assert request['additionalProperties'] is False
+    assert set(request['properties'])==set(request['required'])=={'idempotency_key','as_of','allow_fake'}
+    assert request['properties']['as_of']['format']=='date-time'
+    assert request['properties']['idempotency_key']['type']=='string'
+    assert request['properties']['allow_fake']['type']=='boolean' and request['properties']['allow_fake']['const'] is True
+    fields={'version','synthetic','mode','run_id','request_id','attempt_id','input_snapshot_id','execution_id','stage','deadline_at','finished_at','result_stored','result','result_sha256','failure_code'}
+    assert set(view['properties'])==fields and view['additionalProperties'] is False
+    assert view['properties']['version']['const']==1 and view['properties']['synthetic']['const'] is True
+    assert view['properties']['mode']['const']=='synthetic_demo'
+    assert view['properties']['stage']['enum']==['admitted','prepared','running','succeeded','failed','timed_out']
+    assert view['properties']['result_stored']['type']=='boolean'
+    for field in ('run_id','request_id','attempt_id'):assert view['properties'][field]['format']=='uuid'
+    for path,method in ((DEMO_PATH,'post'),(DEMO_PATH+'/{run_id}','get')):
+        operation=api['paths'][path];assert set(operation)=={method}
+        assert operation[method]['responses']['200']['content']['application/json']['schema']=={'$ref':'#/components/schemas/CommonResponse_DemoRunView_'}
+    assert api['paths'][DEMO_PATH]['post']['responses']['202']['content']['application/json']['schema']=={'$ref':'#/components/schemas/CommonResponse_DemoRunView_'}
+    assert api['paths'][DEMO_PATH]['post']['requestBody']['content']['application/json']['schema']=={'$ref':'#/components/schemas/DemoRequest'}
+    assert api['paths'][DEMO_PATH+'/{run_id}']['get']['parameters']==[{'name':'run_id','in':'path','required':True,'schema':{'type':'string','format':'uuid','title':'Run Id'}}]
+    expected={}
+    for model in (DemoRequest,DemoRunView,DemoResponse):
+        schema=model.model_json_schema(ref_template='#/components/schemas/{model}',mode='validation' if model is DemoRequest else 'serialization')
+        expected.update(schema.pop('$defs',{}));expected[{DemoRequest:'DemoRequest',DemoRunView:'DemoRunView',DemoResponse:'CommonResponse_DemoRunView_'}[model]]=schema
+    for name in names:
+        assert components[name]==jsonable_encoder(Schema.model_validate(expected[name]),by_alias=True,exclude_none=True),name
+    for name in names:del components[name]
+    del api['paths'][DEMO_PATH];del api['paths'][DEMO_PATH+'/{run_id}']
+
+
 def assert_public_contract_compatibility(values):
     """Validate exact additions first, then remove only reviewed JSON pointers from a copy."""
     import hashlib
@@ -66,6 +102,11 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf008_exact_additions(api)
+    from src.modules.flow.api.synthetic_demo_schemas import DemoResponse
+    if 'CommonResponse[DemoRunView]' in projected['schemas']:
+        assert projected['schemas']['CommonResponse[DemoRunView]']==DemoResponse.model_json_schema()
+        del projected['schemas']['CommonResponse[DemoRunView]']
     components = api["components"]["schemas"]
     assert list(ErrorCode) == [ErrorCode(value) for value in LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS]
     assert components["ErrorCode"]["enum"] == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS
@@ -123,7 +164,7 @@ def test_relocation_public_contract_baseline(monkeypatch):
     assert_public_contract_compatibility(public_contract_capture(monkeypatch))
 
 
-@pytest.mark.parametrize("change", ["path", "component", "legacy_field", "fourth_enum", "request_field", "legacy_method", "legacy_response", "legacy_enum"])
+@pytest.mark.parametrize("change", ["path", "component", "legacy_field", "fourth_enum", "request_field", "legacy_method", "legacy_response", "legacy_enum", "demo_method", "demo_stage", "demo_extra"])
 def test_cf003_snapshot_projection_rejects_unapproved_changes(monkeypatch, change):
     values = copy.deepcopy(public_contract_capture(monkeypatch))
     if change == "path":
@@ -140,6 +181,12 @@ def test_cf003_snapshot_projection_rejects_unapproved_changes(monkeypatch, chang
         values["openapi"]["paths"]["/health"]["get"]["responses"]["200"]["description"] = "unexpected mutation"
     elif change == "legacy_enum":
         values["schemas"]["SafeError"]["$defs"]["ErrorCode"]["enum"].append("UNAPPROVED")
+    elif change == "demo_method":
+        values['openapi']['paths']['/api/flow/synthetic-demo/runs']['delete']={}
+    elif change == "demo_stage":
+        values['openapi']['components']['schemas']['DemoRunView']['properties']['stage']['enum'].append('unapproved')
+    elif change == "demo_extra":
+        values['openapi']['components']['schemas']['DemoUnapproved']={'type':'string'}
     else:
         values["openapi"]["components"]["schemas"]["FlowAdmissionRequest"]["properties"]["owner"] = {"type": "string"}
     with pytest.raises(AssertionError):

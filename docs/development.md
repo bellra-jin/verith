@@ -1,3 +1,9 @@
+## CF-008 합성 데모 웹
+
+별도 `/flow/demo`의 합성 요청/저장 결과 조회다. [계약](../backend/docs/flow_synthetic_demo.md)·[작업 기록](work/CF-008-flow-synthetic-demo.md)을 따른다. Backend/Frontend 서버 demo gate는 기본 닫힘이며, 실제 설정/키/외부 API·보관함 게시는 바꾸지 않는다. 기존 admission 공개 gate와 독립이다.
+
+새 고정 PG mode는 `--verify-flow-synthetic-demo-db`이고 기존 own-resource/attestation/자기 HOME/최종 정리를 전제로 한다. Backend/FE 보호 unit·type/lint와 실제 PG/ASGI, Next HTTP, 브라우저를 나누어 보고한다. 기존 Mac build 차단과 demo flag가 preload whitelist에서 제거되는 제약 때문에 현재 helper의 gate-on HTTP는 실행 준비 완료가 아니다. guard를 넓히거나 원본 앱·새 설치·일반 runner로 우회하지 않는다. 아래 이전 검사는 각 당시 이력이다.
+
 ## CF-007 내부 fake 실행/저장
 
 [내부 계약](../backend/docs/flow_fake_execution.md)·[작업 기록](work/CF-007-flow-fake-execution.md)을 따른다. 봉인 합성 입력에 strict opt-in한 실제 owner의 fake 일회 실행/내부 결과 저장·재조회만 연결한다. 공개 route/BFF/UI/기존 보관함·실제 KIS/AI는 포함하지 않는다. receipt의 pending은 계속 receipt_only다.

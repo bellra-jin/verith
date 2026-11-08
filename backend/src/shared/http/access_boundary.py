@@ -36,6 +36,65 @@ class AccessBoundary:
             PRIVATE, error_response, http_request_id, is_run_endpoint,
         )
 
+        from src.modules.flow.api.synthetic_demo_schemas import is_demo_endpoint
+        if is_demo_endpoint(method, path):
+            from src.shared.config import settings
+            from src.modules.auth.api.router import configured
+            from src.modules.flow.api.synthetic_demo_schemas import request_id, error_response as demo_error, parse_raw, json_media
+            from src.modules.flow.domain.execution import ErrorCode
+            request_id(scope)
+            if not settings.FLOW_SYNTHETIC_DEMO_ENABLED:
+                await demo_error(scope,ErrorCode.FEATURE_UNAVAILABLE)(scope,receive,send)
+                return
+            if not configured():
+                await demo_error(scope,ErrorCode.AUTH_REQUIRED)(scope,receive,send)
+                return
+            if scope.get('query_string'):
+                await demo_error(scope,ErrorCode.INPUT_INVALID)(scope,receive,send)
+                return
+            if method=='GET':
+                try:
+                    from uuid import UUID
+                    segment=path.rsplit('/',1)[1]
+                    if str(UUID(segment))!=segment.lower():raise ValueError('Invalid UUID')
+                except ValueError:
+                    await demo_error(scope,ErrorCode.INPUT_INVALID)(scope,receive,send)
+                    return
+            next_receive=receive
+            if method=='POST':
+                try:
+                    from starlette.datastructures import Headers
+                    headers=Headers(scope=scope)
+                    if not json_media(headers) or len(headers.getlist('content-type'))!=1 or len(headers.getlist('content-encoding'))>1 or len(headers.getlist('content-length'))>1:
+                        raise ValueError('Invalid media')
+                    length=headers.get('content-length')
+                    if length is not None and (not length.isascii() or not length.isdigit() or int(length)>4096):raise ValueError('Invalid length')
+                    raw=bytearray()
+                    while True:
+                        message=await receive()
+                        if message['type']!='http.request':raise ValueError('Body disconnected')
+                        raw.extend(message.get('body',b''))
+                        if len(raw)>4096:raise ValueError('Body too large')
+                        if not message.get('more_body',False):break
+                    parse_raw(bytes(raw))
+                    consumed=False
+                    async def body_receive():
+                        nonlocal consumed
+                        if not consumed:
+                            consumed=True
+                            return {'type':'http.request','body':bytes(raw),'more_body':False}
+                        return await receive()
+                    next_receive=body_receive
+                except Exception:
+                    await demo_error(scope,ErrorCode.INPUT_INVALID)(scope,receive,send)
+                    return
+            async def demo_send(message):
+                if message['type']=='http.response.start':
+                    headers=[(k,v) for k,v in message.get('headers',[]) if k.lower() not in {b'cache-control',b'vary'}]
+                    message={**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
+                await send(message)
+            await self.app(scope,next_receive,demo_send)
+            return
         if is_run_endpoint(method, path):
             from src.shared.config import settings
             from src.modules.auth.api.router import configured

@@ -9,6 +9,11 @@ import {createRequire} from 'node:module';
 import {independentCleanup,expiryCleanup} from '../helpers/safe-http.mjs';
 import {readSource,sourceAllowed} from '../../scripts/check-local-ports.mjs';
 const require=createRequire(import.meta.url);
+test('CF008 exact fresh inputs preserve private route exception and adjacent denial',()=>{
+ for(const file of ['src/shared/server/flow-demo-config.ts','src/app/flow/demo/page.tsx','src/features/flow/components/synthetic-demo.tsx','src/features/flow/lib/synthetic-demo.ts','tests/unit/flow/synthetic-demo.test.mjs','tests/integration/bff/synthetic-demo-http.test.mjs']){assert.equal(sourceAllowed(file),true);assert.ok(readSource(process.cwd(),file).length>0);}
+ assert.equal(sourceAllowed('src/app/api/private/adjacent/route.ts'),false);
+ const source=fs.readFileSync(path.join(process.cwd(),'scripts/check-local-ports.mjs'),'utf8');assert.match(source,/unit\/flow\/synthetic-demo\.test\.mjs/);assert.match(source,/integration\/bff\/synthetic-demo-http\.test\.mjs/);
+});
 test('CF005 exact helper, fixture and unit are copied without adjacent JSON grants',()=>{
  for(const name of ['src/features/flow/lib/observation-window.ts','tests/fixtures/cf005-observation-cases.json','tests/unit/flow/observation.test.mjs']){
   assert.equal(sourceAllowed(name),true);

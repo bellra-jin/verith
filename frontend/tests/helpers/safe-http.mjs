@@ -62,7 +62,8 @@ export async function pollOwnedReady({alive,owns,proof,receipt,now=Date.now,slee
  }
  throw Error('owned Next readiness timeout');
 }
-export async function ownedHTTP(handler,{canonical=false}={}){
+export async function ownedHTTP(handler,{canonical=false,demo=false}={}){
+ if(typeof demo!=='boolean')throw Error('fixed demo flag must be boolean');
  const filename=process.env.ST001_SAFE_CAP;
  if(!filename)throw Error('HTTP checks require the owned controller capability');
  const cap=JSON.parse(fs.readFileSync(filename,'utf8')),root=fs.realpathSync(process.cwd());
@@ -95,7 +96,7 @@ export async function ownedHTTP(handler,{canonical=false}={}){
   if(await health.text()!==cap.nonce)throw Error('backend nonce mismatch');
   // Explicit env allowlist: no spreading caller configuration into Next.
   const env={LANG:'en_US.UTF-8',TZ:'UTC',HOME:root,TMPDIR:root,PATH:'/usr/bin:/bin',NEXT_TELEMETRY_DISABLED:'1',NO_UPDATE_NOTIFIER:'1',OPENSSL_CONF:'/dev/null',
-   NODE_OPTIONS:process.env.NODE_OPTIONS,ST001_SAFE_CAP:filename,NODE_ENV:'production',BACKEND_URL:backendUrl,NEXT_PUBLIC_API_URL:backendUrl,AI_SUPERVISOR_URL:backendUrl};
+   NODE_OPTIONS:process.env.NODE_OPTIONS,ST001_SAFE_CAP:filename,NODE_ENV:'production',BACKEND_URL:backendUrl,NEXT_PUBLIC_API_URL:backendUrl,AI_SUPERVISOR_URL:backendUrl,FLOW_SYNTHETIC_DEMO_ENABLED:demo?'true':'false'};
   child=spawn(process.execPath,[path.join(root,'node_modules/next/dist/bin/next'),'start','--hostname',host,'--port',String(port)],{cwd:root,detached:false,stdio:['ignore','pipe','pipe'],env});
   let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',data=>{output=(output+data).slice(-4000);});
   let spawnError;child.once('error',error=>{spawnError=error;});

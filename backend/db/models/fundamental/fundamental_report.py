@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -17,6 +17,7 @@ class FundamentalReport(Base):
     __tablename__ = "fundamental_reports"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey('auth_users.id', ondelete='RESTRICT'), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String, nullable=True)
     stock_code: Mapped[str | None] = mapped_column(
         String, ForeignKey("stocks.stock_code"), nullable=True
@@ -47,6 +48,7 @@ class FundamentalReport(Base):
     meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
+        Index("ix_fundamental_reports_owner_id", "owner_user_id", "id"),
         Index("ix_fundamental_reports_request_id", "request_id"),
         Index("ix_fundamental_reports_stock_code_as_of", "stock_code", text("as_of DESC")),
         Index("ix_fundamental_reports_trace_id", "trace_id"),

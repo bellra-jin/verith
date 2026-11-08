@@ -1,3 +1,4 @@
+import { fundamentalAnalysisEnabled } from './fundamental-analysis-config';
 import "server-only";
 import { sessionBackendUrl } from './session-backend';
 import { flowDemoEnabled } from './flow-demo-config';
@@ -29,11 +30,14 @@ async function boundedRead(reader:ReadableStreamDefaultReader<Uint8Array>,signal
 
 export async function sessionProxy(request: Request, path: string, query = '') {
   const demo=path===demoPath || path.startsWith(demoPath+'/');
-  const analysis=path===analysisPath || path.startsWith(analysisPath+'/');
+  const fundamental=path==='/api/fundamental/analyses'||path.startsWith('/api/fundamental/analyses/')||path==='/api/fundamental/reports'||path.startsWith('/api/fundamental/reports/');
+  const fundamentalReports=fundamental&&path.startsWith('/api/fundamental/reports');
+  const currentAnalysisPath=fundamental?'/api/fundamental/analyses':analysisPath;
+  const analysis=fundamental || path===analysisPath || path.startsWith(analysisPath+'/');
   const guarded=demo||analysis;
   const reject=analysis?analysisProxyError:demoProxyError;
-  if(analysis&&!flowAnalysisEnabled())return reject('FEATURE_UNAVAILABLE',403);
-  const analysisSignal=analysis?AbortSignal.timeout(130000):undefined;
+  if(analysis&&!(fundamental?fundamentalAnalysisEnabled():flowAnalysisEnabled()))return reject('FEATURE_UNAVAILABLE',403);
+  const analysisSignal=analysis?AbortSignal.timeout(fundamental?70000:130000):undefined;
   if(demo && !flowDemoEnabled())return demoProxyError('FEATURE_UNAVAILABLE',403);
   const base = sessionBackendUrl();
   const headers = new Headers({'Cache-Control': 'private, no-store', Vary: 'Cookie, Origin'});
@@ -55,8 +59,16 @@ export async function sessionProxy(request: Request, path: string, query = '') {
   }
   let body: ArrayBuffer | undefined;
   if(guarded) {
-    const detail=(analysis?/^\/api\/flow\/analyses\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/:/^\/api\/flow\/synthetic-demo\/runs\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/).test(path);
-    if(query || new URL(request.url).search || !(request.method==='POST' && path===(analysis?analysisPath:demoPath) || request.method==='GET' && detail))return reject('INPUT_INVALID',422);
+    const idPattern='[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}';
+    const root=fundamentalReports?'/api/fundamental/reports':analysis?currentAnalysisPath:demoPath;
+    const detail=new RegExp('^'+root+'/'+idPattern+'$').test(path);
+    if(fundamentalReports){
+      const params=new URLSearchParams(query.startsWith('?')?query.slice(1):query);
+      if(!(request.method==='GET'&&(path===root||detail)||request.method==='DELETE'&&detail))return reject('INPUT_INVALID',422);
+      if(detail&&(query||new URL(request.url).search))return reject('INPUT_INVALID',422);
+      if([...params.keys()].some(k=>!['stock_code','limit','offset'].includes(k)||params.getAll(k).length!==1))return reject('INPUT_INVALID',422);
+      for(const [key,value] of params){if(!/^[0-9]+$/.test(value)||key==='stock_code'&&!/^[0-9]{6}$/.test(value)||key==='limit'&&(!Number.isSafeInteger(Number(value))||Number(value)<1||Number(value)>100)||key==='offset'&&!Number.isSafeInteger(Number(value)))return reject('INPUT_INVALID',422);}
+    }else if(query || new URL(request.url).search || !(request.method==='POST' && path===root || request.method==='GET' && detail))return reject('INPUT_INVALID',422);
     if(request.method==='POST') {
       const content=request.headers.get('content-type') ?? '';
       const length=request.headers.get('content-length');
@@ -87,10 +99,10 @@ export async function sessionProxy(request: Request, path: string, query = '') {
     }
     if(analysis){
       const reader=upstream.body?.getReader();const chunks:Uint8Array[]=[];let size=0;
-      try{if(reader)while(true){const next=await boundedRead(reader,analysisSignal);if(next.done)break;size+=next.value.byteLength;if(size>32768){await reader.cancel();return reject('RESULT_CONTRACT_INVALID',502);}chunks.push(next.value);}}
+      try{if(reader)while(true){const next=await boundedRead(reader,analysisSignal);if(next.done)break;size+=next.value.byteLength;if(size>(fundamentalReports?2097152:32768)){await reader.cancel();return reject('RESULT_CONTRACT_INVALID',502);}chunks.push(next.value);}}
       finally{try{reader?.releaseLock();}catch{ /* cancelled read */ }}
       const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
-      return new Response(bytes,{status:upstream.status,headers});
+      return new Response(upstream.status===204?null:bytes,{status:upstream.status,headers});
     }
     return new Response(upstream.status===204 ? null : upstream.body,{status:upstream.status,headers});
   } catch {

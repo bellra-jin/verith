@@ -306,3 +306,7 @@ DB clock 기준10초 deadline·finite시각·상태별 결과/hash/error/finishe
 ## CF-012 Flow 분석 원장
 
 `flow_analysis_runs`는 receipt/synthetic/fake와 별도인 인증 분석 원장이다. owner/operation/key digest, attempt 및 채택 report ID가 유일하며 claim·시간·상태별 snapshot/null 관계를 DB 제약으로 검사한다. running→result_ready→stored→deleted와 failed/unknown terminal을 구분한다. result_ready의 canonical input/result 및 SHA를 먼저 commit하고 root/자식/index 게시와 stored 전이는 원자 처리한다. deleted는 요청·이름·입력·결과 본문을 비우고 최소 식별/hash만 보존한다. [공유 계약](../../docs/contracts/flow-analysis-v1.md).
+
+## CF-015 · owned Fundamental analysis
+
+`fundamental_analysis_runs` stores one immutable grant/request-context/result snapshot per owner/key. Unique attempt/report references and fenced state transitions prevent reuse after deletion. `fundamental_reports.owner_user_id` is nullable for legacy only. Owned readers require root + exactly one same-owner index + stored ledger; NULL legacy stays private.

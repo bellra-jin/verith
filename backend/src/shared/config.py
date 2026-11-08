@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     ENABLE_NEWS_GRAPH: bool = False
     FLOW_RUN_ADMISSION_ENABLED: bool = False
     FLOW_SYNTHETIC_DEMO_ENABLED: bool = False
+    FUNDAMENTAL_ANALYSIS_ENABLED: bool = False
+    FUNDAMENTAL_SERVICE_TOKEN: str = ""
     FLOW_ANALYSIS_ENABLED: bool = False
     FLOW_SERVICE_TOKEN: str = Field(default="", repr=False)
     GOOGLE_CLIENT_ID: str = ""

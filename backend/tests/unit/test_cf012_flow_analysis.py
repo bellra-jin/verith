@@ -145,6 +145,7 @@ async def test_confirmed_collision_stays_terminal_after_winner_deleted(monkeypat
     value.owner_user_id=uuid4();value.operation=domain.OPERATION
     session=SimpleNamespace(rollback=AsyncMock(),scalar=AsyncMock(return_value=None),commit=AsyncMock())
     instance=AnalysisService(session,principal=SimpleNamespace(user_id=value.owner_user_id),client=None);instance._locked=AsyncMock(return_value=value)
+    assert instance.profile.repository is service.repository and instance.profile.snapshot_conflicts==()
     monkeypatch.setattr(service.FlowAnalysisAdapter,'stage',AsyncMock(side_effect=FlowReportIdConflict('safe fixed conflict')))
     monkeypatch.setattr(service.report_repository,'get_agent_indexes',AsyncMock(return_value=[]))
     with pytest.raises(AnalysisError) as caught:await instance._publish(value)
@@ -160,6 +161,7 @@ async def test_other_integrity_failure_is_not_confirmed_report_collision(monkeyp
     value.owner_user_id=uuid4();value.operation=domain.OPERATION
     session=SimpleNamespace(rollback=AsyncMock(),scalar=AsyncMock(return_value=None),commit=AsyncMock())
     instance=AnalysisService(session,principal=SimpleNamespace(user_id=value.owner_user_id),client=None);instance._locked=AsyncMock(return_value=value)
+    assert instance.profile.repository is service.repository and instance.profile.snapshot_conflicts==()
     monkeypatch.setattr(service.FlowAnalysisAdapter,'stage',AsyncMock(side_effect=IntegrityError(None,None,ValueError('fixed synthetic'))))
     monkeypatch.setattr(service.report_repository,'get_agent_indexes',AsyncMock(return_value=[]))
     with pytest.raises(AnalysisError) as caught:await instance._publish(value)

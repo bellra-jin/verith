@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import delete
+from sqlalchemy import delete,select,func,literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.common.agent_report import AgentReport
@@ -149,317 +149,268 @@ _SNIPPET_FIELDS = (
 )
 
 
+from src.modules.auth.application.session_service import Principal, AuthenticationRequired, validate_principal
+from src.modules.analysis.domain.contracts import AnalysisContractError
+from src.modules.fundamental.domain.analysis import stored_response,validate_response,decode
+from db.models.fundamental.analysis_run import FundamentalAnalysisRun
+
+class FundamentalStoredPayloadError(ValueError):
+    pass
+
+class FundamentalReportIdConflict(FundamentalStoredPayloadError):
+    pass
+
+
+def _projection(raw,principal,question,stock_name,now):
+    """Same projection for write/read comparison; original JSON stays in the ledger."""
+    ticker=raw['ticker'];erd_payload=raw['meta']['erd_payload'];root=erd_payload['fundamental_report']
+    report_id=_uuid(root['id']);report_as_of=_parse_dt(root.get('as_of'))
+    request_id=raw['request_id'];trace_id=raw['meta']['trace_id']
+    report = FundamentalReport(
+        id=report_id,
+        owner_user_id=principal.user_id,
+        request_id=root.get("request_id"),
+        stock_code=root.get("stock_code"),
+        corp_code=root.get("corp_code"),
+        bsns_year=root.get("bsns_year"),
+        years=root.get("years"),
+        fs_div=root.get("fs_div"),
+        report_mode=root.get("report_mode"),
+        reprt_code=root.get("reprt_code"),
+        reprt_name=root.get("reprt_name"),
+        period_label=root.get("period_label"),
+        verdict_label=root.get("verdict_label"),
+        verdict=root.get("verdict"),
+        fin_score=root.get("fin_score"),
+        confidence=root.get("confidence"),
+        data_status=root.get("data_status"),
+        risk_flags=root.get("risk_flags"),
+        score_breakdown=root.get("score_breakdown"),
+        report_html=root.get("report_html"),
+        llm_provider=root.get("llm_provider"),
+        llm_model=root.get("llm_model"),
+        llm_latency_ms=root.get("llm_latency_ms"),
+        dart_calls=root.get("dart_calls"),
+        trace_id=root.get("trace_id"),
+        as_of=report_as_of,
+        created_at=now,
+        meta=root.get("meta"),
+    )
+    ratios = [
+        ReportRatio(
+            id=_uuid(item["id"]),
+            report_id=_uuid(item["report_id"]),
+            ratio_name=item.get("ratio_name"),
+            label=item.get("label"),
+            category=item.get("category"),
+            fiscal_year=item.get("fiscal_year"),
+            fiscal_period=item.get("fiscal_period"),
+            value=_decimal(item.get("value")),
+            unit=item.get("unit"),
+            display_value=item.get("display_value"),
+            status=item.get("status"),
+            reason=item.get("reason"),
+            formula=item.get("formula"),
+            basis=item.get("basis"),
+        )
+        for item in erd_payload.get("report_ratios",[])
+    ]
+    evidence = [
+        ReportEvidence(
+            id=_uuid(item["id"]),
+            report_id=_uuid(item["report_id"]),
+            ratio_id=_uuid(item["ratio_id"]) if item.get("ratio_id") else None,
+            metric=item.get("metric"),
+            claim=item.get("claim"),
+            rcept_no=item.get("rcept_no"),
+            bsns_year=item.get("bsns_year"),
+            fiscal_period=item.get("fiscal_period"),
+            sj_div=item.get("sj_div"),
+            account_id=item.get("account_id"),
+            account_nm=item.get("account_nm"),
+            amount=_decimal(item.get("amount")),
+            unit=item.get("unit"),
+            display_value=item.get("display_value"),
+            source_url=item.get("source_url"),
+            role=item.get("role"),
+            raw=item.get("raw"),
+        )
+        for item in erd_payload.get("report_evidence",[])
+    ]
+    interp_payload = erd_payload["report_interpretation"]
+    interpretation = FundamentalReportInterpretation(
+        id=_uuid(interp_payload["id"]),
+        report_id=_uuid(interp_payload["report_id"]),
+        interpretation=interp_payload.get("interpretation"),
+        interpretation_source=interp_payload.get("interpretation_source"),
+        provider=interp_payload.get("provider"),
+        model=interp_payload.get("model"),
+        prompt_meta=interp_payload.get("prompt_meta"),
+    )
+    verification_payload = erd_payload["report_verification"]
+    verification = FundamentalReportVerification(
+        id=_uuid(verification_payload["id"]),
+        report_id=_uuid(verification_payload["report_id"]),
+        binding_passed=verification_payload.get("binding_passed"),
+        consistency_passed=verification_payload.get("consistency_passed"),
+        verdict_stable=verification_payload.get("verdict_stable"),
+        outcome=verification_payload.get("outcome"),
+        regen_count=verification_payload.get("regen_count"),
+        evidence_count=verification_payload.get("evidence_count"),
+        guard_violations=verification_payload.get("guard_violations"),
+        flags=verification_payload.get("flags"),
+    )
+    insights = [
+        ReportInsight(
+            id=_uuid(item["id"]),
+            report_id=_uuid(item["report_id"]),
+            insight_type=item.get("insight_type"),
+            source_endpoint=item.get("source_endpoint"),
+            rcept_no=item.get("rcept_no"),
+            payload=item.get("payload"),
+        )
+        for item in erd_payload.get("report_insights",[])
+    ]
+    snippets = [
+        ReportFilingSnippet(
+            id=_uuid(item["id"]),
+            report_id=_uuid(item["report_id"]),
+            rcept_no=item.get("rcept_no"),
+            section_name=item.get("section_name"),
+            snippet=item.get("snippet"),
+            rank=item.get("rank"),
+            source_hash=item.get("source_hash"),
+            verified=item.get("verified"),
+            meta=item.get("meta"),
+        )
+        for item in erd_payload.get("report_filing_snippets",[])
+    ]
+
+    agent_report = AgentReport(
+        id=uuid4(),
+        agent_type="fundamental",
+        agent_report_id=report_id,
+        request_id=request_id,
+        client_session_id=None,
+        owner_user_id=principal.user_id,
+        owner_session_id=principal.session_id,
+        stock_code=ticker,
+        stock_name=stock_name,
+        question=question,
+        answer_text=raw['verdict'],
+        data_status=root.get("data_status"),
+        trace_id=trace_id,
+        as_of=report_as_of,
+        created_at=now,
+        summary={
+            "fin_score": raw['score'],
+            "verdict_label": raw['verdict_label'],
+            "period_label": root.get("period_label"),
+        },
+    )
+
+    return report,ratios,evidence,interpretation,verification,insights,snippets,agent_report
+
 class FundamentalReportService:
-    def __init__(self, session: AsyncSession, ai_client: AIClient) -> None:
-        self._session = session
-        self._ai = ai_client
+    def __init__(self,session,*,principal=None):
+        self._session,self._principal=session,principal
 
-    async def create_report(
-        self,
-        req: FundamentalReportCreateRequest,
-    ) -> FundamentalReportEnvelope:
-        request_id = f"req-{uuid4().hex}"
-        trace_id = f"trace-{uuid4().hex}"
-        ai_input = {
-            "request_id": request_id,
-            "trace_id": trace_id,
-            "ticker": req.ticker,
-            "query": req.query,
-        }
-        raw = await self._ai.analyze_fundamental(ai_input)
+    async def _authorize(self,lock=False):
+        if not isinstance(self._principal,Principal):raise AuthenticationRequired()
+        await validate_principal(self._session,self._principal,lock=lock)
+        return self._principal
 
+    async def create_report(self,*args,**kwargs):raise PermissionError('Public creation is disabled')
+    async def save_report(self,*args,**kwargs):raise PermissionError('Public save is disabled')
+    async def _persist(self,*args,**kwargs):raise PermissionError('Legacy persistence is disabled')
+    async def delete_all_reports(self):raise PermissionError('Public bulk deletion is disabled')
+
+    async def stage_report(self,raw,*,report_id,question,stock_name):
+        principal=await self._authorize(lock=True)
+        # The production adapter has already bound and validated this exact snapshot.
+        # Stage also verifies its correlation/ERD before any write.
+        from src.modules.fundamental.domain.analysis import validate_output
+        rid,raw=validate_output(raw,dict(request_id=raw.get('request_id'),trace_id=raw.get('meta',{}).get('trace_id'),ticker=raw.get('ticker')))
+        if rid!=report_id:raise AnalysisContractError()
+        existing=await self._session.scalar(select(FundamentalReport).where(FundamentalReport.id==rid).with_for_update())
+        if existing is not None or await fr_repo.get_agent_indexes(self._session,rid):raise FundamentalReportIdConflict('Result ID already claimed')
+        stock=await self._session.get(Stock,raw['ticker'])
+        if stock is None or type(stock_name) is not str or not stock_name.strip():raise AnalysisContractError()
+        now=await self._session.scalar(select(func.clock_timestamp()))
+        root,ratios,evidence,interp,verif,insights,snippets,index=_projection(raw,principal,question,stock_name,now)
+        await fr_repo.add_report(self._session,report=root,ratios=ratios,evidence=evidence,interpretation=interp,verification=verif,insights=insights,filing_snippets=snippets)
+        await agent_repo.add(self._session,index)
+        await self._session.flush()
+        return FundamentalReportEnvelope(report_id=rid,report=raw)
+
+    async def get_report(self,report_id):
+        principal=await self._authorize()
+        root=await fr_repo.get_owned_report(self._session,report_id,owner_user_id=principal.user_id)
+        if root is None:return None
+        row=await self._session.scalar(select(FundamentalAnalysisRun).where(FundamentalAnalysisRun.adopted_report_id==report_id,FundamentalAnalysisRun.state=='stored',FundamentalAnalysisRun.owner_user_id==principal.user_id))
+        if row is None:raise FundamentalStoredPayloadError('Stored association missing')
         try:
-            output = FundamentalAgentOutputMirror.model_validate(raw)
-        except ValidationError as exc:
-            raise AIContractError(f"AI 응답 계약 위반: {exc.error_count()} error(s)") from exc
+            _,_,result=validate_response(row,stored_response(row));raw=decode(result)
+            indexes=await fr_repo.get_agent_indexes(self._session,report_id)
+            if len(indexes)!=1 or indexes[0].owner_user_id!=principal.user_id:raise ValueError()
+            # Preserve admission session in the index; a new valid session can read.
+            index=indexes[0]
+            if index.owner_session_id is None:raise ValueError()
+            from types import SimpleNamespace
+            expected=_projection(raw,SimpleNamespace(user_id=principal.user_id,session_id=index.owner_session_id),decode(row.request_json)['question'],row.stock_name,root.created_at)
+            actual=(root,await fr_repo.list_ratios(self._session,report_id),await fr_repo.list_evidence(self._session,report_id),await fr_repo.get_interpretation(self._session,report_id),await fr_repo.get_verification(self._session,report_id),await fr_repo.list_insights(self._session,report_id),await fr_repo.list_filing_snippets(self._session,report_id),index)
+            for got,want in zip(actual,expected):
+                if isinstance(want,list):
+                    got_by_id={item.id:item for item in got}
+                    if len(got_by_id)!=len(want):raise ValueError()
+                    for item in want:self._check_projection(got_by_id.get(item.id),item)
+                else:self._check_projection(got,want)
+            return FundamentalReportEnvelope(report_id=report_id,report=raw)
+        except (ValueError,TypeError,KeyError,AttributeError) as error:
+            raise FundamentalStoredPayloadError('Stored result is inconsistent') from None
 
-        if output.ticker != req.ticker:
-            raise AIContractError("AI 응답 ticker 가 요청과 불일치")
-        if output.request_id != request_id:
-            raise AIContractError("AI 응답 request_id 가 요청과 불일치")
-        if output.meta.trace_id != trace_id:
-            raise AIContractError("AI 응답 trace_id 가 요청과 불일치")
+    @staticmethod
+    def _check_projection(actual,expected):
+        if actual is None:raise ValueError()
+        for column in expected.__table__.columns:
+            key=column.key
+            # Index UUID and persisted creation time are generated once, not part of AI JSON.
+            if isinstance(expected,AgentReport) and key in {'id','created_at'}:continue
+            a,b=getattr(actual,key),getattr(expected,key)
+            if isinstance(a,Decimal) or isinstance(b,Decimal):
+                if a is None or b is None or Decimal(str(a))!=Decimal(str(b)):raise ValueError()
+            elif isinstance(a,datetime) and isinstance(b,datetime):
+                if a!=b:raise ValueError()
+            elif a!=b:raise ValueError()
 
-        return await self._persist(
-            output,
-            raw,
-            request_id=request_id,
-            trace_id=trace_id,
-            question=req.query,
-            client_session_id=req.client_session_id,
-            stock_name=req.stock_name,
-        )
+    async def list_reports(self,*,stock_code=None,limit=20,offset=0):
+        principal=await self._authorize()
+        rows=await fr_repo.list_owned_indexes(self._session,owner_user_id=principal.user_id,stock_code=stock_code,limit=limit,offset=offset)
+        for row in rows:
+            if await self.get_report(row.agent_report_id) is None:raise FundamentalStoredPayloadError('Stored result missing')
+        total=await fr_repo.list_owned_indexes(self._session,owner_user_id=principal.user_id,stock_code=stock_code,count=True)
+        return FundamentalReportListResponse(items=[AgentReportListItem.model_validate(row) for row in rows],limit=limit,offset=offset,count=total)
 
-    async def save_report(self, req: FundamentalReportSaveRequest) -> FundamentalReportEnvelope:
-        """save-only — supervisor 가 만든 output 을 AI 재호출 없이 그대로 저장한다.
+    async def delete_report(self,report_id):
+        try:return await self._delete_report(report_id)
+        except Exception:
+            await self._session.rollback();raise
 
-        request_id/trace_id 는 output 안의 것(supervisor 실행 id)을 승계한다. create_report 와 달리
-        요청↔응답 cross-check 는 없다(요청을 새로 보내지 않았으므로 대조 대상이 없다). 구조 계약만 검증.
-        """
-        try:
-            output = FundamentalAgentOutputMirror.model_validate(req.output)
-        except ValidationError as exc:
-            raise AIContractError(f"fundamental output 계약 위반: {exc.error_count()} error(s)") from exc
-
-        return await self._persist(
-            output,
-            req.output,
-            request_id=output.request_id,
-            trace_id=output.meta.trace_id,
-            question=req.question,
-            client_session_id=req.client_session_id,
-            stock_name=req.stock_name,
-        )
-
-    async def _persist(
-        self,
-        output: FundamentalAgentOutputMirror,
-        raw: dict[str, Any],
-        *,
-        request_id: str | None,
-        trace_id: str | None,
-        question: str,
-        client_session_id: str | None,
-        stock_name: str | None,
-    ) -> FundamentalReportEnvelope:
-        """검증된 output → 7 테이블 매핑 + agent_reports 인덱스 저장. create/save 공통 경로."""
-        ticker = output.ticker
-        erd_payload = output.meta.erd_payload.model_dump()
-        root = erd_payload["fundamental_report"]
-        report_id = _uuid(root["id"])
-        now = datetime.now(UTC)
-        report_as_of = _parse_dt(root.get("as_of")) or now
-        stock_name = await self._resolve_stock_name(ticker, stock_name, output.corp_name)
-
-        report = FundamentalReport(
-            id=report_id,
-            request_id=root.get("request_id"),
-            stock_code=root.get("stock_code"),
-            corp_code=root.get("corp_code"),
-            bsns_year=root.get("bsns_year"),
-            years=root.get("years"),
-            fs_div=root.get("fs_div"),
-            report_mode=root.get("report_mode"),
-            reprt_code=root.get("reprt_code"),
-            reprt_name=root.get("reprt_name"),
-            period_label=root.get("period_label"),
-            verdict_label=root.get("verdict_label"),
-            verdict=root.get("verdict"),
-            fin_score=root.get("fin_score"),
-            confidence=root.get("confidence"),
-            data_status=root.get("data_status"),
-            risk_flags=root.get("risk_flags"),
-            score_breakdown=root.get("score_breakdown"),
-            report_html=root.get("report_html"),
-            llm_provider=root.get("llm_provider"),
-            llm_model=root.get("llm_model"),
-            llm_latency_ms=root.get("llm_latency_ms"),
-            dart_calls=root.get("dart_calls"),
-            trace_id=root.get("trace_id"),
-            as_of=report_as_of,
-            created_at=now,
-            meta=root.get("meta"),
-        )
-        ratios = [
-            ReportRatio(
-                id=_uuid(item["id"]),
-                report_id=_uuid(item["report_id"]),
-                ratio_name=item.get("ratio_name"),
-                label=item.get("label"),
-                category=item.get("category"),
-                fiscal_year=item.get("fiscal_year"),
-                fiscal_period=item.get("fiscal_period"),
-                value=_decimal(item.get("value")),
-                unit=item.get("unit"),
-                display_value=item.get("display_value"),
-                status=item.get("status"),
-                reason=item.get("reason"),
-                formula=item.get("formula"),
-                basis=item.get("basis"),
-            )
-            for item in erd_payload["report_ratios"]
-        ]
-        evidence = [
-            ReportEvidence(
-                id=_uuid(item["id"]),
-                report_id=_uuid(item["report_id"]),
-                ratio_id=_uuid(item["ratio_id"]) if item.get("ratio_id") else None,
-                metric=item.get("metric"),
-                claim=item.get("claim"),
-                rcept_no=item.get("rcept_no"),
-                bsns_year=item.get("bsns_year"),
-                fiscal_period=item.get("fiscal_period"),
-                sj_div=item.get("sj_div"),
-                account_id=item.get("account_id"),
-                account_nm=item.get("account_nm"),
-                amount=_decimal(item.get("amount")),
-                unit=item.get("unit"),
-                display_value=item.get("display_value"),
-                source_url=item.get("source_url"),
-                role=item.get("role"),
-                raw=item.get("raw"),
-            )
-            for item in erd_payload["report_evidence"]
-        ]
-        interp_payload = erd_payload["report_interpretation"]
-        interpretation = FundamentalReportInterpretation(
-            id=_uuid(interp_payload["id"]),
-            report_id=_uuid(interp_payload["report_id"]),
-            interpretation=interp_payload.get("interpretation"),
-            interpretation_source=interp_payload.get("interpretation_source"),
-            provider=interp_payload.get("provider"),
-            model=interp_payload.get("model"),
-            prompt_meta=interp_payload.get("prompt_meta"),
-        )
-        verification_payload = erd_payload["report_verification"]
-        verification = FundamentalReportVerification(
-            id=_uuid(verification_payload["id"]),
-            report_id=_uuid(verification_payload["report_id"]),
-            binding_passed=verification_payload.get("binding_passed"),
-            consistency_passed=verification_payload.get("consistency_passed"),
-            verdict_stable=verification_payload.get("verdict_stable"),
-            outcome=verification_payload.get("outcome"),
-            regen_count=verification_payload.get("regen_count"),
-            evidence_count=verification_payload.get("evidence_count"),
-            guard_violations=verification_payload.get("guard_violations"),
-            flags=verification_payload.get("flags"),
-        )
-        insights = [
-            ReportInsight(
-                id=_uuid(item["id"]),
-                report_id=_uuid(item["report_id"]),
-                insight_type=item.get("insight_type"),
-                source_endpoint=item.get("source_endpoint"),
-                rcept_no=item.get("rcept_no"),
-                payload=item.get("payload"),
-            )
-            for item in erd_payload["report_insights"]
-        ]
-        snippets = [
-            ReportFilingSnippet(
-                id=_uuid(item["id"]),
-                report_id=_uuid(item["report_id"]),
-                rcept_no=item.get("rcept_no"),
-                section_name=item.get("section_name"),
-                snippet=item.get("snippet"),
-                rank=item.get("rank"),
-                source_hash=item.get("source_hash"),
-                verified=item.get("verified"),
-                meta=item.get("meta"),
-            )
-            for item in erd_payload["report_filing_snippets"]
-        ]
-
-        agent_report = AgentReport(
-            id=uuid4(),
-            agent_type="fundamental",
-            agent_report_id=report_id,
-            request_id=request_id,
-            client_session_id=client_session_id,
-            owner_user_id=None,
-            owner_session_id=None,
-            stock_code=ticker,
-            stock_name=stock_name,
-            question=question,
-            answer_text=output.verdict,
-            data_status=root.get("data_status"),
-            trace_id=trace_id,
-            as_of=report_as_of,
-            created_at=now,
-            summary={
-                "fin_score": output.score,
-                "verdict_label": output.verdict_label,
-                "period_label": root.get("period_label"),
-            },
-        )
-
-        await fr_repo.ensure_stock(self._session, stock_code=ticker, stock_name=stock_name)
-        await fr_repo.add_report(
-            self._session,
-            report=report,
-            ratios=ratios,
-            evidence=evidence,
-            interpretation=interpretation,
-            verification=verification,
-            insights=insights,
-            filing_snippets=snippets,
-        )
-        await agent_repo.add(self._session, agent_report)
+    async def _delete_report(self,report_id):
+        principal=await self._authorize(lock=True)
+        discovered=(await self._session.execute(select(FundamentalReport.id,literal_column('fundamental_reports.xmin::text'),FundamentalAnalysisRun.id)
+            .join(FundamentalAnalysisRun,(FundamentalAnalysisRun.adopted_report_id==FundamentalReport.id)&(FundamentalAnalysisRun.state=='stored')&(FundamentalAnalysisRun.owner_user_id==principal.user_id))
+            .where(FundamentalReport.id==report_id,FundamentalReport.id.in_(fr_repo.eligible_ids(principal.user_id))))).one_or_none()
+        if discovered is None:return False
+        row=await self._session.scalar(select(FundamentalAnalysisRun).where(FundamentalAnalysisRun.id==discovered[2],FundamentalAnalysisRun.owner_user_id==principal.user_id).with_for_update().execution_options(populate_existing=True))
+        if row is None or row.state!='stored' or row.adopted_report_id!=report_id:return False
+        version=await self._session.scalar(select(literal_column('fundamental_reports.xmin::text')).select_from(FundamentalReport).where(FundamentalReport.id==report_id).with_for_update(of=FundamentalReport))
+        if version!=discovered[1]:return False
+        if await self.get_report(report_id) is None:return False
+        row.state='deleted';row.deleted_at=await self._session.scalar(select(func.clock_timestamp()))
+        row.request_json=row.stock_name=row.input_json=row.result_json=None
+        await self._session.flush()
+        await fr_repo.delete_agent_index(self._session,report_id)
+        deleted=await fr_repo.delete_root(self._session,report_id)
         await self._session.commit()
-
-        return FundamentalReportEnvelope(report_id=report_id, report=raw)
-
-    async def _resolve_stock_name(self, ticker: str, requested: str | None, ai_name: str) -> str:
-        existing = await self._session.get(Stock, ticker)
-        if existing is not None:
-            return existing.stock_name
-        req_name = requested.strip() if requested and requested.strip() else None
-        return req_name or ai_name or ticker
-
-    async def get_report(self, report_id: UUID) -> FundamentalReportEnvelope | None:
-        report = await fr_repo.get_report(self._session, report_id)
-        if report is None:
-            return None
-        detail = await self._detail_payload(report)
-        return FundamentalReportEnvelope(report_id=report.id, report=detail)
-
-    async def list_reports(
-        self,
-        *,
-        stock_code: str,
-        limit: int,
-        offset: int,
-    ) -> FundamentalReportListResponse:
-        rows = await agent_repo.list_reports(
-            self._session,
-            agent_type="fundamental",
-            stock_code=stock_code,
-            limit=limit,
-            offset=offset,
-        )
-        items = [AgentReportListItem.model_validate(row) for row in rows]
-        return FundamentalReportListResponse(
-            items=items,
-            limit=limit,
-            offset=offset,
-            count=len(items),
-        )
-
-    async def delete_report(self, report_id: UUID) -> bool:
-        await fr_repo.delete_agent_index(self._session, report_id)
-        deleted = await fr_repo.delete_root(self._session, report_id)
-        await self._session.commit()
-        return deleted > 0
-
-    async def delete_all_reports(self) -> int:
-        """fundamental 리포트 전체 삭제(index 먼저, root 는 자식 CASCADE). 삭제 행수 반환."""
-        await agent_repo.delete_all_for_type(self._session, "fundamental")
-        result = await self._session.execute(delete(FundamentalReport))
-        deleted = result.rowcount or 0
-        await self._session.commit()
-        return deleted
-
-    async def _detail_payload(self, report: FundamentalReport) -> dict[str, Any]:
-        ratios = await fr_repo.list_ratios(self._session, report.id)
-        evidence = await fr_repo.list_evidence(self._session, report.id)
-        interpretation = await fr_repo.get_interpretation(self._session, report.id)
-        verification = await fr_repo.get_verification(self._session, report.id)
-        insights = await fr_repo.list_insights(self._session, report.id)
-        snippets = await fr_repo.list_filing_snippets(self._session, report.id)
-        return {
-            "fundamental_report": _model_dict(report, _REPORT_FIELDS),
-            "report_ratios": [_model_dict(item, _RATIO_FIELDS) for item in ratios],
-            "report_evidence": [_model_dict(item, _EVIDENCE_FIELDS) for item in evidence],
-            "report_interpretation": (
-                _model_dict(interpretation, _INTERPRETATION_FIELDS)
-                if interpretation is not None
-                else None
-            ),
-            "report_verification": (
-                _model_dict(verification, _VERIFICATION_FIELDS)
-                if verification is not None
-                else None
-            ),
-            "report_insights": [_model_dict(item, _INSIGHT_FIELDS) for item in insights],
-            "report_filing_snippets": [_model_dict(item, _SNIPPET_FIELDS) for item in snippets],
-        }
+        return deleted>0

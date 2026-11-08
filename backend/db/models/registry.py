@@ -18,6 +18,7 @@ from db.models.common.stock_alias import StockAlias
 from db.models.common.stock_corp_code import StockCorpCode
 
 # Fundamental
+from db.models.fundamental.analysis_run import FundamentalAnalysisRun
 from db.models.fundamental.fundamental_report import FundamentalReport
 from db.models.fundamental.report_evidence import ReportEvidence
 from db.models.fundamental.report_filing_snippet import ReportFilingSnippet
@@ -61,6 +62,7 @@ __all__ = [
     "StockAlias",
     "StockCorpCode",
     "FundamentalReport",
+    "FundamentalAnalysisRun",
     "ReportEvidence",
     "ReportFilingSnippet",
     "ReportInsight",

@@ -13,6 +13,7 @@ from src.modules.reports.api import router as reports
 from src.modules.stocks.api import router as stocks
 from src.modules.technical.api import router as technical_reports
 from src.modules.fundamental.api import router as fundamental_reports
+from src.modules.fundamental.api import analysis_router as fundamental_analyses
 from src.modules.auth.api import router as auth
 from src.modules.flow.api import router as flow_reports
 from src.modules.flow.api import run_router as flow_runs
@@ -105,6 +106,7 @@ async def database_error(request, exc):
 app.include_router(auth.router)
 app.include_router(technical_reports.router)
 app.include_router(fundamental_reports.router)
+app.include_router(fundamental_analyses.router)
 app.include_router(flow_reports.router)
 app.include_router(flow_runs.router)
 app.include_router(synthetic_demo_router.router)

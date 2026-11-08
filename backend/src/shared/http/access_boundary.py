@@ -32,6 +32,66 @@ class AccessBoundary:
                 await send({"type": "websocket.close", "code": 1008})
             return
         method, path = scope["method"], scope["path"]
+        if path == '/api/fundamental' or path.startswith('/api/fundamental/'):
+            from uuid import UUID
+            from urllib.parse import parse_qsl
+            from starlette.datastructures import Headers
+            from src.shared.config import settings
+            from src.modules.auth.api.router import configured
+            from src.modules.flow.api.run_schemas import error_response,http_request_id
+            from src.modules.flow.domain.execution import ErrorCode
+            from src.modules.flow.api.synthetic_demo_schemas import json_media
+            from src.modules.fundamental.api.analysis_schemas import FundamentalAnalysisRequest
+            from src.modules.fundamental.domain.analysis import decode
+            http_request_id(scope)
+            async def reject(code):await error_response(scope,code)(scope,receive,send)
+            if not settings.FUNDAMENTAL_ANALYSIS_ENABLED:
+                await reject(ErrorCode.FEATURE_UNAVAILABLE);return
+            if not configured():
+                await reject(ErrorCode.AUTH_REQUIRED);return
+            analyses='/api/fundamental/analyses';reports='/api/fundamental/reports';raw=None
+            try:
+                query=scope.get('query_string',b'')
+                if path==analyses and method=='POST':
+                    if query:raise ValueError()
+                    headers=Headers(scope=scope)
+                    if len(headers.getlist('content-type'))!=1 or not json_media(headers) or headers.getlist('content-encoding') or len(headers.getlist('content-length'))>1:raise ValueError()
+                    length=headers.get('content-length')
+                    if length is not None and (not length.isascii() or not length.isdigit() or int(length)>4096):raise ValueError()
+                    raw=bytearray()
+                    while True:
+                        message=await receive()
+                        if message['type']!='http.request':raise ValueError()
+                        raw.extend(message.get('body',b''))
+                        if len(raw)>4096:raise ValueError()
+                        if not message.get('more_body',False):break
+                    FundamentalAnalysisRequest.model_validate(decode(bytes(raw).decode('utf8')))
+                elif path==reports and method=='GET':
+                    pairs=parse_qsl(query.decode('ascii'),keep_blank_values=True,strict_parsing=True)
+                    if len({k for k,v in pairs})!=len(pairs) or any(k not in {'stock_code','limit','offset'} for k,v in pairs):raise ValueError()
+                elif method=='GET' and path.startswith(analyses+'/') or method in {'GET','DELETE'} and path.startswith(reports+'/'):
+                    if query:raise ValueError()
+                    segment=path.rsplit('/',1)[1]
+                    prefix=analyses if path.startswith(analyses+'/') else reports
+                    if path!=prefix+'/'+segment:
+                        await reject(ErrorCode.FEATURE_UNAVAILABLE);return
+                    if str(UUID(segment))!=segment.lower():raise ValueError()
+                else:
+                    await reject(ErrorCode.FEATURE_UNAVAILABLE);return
+            except (ValueError,TypeError,UnicodeError,RecursionError):
+                await reject(ErrorCode.INPUT_INVALID);return
+            delivered=False
+            async def fundamental_receive():
+                nonlocal delivered
+                if raw is not None and not delivered:
+                    delivered=True;return {'type':'http.request','body':bytes(raw),'more_body':False}
+                return await receive()
+            async def fundamental_send(message):
+                if message['type']=='http.response.start':
+                    headers=[(k,v) for k,v in message.get('headers',[]) if k.lower() not in {b'cache-control',b'vary'}]
+                    message={**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
+                await send(message)
+            await self.app(scope,fundamental_receive,fundamental_send);return
         if path == '/api/flow/analyses' or path.startswith('/api/flow/analyses/'):
             from uuid import UUID
             from src.shared.config import settings

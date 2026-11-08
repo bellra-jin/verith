@@ -133,3 +133,7 @@ downgrade는 flow_runs ACCESS EXCLUSIVE → flow_input_snapshots ACCESS EXCLUSIV
 ## CF-012 `c12001a7e0001`
 
 `c7001a7e0001` 다음 revision은 `flow_analysis_runs` 하나와 전이 검증 trigger를 추가한다. 기존 receipt/input/fake/report 자료는 수정하지 않는다. downgrade는 ACCESS EXCLUSIVE 잠금 뒤 빈 테이블만 제거하며 행이 있으면 거부한다. 기존 DB에 적용하거나 자료를 비워 downgrade하지 않는다. 승인된 자기 PG에서 새 DDL 직후 실패 rollback과 이전 자료 보존을 검사한다.
+
+## CF-015 · c15001a7e0001
+
+Parent `c12001a7e0001`. Adds nullable Fundamental root owner, ownerful partial index uniqueness, and a separate guarded analysis ledger. No legacy backfill. Duplicate ownerful indexes abort upgrade. Downgrade locks and refuses any nonempty ledger/owned root/index. Only disposable attested PG is tested by the focused checker.

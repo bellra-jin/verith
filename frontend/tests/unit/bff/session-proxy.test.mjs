@@ -12,6 +12,7 @@ function load(relative,fetchSpy,options={}) {
  vm.runInNewContext(source,{module:bundle,exports:bundle.exports,Response,Request,Headers,URL,URLSearchParams,TextEncoder,AbortSignal:options.AbortSignal ?? AbortSignal,fetch:fetchSpy,process:{env:options.env ?? {}},require(name){
   if(name==='server-only')return {};
   if(name==='./session-backend')return {sessionBackendUrl:()=> options.base===undefined?'http://backend.unit':options.base};
+  if(name==='./fundamental-analysis-config'||name==='@/shared/server/fundamental-analysis-config')return load('src/shared/server/fundamental-analysis-config.ts',fetchSpy,options);
   if(name==='./flow-analysis-config'||name==='@/shared/server/flow-analysis-config')return load('src/shared/server/flow-analysis-config.ts',fetchSpy,options);
   if(name==='./flow-demo-config'||name==='@/shared/server/flow-demo-config')return {flowDemoEnabled:()=>options.demo===true};
   if(name==='node:crypto')return {randomUUID};
@@ -127,4 +128,19 @@ test('analysis single wall deadline bounds unfinished body and upstream response
   const result=await operation;assert.equal(result.status,slowBody?422:503);assert.deepEqual(timeouts,[130000]);assert.equal(seen.length,slowBody?0:1);
   if(!slowBody)assert.equal(seen[0].signal,deadline.signal);
  }
+});
+
+test('Fundamental exact four field request and owned readers/delete retain boundary and 70s deadline',async()=>{
+ const seen=[];const signals=[];const options={env:{FUNDAMENTAL_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout(ms){signals.push(ms);return new AbortController().signal;}}};
+ const route=load('src/app/api/private/[...path]/route.ts',async(url,init)=>{seen.push({url,init});return init.method==='DELETE'?new Response(null,{status:204}):Response.json({safe:true});},options);
+ const id=randomUUID(),ctx=path=>({params:Promise.resolve({path:path.split('/')})});
+ const response=await route.POST(new Request('https://app.unit/api/private/fundamental/analyses',{method:'POST',headers:{'content-type':'application/json',Cookie:'verith_session=a; verith_session=b',Origin:'https://app.unit','X-CSRF-Token':'fixed','X-Fundamental-Service-Token':'not-forwarded'},body:'{}'}),ctx('fundamental/analyses'));
+ assert.equal(response.status,200);assert.equal(seen[0].url,'http://backend.unit/api/fundamental/analyses');assert.equal(seen[0].init.headers.get('cookie'),'verith_session=a; verith_session=b');assert.equal(seen[0].init.headers.get('x-fundamental-service-token'),null);assert.equal(signals[0],70000);
+ assert.equal((await route.GET(new Request('https://app.unit/api/private/fundamental/reports?limit=20&offset=0'),ctx('fundamental/reports'))).status,200);
+ assert.equal(seen.at(-1).url,'http://backend.unit/api/fundamental/reports?limit=20&offset=0');
+ assert.equal((await route.DELETE(new Request('https://app.unit/api/private/fundamental/reports/'+id,{method:'DELETE'}),ctx('fundamental/reports/'+id))).status,204);
+ const count=seen.length;
+ for(const [method,path] of [['POST','fundamental/reports'],['POST','fundamental/reports/save'],['DELETE','fundamental/reports'],['GET','fundamental/reports/'+id+'/html']])assert.equal((await route[method](new Request('https://app.unit/api/private/'+path,{method}),ctx(path))).status,422);
+ assert.equal(seen.length,count);
+ for(const v of ['', 'TRUE','1','false']){const config=load('src/shared/server/fundamental-analysis-config.ts',()=>{}, {env:{FUNDAMENTAL_ANALYSIS_ENABLED:v}});assert.equal(config.fundamentalAnalysisEnabled(),false);}
 });

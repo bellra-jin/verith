@@ -58,6 +58,7 @@ class AIClient:
         self._timeout = timeout_seconds
         self._transport = transport  # 테스트에서 MockTransport 주입용
         self._flow_token = service_token
+        self._fundamental_token = service_token
 
     async def analyze_flow(self, payload: dict) -> dict:
         """One bounded internal Flow request. No redirect, environment proxy or retry."""
@@ -123,30 +124,44 @@ class AIClient:
         raise AIUnavailableError(f"AI 서버 오류({resp.status_code})")
 
     async def analyze_fundamental(self, payload: dict) -> dict:
-        """`/internal/fundamental/analyze` 호출 → 응답 JSON(dict) 반환.
-
-        payload 는 FundamentalAgentInput 형태(request_id/trace_id/ticker/query).
-        """
-        url = self._base_url + _FUNDAMENTAL_ANALYZE_PATH
+        """One bounded internal Financial request. No redirect, environment proxy or retry."""
+        from urllib.parse import urlsplit
+        from src.modules.fundamental.domain.analysis import canonical, decode
+        target=urlsplit(self._base_url)
+        try:token=self._fundamental_token.encode('utf8')
+        except UnicodeError:raise AIValidationError('Financial service is unavailable') from None
+        if (target.scheme not in {'http','https'} or not target.hostname or target.username or target.password
+                or target.path not in {'','/'} or target.query or target.fragment
+                or len(token)<32 or any(value<32 or value==127 for value in token)):
+            raise AIValidationError('Financial service is unavailable')
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout, transport=self._transport
-            ) as client:
-                resp = await client.post(url, json=payload)
-        except httpx.TimeoutException as exc:
-            raise AITimeoutError("AI 서버 응답 timeout") from exc
-        except httpx.HTTPError as exc:
-            raise AIUnavailableError(f"AI 서버 연결 실패: {type(exc).__name__}") from exc
-
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code == 422:
-            raise AIValidationError("AI 요청 검증 실패(422)")
-        if resp.status_code == 504:
-            raise AITimeoutError("AI 서버 timeout(504)")
-        if resp.status_code in (502, 503):
-            raise AIUnavailableError(f"AI 서버 사용 불가({resp.status_code})")
-        raise AIUnavailableError(f"AI 서버 오류({resp.status_code})")
+            data=canonical(payload).encode('utf8')
+            if len(data)>8192:raise AIValidationError('Financial request is invalid')
+            async def exchange():
+                async with httpx.AsyncClient(timeout=65,transport=self._transport,follow_redirects=False,trust_env=False) as client:
+                    async with client.stream('POST',self._base_url+'/internal/fundamental/analyze',content=data,
+                        headers=[(b'Content-Type',b'application/json'),(b'X-Fundamental-Service-Token',token)]) as response:
+                        raw=bytearray()
+                        async for part in response.aiter_bytes():
+                            if len(raw)+len(part)>2097152:raise AIContractError('Financial result is invalid')
+                            raw.extend(part)
+                        if response.status_code==200:
+                            try:
+                                value=decode(bytes(raw).decode('utf8'))
+                                if not isinstance(value,dict):raise ValueError()
+                                return value
+                            except Exception:raise AIContractError('Financial result is invalid') from None
+                        if response.status_code in {400,401,403,409,422}:raise AIValidationError('Financial engine declined the request')
+                        if response.status_code==502:
+                            try:contract=decode(bytes(raw).decode('utf8')).get('error',{}).get('code')=='RESULT_CONTRACT_INVALID'
+                            except Exception:contract=False
+                            if contract:raise AIContractError('Financial result is invalid')
+                        if response.status_code==504:raise AITimeoutError('Financial engine timeout')
+                        raise AIUnavailableError('Financial engine unavailable')
+            async with asyncio.timeout(65):
+                return await exchange()
+        except (httpx.TimeoutException,TimeoutError):raise AITimeoutError('Financial engine timeout') from None
+        except httpx.HTTPError:raise AIUnavailableError('Financial engine unavailable') from None
 
     async def render_industry_html(self, payload: dict) -> str:
         """`/internal/industry/render` 호출 → 완결 HTML 문서(text) 반환.

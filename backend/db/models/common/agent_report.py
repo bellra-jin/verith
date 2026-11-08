@@ -51,6 +51,8 @@ class AgentReport(Base):
     summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
+        Index("uq_fundamental_owned_agent_report", "agent_type", "agent_report_id", unique=True,
+              postgresql_where=text("agent_type='fundamental' AND owner_user_id IS NOT NULL")),
         Index(
             "ix_agent_reports_type_owner_created_id",
             "agent_type",

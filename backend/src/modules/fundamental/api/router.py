@@ -1,92 +1,46 @@
-"""fundamental report 라우트 — POST/GET/LIST/DELETE."""
-
-from __future__ import annotations
-
-from collections.abc import AsyncGenerator
+"""Authenticated snapshot-aware Fundamental readers and individual deletion."""
 from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from fastapi import APIRouter,Depends,Request,Query,Response
 from db.session import get_session
-from src.shared.infrastructure.clients.ai_client import AIClient, AIContractError, AITimeoutError, AIUnavailableError, AIValidationError
-from src.api.deps import get_ai_client
-from src.modules.fundamental.api.schemas import FundamentalReportCreateRequest, FundamentalReportEnvelope, FundamentalReportListResponse, FundamentalReportSaveRequest
+from src.modules.auth.api.router import request_principal
+from src.modules.fundamental.api.analysis_router import FundamentalAnalysisRoute
+from src.modules.fundamental.api.schemas import FundamentalReportEnvelope,FundamentalReportListResponse
 from src.modules.fundamental.application.report_service import FundamentalReportService
+from src.modules.fundamental.application.analysis_service import FundamentalAnalysisError
+from src.modules.flow.domain.execution import ErrorCode
 
-router = APIRouter(prefix="/api/fundamental/reports", tags=["fundamental-reports"])
+router=APIRouter(prefix='/api/fundamental/reports',tags=['fundamental-reports'],route_class=FundamentalAnalysisRoute)
 
+async def get_fundamental_report_service(request:Request,session=Depends(get_session,scope='function')):
+    principal=await request_principal(request,session,mutation=request.method=='DELETE')
+    return FundamentalReportService(session,principal=principal)
 
-async def get_fundamental_report_service(
-    session: AsyncSession = Depends(get_session),
-    ai_client: AIClient = Depends(get_ai_client),
-) -> AsyncGenerator[FundamentalReportService, None]:
-    yield FundamentalReportService(session=session, ai_client=ai_client)
+@router.get('',response_model=FundamentalReportListResponse)
+async def list_fundamental_reports(stock_code:str|None=Query(default=None,pattern=r'^[0-9]{6}$'),limit:int=Query(default=20,ge=1,le=100),offset:int=Query(default=0,ge=0),service=Depends(get_fundamental_report_service)):
+    return await service.list_reports(stock_code=stock_code,limit=limit,offset=offset)
 
+@router.get('/{report_id}',response_model=FundamentalReportEnvelope)
+async def get_fundamental_report(report_id:UUID,service=Depends(get_fundamental_report_service)):
+    result=await service.get_report(report_id)
+    if result is None:raise FundamentalAnalysisError(ErrorCode.RESOURCE_NOT_FOUND)
+    return result
 
-@router.post("", response_model=FundamentalReportEnvelope, status_code=status.HTTP_201_CREATED)
-async def create_fundamental_report(
-    req: FundamentalReportCreateRequest,
-    service: FundamentalReportService = Depends(get_fundamental_report_service),
-) -> FundamentalReportEnvelope:
-    try:
-        return await service.create_report(req)
-    except AIValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    except (AIContractError, AIUnavailableError) as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    except AITimeoutError as exc:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
+@router.delete('/{report_id}',status_code=204)
+async def delete_fundamental_report(report_id:UUID,service=Depends(get_fundamental_report_service)):
+    if not await service.delete_report(report_id):raise FundamentalAnalysisError(ErrorCode.RESOURCE_NOT_FOUND)
+    return Response(status_code=204)
 
-
-@router.post("/save", response_model=FundamentalReportEnvelope, status_code=status.HTTP_201_CREATED)
-async def save_fundamental_report(
-    req: FundamentalReportSaveRequest,
-    service: FundamentalReportService = Depends(get_fundamental_report_service),
-) -> FundamentalReportEnvelope:
+# Retained public schema for existing clients; AccessBoundary and service both
+# reject these legacy writes before any AI, DB write or transaction starts.
+from src.modules.fundamental.api.schemas import FundamentalReportCreateRequest,FundamentalReportSaveRequest
+@router.post('',response_model=FundamentalReportEnvelope,status_code=201)
+async def create_fundamental_report(req:FundamentalReportCreateRequest,service:FundamentalReportService=Depends(get_fundamental_report_service))->FundamentalReportEnvelope:
+    raise PermissionError('Public creation is disabled')
+@router.post('/save',response_model=FundamentalReportEnvelope,status_code=201)
+async def save_fundamental_report(req:FundamentalReportSaveRequest,service:FundamentalReportService=Depends(get_fundamental_report_service))->FundamentalReportEnvelope:
     """save-only — supervisor 가 이미 만든 fundamental output 을 AI 재호출 없이 저장(news 방식)."""
-    try:
-        return await service.save_report(req)
-    except (AIContractError, AIUnavailableError) as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-
-@router.get("", response_model=FundamentalReportListResponse)
-async def list_fundamental_reports(
-    stock_code: str = Query(pattern=r"^\d{6}$"),
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    service: FundamentalReportService = Depends(get_fundamental_report_service),
-) -> FundamentalReportListResponse:
-    return await service.list_reports(stock_code=stock_code, limit=limit, offset=offset)
-
-
-@router.get("/{report_id}", response_model=FundamentalReportEnvelope)
-async def get_fundamental_report(
-    report_id: UUID,
-    service: FundamentalReportService = Depends(get_fundamental_report_service),
-) -> FundamentalReportEnvelope:
-    envelope = await service.get_report(report_id)
-    if envelope is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="report not found")
-    return envelope
-
-
-@router.delete("", status_code=status.HTTP_200_OK)
-async def delete_all_fundamental_reports(
-    service: FundamentalReportService = Depends(get_fundamental_report_service),
-) -> dict:
+    raise PermissionError('Public save is disabled')
+@router.delete('',status_code=200)
+async def delete_all_fundamental_reports(service:FundamentalReportService=Depends(get_fundamental_report_service))->dict:
     """fundamental 리포트 전체 삭제. 삭제 건수 반환."""
-    deleted = await service.delete_all_reports()
-    return {"deleted": deleted}
-
-
-@router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_fundamental_report(
-    report_id: UUID,
-    service: FundamentalReportService = Depends(get_fundamental_report_service),
-) -> Response:
-    deleted = await service.delete_report(report_id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="report not found")
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    raise PermissionError('Public bulk deletion is disabled')

@@ -1,3 +1,9 @@
+## CF-006 내부 합성 입력 준비
+
+공개 route/실행권 없이 receipt의 입력 준비본만 봉인·본인 재조회한다. [내부 계약](../backend/docs/flow_input_snapshot.md)·[작업 기록](work/CF-006-flow-input-snapshot.md)을 따른다. 기존 보호 self/unit과 고정 DB-only `--verify-flow-input-snapshot-db`만 해당 검증 입구다. DB-only는 clean env·기존 Python `-I -S -B`·정확한 site-packages launcher, 검증된 local Docker/기존 image·새 소유 PG·attested 연결·자기 HOME·finally 정리를 전제로 한다. 실제 launcher는 작업 기록에 있다. 일반 앱/pytest/.env/기존 DB로 대체하지 않는다.
+
+최종 self18/unit851 및 실제 PG 합성 준비/경합 검사를 기존 결과와 구분한다. 새 snapshot은 실행 가능 작업이 아니며 실제 AI/Google/브라우저/worker/결과 게시를 검증한 것이 아니다. 아래 이전 단계는 당시 이력이다.
+
 # 공용 환경 참고와 실행 경계
 
 ## CF-005 한정 관측 안내 검사

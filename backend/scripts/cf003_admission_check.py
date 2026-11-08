@@ -171,7 +171,20 @@ async def verify_admission(proof):
     phases = []
     try:
         with isolated_application(proof) as observed:
+            from sqlalchemy import text
+            from scripts.cf002_interactive_login import owned_session
+            async def revision():
+                async with owned_session(proof) as session:
+                    return await session.scalar(text("SELECT version_num FROM alembic_version"))
+            initial = await revision()
+            check(initial in {"c3001a7e0001", "c6001a7e0001"}, "exact admission revision required")
+            if initial == "c6001a7e0001":
+                await migration(proof, "c3001a7e0001", downgrade=True)
+                check(await revision() == "c3001a7e0001", "admission baseline revision restored")
             result = await _verify(proof, lambda name: phases.append(name))
+            if initial == "c6001a7e0001":
+                await migration(proof, "c6001a7e0001")
+                check(await revision() == initial, "input snapshot revision restored")
             check(not any(observed.values()), "unexpected forbidden access attempt")
             result["observed_denials"] = dict(observed)
             result["observation_scope"] = "scoped-Python-file-socket-httpx-wrappers-not-native-tracing"

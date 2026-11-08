@@ -61,6 +61,12 @@ def cf003_failure_diagnostic(error, stage):
             "frames": frames[-8:]}
 
 
+def cf006_failure_diagnostic(error, stage):
+    result = cf003_failure_diagnostic(error, stage)
+    result["phase"] = "cf006_failure_diagnostic"
+    return result
+
+
 async def migrate_owned(proof):
     # No engine before this full, independently attested restricted-role check.
     await proof.preflight()
@@ -472,6 +478,7 @@ def main():
     mode.add_argument("--verify-owned-db", action="store_true")
     mode.add_argument("--verify-controller", action="store_true")
     mode.add_argument("--verify-flow-admission-db", action="store_true")
+    mode.add_argument("--verify-flow-input-snapshot-db", action="store_true")
     mode.add_argument("--verify-fake-environment", action="store_true")
     mode.add_argument("--google-input", choices=["approved-file"])
     parser.add_argument("--lifetime-seconds", type=int, default=3600)
@@ -491,6 +498,8 @@ def main():
     children = []
     old_handlers = {}
     interrupted = False
+    secondary_cleanup_failed = False
+    cf006_failure_owner = None
     cf003_stage = "local_context"
 
     def stop(signum, frame):
@@ -499,14 +508,19 @@ def main():
     for signum in (signal.SIGINT, signal.SIGTERM):
         old_handlers[signum] = signal.signal(signum, stop)
     try:
-        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db):
+        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db):
             ensure_local_ports_free()
         docker = LocalDocker()
         if args.verify_flow_admission_db:
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
+        elif args.verify_flow_input_snapshot_db:
+            from scripts.cf003_admission_check import owned_postgres_home
+
+            db_test_context.enter_context(owned_postgres_home(docker))
         owner = OwnedPostgres(docker)
+        cf006_failure_owner = owner
         cf003_stage = "owned_creation"
         proof = owner.create()
         safe_print({"phase": "owned_resource_created", **proof.safe_receipt()})
@@ -540,6 +554,36 @@ def main():
             cf003_stage = "admission_check"
             result = asyncio.run(asyncio.wait_for(verify_admission(proof), timeout=180))
             safe_print({"phase": "flow_admission_db_check", **result})
+            return
+        if args.verify_flow_input_snapshot_db:
+            from scripts.cf006_input_snapshot_check import verify_input_snapshot, verify_downgrade_first
+
+            cf003_stage = "admission_check"
+            result = asyncio.run(asyncio.wait_for(verify_input_snapshot(proof), timeout=300))
+            safe_print({"phase": "flow_input_snapshot_db_check", **result})
+            # A second minted resource is required: the lock-first experiment
+            # must leave the table absent, never recreate it to recover a test.
+            second_owner = OwnedPostgres(docker)
+            cf006_failure_owner = second_owner
+            try:
+                cf003_stage = "owned_creation"
+                second_proof = second_owner.create()
+                safe_print({"phase": "cf006_lock_first_resource_created", **second_proof.safe_receipt()})
+                cf003_stage = "migration"
+                asyncio.run(asyncio.wait_for(migrate_owned(second_proof), timeout=90))
+                cf003_stage = "admission_check"
+                result = asyncio.run(asyncio.wait_for(verify_downgrade_first(second_proof), timeout=90))
+                safe_print({"phase": "flow_input_snapshot_downgrade_first_check", **result})
+            finally:
+                try:
+                    second_owner.cleanup()
+                    safe_print({"phase": "owned_db_removed", "resource_id": second_owner.resource_id})
+                except BaseException as error:
+                    secondary_cleanup_failed = True
+                    safe_print(cf006_failure_diagnostic(error, "cleanup"))
+                    safe_print({"phase": "cleanup_failed", "resource_id": second_owner.resource_id,
+                                "container_id": getattr(getattr(second_owner, "receipt", None), "container_id", None)})
+                    raise
             return
         project = prepare_projects(_BACKEND.parent)
         # Secret-free recovery receipt; no DSN/password/Google inputs/tokens/subs.
@@ -670,7 +714,14 @@ def main():
         interrupted = True
         safe_print({"phase": "interrupted", "status": "cleaning_owned_resources"})
     except Exception as error:
-        if args.verify_flow_admission_db:
+        if args.verify_flow_input_snapshot_db:
+            if cf006_failure_owner is not None and cf006_failure_owner.receipt is not None:
+                # Only the current failing resource; no nonce or helper receipt expansion.
+                failed_receipt = cf006_failure_owner.receipt
+                safe_print({"phase": "cf006_failed_resource", "resource_id": cf006_failure_owner.resource_id,
+                            "container_id": failed_receipt.container_id, "created_at": failed_receipt.created_at})
+            safe_print(cf006_failure_diagnostic(error, cf003_stage))
+        elif args.verify_flow_admission_db:
             safe_print(cf003_failure_diagnostic(error, cf003_stage))
         if project:
             for directory in (project.backend, project.frontend):
@@ -697,7 +748,7 @@ def main():
     finally:
         for signum in old_handlers:
             signal.signal(signum, signal.SIG_IGN)
-        cleanup_failed = False
+        cleanup_failed = secondary_cleanup_failed
         for child in reversed(children):
             try:
                 child.cleanup()
@@ -714,7 +765,9 @@ def main():
                 )
             except BaseException as error:
                 cleanup_failed = True
-                if args.verify_flow_admission_db:
+                if args.verify_flow_input_snapshot_db:
+                    safe_print(cf006_failure_diagnostic(error, "cleanup"))
+                elif args.verify_flow_admission_db:
                     safe_print(cf003_failure_diagnostic(error, "cleanup"))
                 safe_print(
                     {

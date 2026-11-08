@@ -42,6 +42,7 @@ from db.models.news.news_report import NewsReport
 # Flow
 from db.models.flow.flow_report import FlowReport
 from db.models.flow.flow_run import FlowRun
+from db.models.flow.input_snapshot import FlowInputSnapshot
 from db.models.flow.report_interpretation import FlowReportInterpretation
 from db.models.flow.report_verification import FlowReportVerification
 
@@ -75,6 +76,7 @@ __all__ = [
     "NewsReport",
     "FlowReport",
     "FlowRun",
+    "FlowInputSnapshot",
     "FlowReportInterpretation",
     "FlowReportVerification",
     "IndustryReport",

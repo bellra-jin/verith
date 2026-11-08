@@ -58,6 +58,35 @@ class EntryBoundary(unittest.TestCase):
         modules["agents.flow.infrastructure.token_cache"].__spec__.origin = str(ai / "agents/flow/infrastructure/adjacent.py")
         self.assertFalse(valid_flow_origins(source, modules))
 
+    def test_cf006_exact_sources_fixed_selection_and_db_only_order(self):
+        import ast
+        from scripts import check_safe as controller
+        expected = {
+            "backend/src/modules/flow/domain/input_snapshot.py",
+            "backend/src/modules/flow/application/input_preparation_service.py",
+            "backend/src/modules/flow/infrastructure/input_snapshot_repository.py",
+            "backend/db/models/flow/input_snapshot.py",
+            "backend/db/migrations/versions/20261108_c6001a7e0001_flow_input_snapshots.py",
+            "backend/scripts/cf006_input_snapshot_check.py",
+            "backend/tests/unit/test_cf006_flow_input_snapshot.py",
+        }
+        self.assertEqual(controller.CF006_SOURCES, expected)
+        self.assertEqual(controller.UNIT.count("tests/unit/test_cf006_flow_input_snapshot.py"), 1)
+        self.assertTrue(expected <= controller.NEW)
+        for name in expected:
+            self.assertTrue(controller.source_allowed(name))
+            self.assertFalse(controller.source_allowed(name + ".adjacent"))
+        root = Path(__file__).resolve().parents[2]
+        source = (root / "scripts/cf002_interactive_login.py").read_text()
+        self.assertIn('mode.add_argument("--verify-flow-input-snapshot-db", action="store_true")', source)
+        self.assertLess(source.index("result = asyncio.run(asyncio.wait_for(verify_input_snapshot(proof)"), source.index("project = prepare_projects"))
+        checker = (root / "scripts/cf006_input_snapshot_check.py").read_text()
+        tree = ast.parse(checker)
+        wrapper = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "verify_input_snapshot")
+        self.assertLess(ast.unparse(wrapper).index("verify_admission(proof)"), ast.unparse(wrapper).index("_verify(proof)"))
+        self.assertIn('normalized.startswith("CREATE TABLE FLOW_INPUT_SNAPSHOTS")', checker)
+        self.assertNotIn('normalized.startswith("CREATE TABLE FLOW_RUNS")', checker)
+
     def test_cf003_owned_home_is_scoped_without_tls_changes(self):
         from types import SimpleNamespace
         from scripts.cf003_admission_check import owned_postgres_home

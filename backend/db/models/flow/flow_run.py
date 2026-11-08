@@ -31,6 +31,7 @@ class FlowRun(Base):
     created_at: Mapped[datetime] = created_at()
 
     __table_args__ = (
+        UniqueConstraint("id", "owner_user_id", name="uq_flow_runs_id_owner"),
         UniqueConstraint("owner_user_id", "operation", "idempotency_key_digest", name=KEY_CONSTRAINT),
         UniqueConstraint("attempt_id", name="uq_flow_runs_attempt_id"),
         CheckConstraint("operation = 'flow'", name="ck_flow_run_operation"),

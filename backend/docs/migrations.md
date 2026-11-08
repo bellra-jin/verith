@@ -115,3 +115,10 @@ Compose 내부는 `postgres:5432` 그대로다. 포트 패치는 실제 migratio
 연결이 없으면 앱 URL 로딩 전에 실패한다. auth 행/소유권이 있으면 CF-002 downgrade는 거부된다.
 기존 앱/운영 DB에서 위 왕복·extension drop 검사를 실행하지 않는다.
 [CF-002 실행 증거](flow_auth_ownership.md), [포트 안내](../../docs/local_ports.md).
+
+
+## CF-006 입력 준비 revision
+
+`c6001a7e0001`의 parent는 `c3001a7e0001`이다. 신규 snapshot/제약/trigger를 한 transaction에서 만들고 기존 receipt/auth/report/index/stock을 backfill하지 않는다. 기존 pgcrypto만 사용한다.
+
+downgrade는 flow_runs ACCESS EXCLUSIVE → flow_input_snapshots ACCESS EXCLUSIVE 순서로 잠근 뒤 nonempty면 거부한다. 빈 경우에만 이번 테이블·함수·parent UNIQUE를 제거한다. 직접 DELETE/TRUNCATE나 trigger 해제로 시험을 정리하지 않는다. 실제 owned PG에서 기존 receipt upgrade 보존·빈 왕복·신규 CREATE 직후 rollback·첫 봉인/downgrade 양방향을 확인했으며 [실행 이력](../../docs/work/CF-006-flow-input-snapshot.md)에 실패와 최종 source 차이를 분리했다. 운영 DB 실행 안내나 장기 purge 정책이 아니다.

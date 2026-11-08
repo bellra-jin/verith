@@ -288,3 +288,10 @@ b1e9d4a7c2f1 다음 확장 revision만 추가한다. auth 데이터 또는 nonNU
 파괴적 downgrade를 거부한다. 테스트 migration은 승인된 일회용 PostgreSQL의 구성·readonly
 preflight 및 실제 SQLAlchemy 연결 재확인 후 동일 연결을 Alembic에 전달한다.
 실제 외부 OIDC 검증은 내부 합성 세션/owner PostgreSQL 검증과 구별한다.
+
+
+## CF-006 합성 입력 snapshot
+
+`c6001a7e0001`은 기존 `flow_runs`에 `UNIQUE(id, owner_user_id)`만 더하고 `flow_input_snapshots`를 추가한다. 기존 receipt 값·상태·요청 키를 수정하지 않는다.
+
+새 열은 id UUID PK, run_id/owner_user_id UUID, contract_version integer, mode TEXT, input_json TEXT, input_sha256 VARCHAR(64), sealed_at TIMESTAMPTZ이며 전부 NOT NULL이다. UNIQUE(run_id), (run_id,owner_user_id) composite FK/ON DELETE RESTRICT, version1/synthetic_only/finite 시각/UTF-8 128KiB/body version·mode/실제 SHA CHECK가 적용된다. no-op UPDATE·DELETE도 전용 trigger로 거부한다. domain의 canonical/schema/source 검증은 별도로 필요하다. 기존 receipt 자체의 DB 불변성이나 관리자 ALTER/DROP/TRUNCATE 차단을 추가한 것은 아니다. [내부 계약](flow_input_snapshot.md)을 따른다.

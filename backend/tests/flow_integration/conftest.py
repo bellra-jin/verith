@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from db.models.common.agent_report import AgentReport
 from db.models.flow.flow_report import FlowReport
-from src.api.services.flow_report_service import FlowReportService
+from src.modules.flow.application.report_service import FlowReportService
 from tests.db_safety import (
     UnsafeTestDatabase,
     preflight_database,
@@ -84,7 +84,7 @@ async def flow_db():
         )
         context.session = session
         from db.models.auth.models import AuthUser
-        from src.api.services.auth_service import issue_session
+        from src.modules.auth.application.session_service import issue_session
         from uuid import uuid4
 
         user = AuthUser(id=uuid4())

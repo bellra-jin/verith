@@ -2,9 +2,9 @@ export const dynamic = "force-dynamic";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
-import type { FlowReportEnvelope } from "@/api/flow";
-import {archiveHref, archivePagination, type ArchiveSearchParams} from "@/lib/archive-pagination";
-import {sessionBackendFetch} from "@/lib/session-backend";
+import type { FlowReportEnvelope } from "@/features/flow/api/reports";
+import {archiveHref, archivePagination, type ArchiveSearchParams} from "@/features/archive/lib/pagination";
+import {sessionBackendFetch} from "@/shared/server/session-backend";
 import {SessionControls} from "@/features/flow/components/session-controls";
 import { FlowReportView } from "@/features/flow/components/flow-report-view";
 

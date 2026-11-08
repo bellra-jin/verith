@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getFundamentalReport } from "@/api/fundamental";
-import { BackendApiError } from "@/api/backend";
+import { getFundamentalReport } from "@/features/fundamental/api/reports";
+import { BackendApiError } from "@/shared/api/backend";
 import { FundamentalActions } from "@/features/fundamental/components/fundamental-actions";
 
 export default async function FundamentalReportPage({

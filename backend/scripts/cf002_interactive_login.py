@@ -84,9 +84,9 @@ async def internal_check(proof):
     from sqlalchemy import delete
     from db.models.auth.models import AuthUser, AuthSession
     from db.models.common.stock import Stock
-    from src.api.services.auth_service import issue_session
-    from src.api.services.flow_report_service import FlowReportService
-    from src.api.schemas.flow_report import FlowReportSaveRequest
+    from src.modules.auth.application.session_service import issue_session
+    from src.modules.flow.application.report_service import FlowReportService
+    from src.modules.flow.api.schemas import FlowReportSaveRequest
     from tests.fixtures.flow_payload import make_flow_payload
 
     async with owned_session(proof) as session:

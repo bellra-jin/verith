@@ -1,5 +1,12 @@
 # veriθ Backend
 
+## 3-B 검사 입구 · 수용 미완료
+
+[실행표](../docs/development.md#3-b-검사-입구와-현재-차단)·[현재 차단/선택 범위](../docs/work/ST-001-stage-3-B.md)를 따른다.
+새 `scripts/check_safe.py`는 clean env의 기존 절대 .venv Python -I -S로 시작하며 고정 6개 unit을 선택한다.
+help/list/오류 인자와 보호 self-test 9개 통과·자기 root 정리를 직접 확인했다. v1.5의 exact Flow 입력·사본 origin 검증과 macOS metadata literal 읽기 보완 뒤 고정 6파일 244개 통과·guard 0·exit 0을 확인했다. 초기 실패는 보고서 이력으로 보존한다.
+아래 기존 직접 pytest나 DB 관리 명령으로 보호를 우회하지 않는다. 기존 fixture/단위 기대값은 변경하지 않았다.
+
 ## 공용 환경 참고 · ST-001 3-A
 
 [개발 환경 안내](../docs/development.md)·[Backend 변수 예제](../docs/examples/backend.env.example)·
@@ -83,7 +90,7 @@ uv run python -m scripts.seed_stock_aliases
 - PostgreSQL 이 실행 중이어야 하고, `DATABASE_URL`(포트 15432) 이 설정돼 있어야 한다.
 - 두 스크립트 모두 **idempotent** (`ON CONFLICT ... DO NOTHING`) — 여러 번 실행해도 기존 row 를 덮지 않는다.
 - `seed_stock_aliases` 는 참조 종목이 `stocks` 에 없으면 **부분 seed 없이 fail-fast** 하므로 반드시 `seed_stocks` 를 먼저 실행한다.
-- 별칭 정본은 `src/api/constants/stock_aliases.py`(변형만 — 공식 이름은 `stocks.stock_name`).
+- 별칭 정본은 `src/modules/stocks/domain/constants/stock_aliases.py`(변형만 — 공식 이름은 `stocks.stock_name`).
 
 **전체 종목 마스터 동기화(bootstrap 과 별개, 수동·네트워크):** 개발 10종 seed 는 bootstrap 이고, 전체
 국내 종목은 KIS 마스터를 `sync_stocks` 로 동기화한다. 기본 dry-run(DB 미변경), `--apply` 에서만 반영.

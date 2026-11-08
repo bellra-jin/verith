@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 from db.models.common.stock import Stock  # noqa: E402
 
 # 종목 정본은 backend 단일 정의(constants)에서 읽는다 — seed 는 별도 목록을 두지 않는다.
-from src.api.constants.stocks import SUPPORTED_STOCKS  # noqa: E402
+from src.modules.stocks.domain.constants.stocks import SUPPORTED_STOCKS  # noqa: E402
 
 
 async def seed(session: AsyncSession) -> dict:

@@ -14,7 +14,7 @@ from sqlalchemy import exists, func, select
 
 from db.models.auth.models import AuthIdentity, AuthSession, AuthUser
 from scripts.runner_owned_database import RunnerOwnedDatabase
-from src.api.services.auth_service import Principal, validate_principal
+from src.modules.auth.application.session_service import Principal, validate_principal
 
 
 class ControllerError(ValueError):
@@ -113,8 +113,8 @@ class LoginController:
         return {"A": "999987", "B": "999986"}[alias]
 
     async def seed(self, alias):
-        from src.api.schemas.flow_report import FlowReportSaveRequest
-        from src.api.services.flow_report_service import FlowReportService
+        from src.modules.flow.api.schemas import FlowReportSaveRequest
+        from src.modules.flow.application.report_service import FlowReportService
         from tests.fixtures.flow_payload import make_flow_payload
 
         bound = self._binding(alias)
@@ -147,7 +147,7 @@ class LoginController:
         }
 
     async def check_owner(self):
-        from src.api.services.flow_report_service import FlowReportService
+        from src.modules.flow.application.report_service import FlowReportService
 
         for alias, other in (("A", "B"), ("B", "A")):
             bound, foreign = self._binding(alias), self._binding(other)
@@ -194,7 +194,7 @@ class LoginController:
 
     async def delete_fixture(self, alias):
         """Only this controller's recorded synthetic IDs, never a blanket delete."""
-        from src.api.services.flow_report_service import FlowReportService
+        from src.modules.flow.application.report_service import FlowReportService
 
         bound = self._binding(alias)
         deleted = 0

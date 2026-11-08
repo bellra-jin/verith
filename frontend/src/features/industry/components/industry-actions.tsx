@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Download, Trash2 } from "lucide-react";
 
-import { deleteIndustryReport } from "@/api/industry";
+import { deleteIndustryReport } from "@/features/industry/api/reports";
 
 // industry 상세 상단 액션바 — 목록 복귀 · PDF 다운로드 · 삭제.
 // React 렌더라서 window.print() 로 바로 인쇄/PDF 저장이 된다(flow·technical 과 동일).

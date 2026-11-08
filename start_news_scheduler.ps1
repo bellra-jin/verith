@@ -40,4 +40,4 @@ Write-Host "──────────────────────�
 
 # import가 패키지 경로(src.agents.news.*)라 ai/ 루트에서 -m 으로 실행해야 함
 Set-Location $AiRoot
-& $Python -m src.agents.news.scheduler
+& $Python -m src.agents.news.application.scheduling

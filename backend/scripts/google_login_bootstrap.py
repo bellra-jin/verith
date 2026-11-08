@@ -92,9 +92,9 @@ async def runtime_write_probe(engine):
     from uuid import uuid4
     from sqlalchemy.ext.asyncio import AsyncSession
     from db.models.auth.models import AuthUser
-    from src.api.services.auth_service import issue_session
-    from src.api.services.flow_report_service import FlowReportService
-    from src.api.schemas.flow_report import FlowReportSaveRequest
+    from src.modules.auth.application.session_service import issue_session
+    from src.modules.flow.application.report_service import FlowReportService
+    from src.modules.flow.api.schemas import FlowReportSaveRequest
 
     async with engine.connect() as connection:
         outer = await connection.begin()
@@ -205,8 +205,8 @@ def bootstrap_backend(config):
     environment.update(credentials.backend_environment())
     os.environ.clear()
     os.environ.update(environment)
-    from src.api.config import settings
-    from src.api.auth.google import GoogleConfig
+    from src.shared.config import settings
+    from src.modules.auth.infrastructure.google_oidc import GoogleConfig
 
     GoogleConfig(
         settings.GOOGLE_CLIENT_ID,
@@ -234,8 +234,8 @@ def bootstrap_backend(config):
     from src.api.main import app
 
     if config["google_mode"] == "fake":
-        from src.api.routes import auth
-        from src.api.auth.google import GoogleOIDC
+        from src.modules.auth.api import router as auth
+        from src.modules.auth.infrastructure.google_oidc import GoogleOIDC
         import httpx
 
         def deny_google(request):

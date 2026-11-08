@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
-from src.api.errors import AppError, app_error_handler, validation_exception_handler
-from src.api.fundamental import router as fundamental_router
-from src.api.industry import router as industry_router
-from src.api.supervisor import router as supervisor_router
-from src.api.technical import router as technical_router
+from src.shared.api.errors import AppError, app_error_handler, validation_exception_handler
+from src.agents.fundamental.api.routes import router as fundamental_router
+from src.agents.industry.api.routes import router as industry_router
+from src.supervisor.api.routes import router as supervisor_router
+from src.agents.technical.api.routes import router as technical_router
 
 app = FastAPI(title="verith-ai")
 

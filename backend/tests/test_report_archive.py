@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from db.models.common.agent_report import AgentReport
 from db.models.common.stock import Stock
-from src.api.services.technical_report_service import build_archive_item
+from src.modules.technical.application.report_service import build_archive_item
 
 _ARCHIVE = "/api/reports/archive"
 

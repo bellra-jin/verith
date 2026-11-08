@@ -228,7 +228,7 @@ def prepare_projects(
                         project=name,
                     )
         for required in (
-            prepared.backend / "src/api/config.py",
+            prepared.backend / "src/shared/config.py",
             prepared.backend / "db/migrations/env.py",
             prepared.frontend / "next.config.ts",
             prepared.frontend / "package.json",
@@ -238,7 +238,7 @@ def prepare_projects(
                     "Required verification project source is missing"
                 )
         # Explicitly disable the temporary Backend dotenv source before any app import.
-        backend_config = prepared.backend / "src/api/config.py"
+        backend_config = prepared.backend / "src/shared/config.py"
         text = backend_config.read_text()
         if text.count("s = Settings()") != 1:
             raise LoginPreparationError("Unexpected Backend settings entry")

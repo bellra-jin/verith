@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { FileText, MessageSquareMore } from "lucide-react";
 
-import { formatDate, formatDateTime } from "@/lib/format";
-import { archiveItemHref } from "@/lib/report-links";
-import type { ArchiveItem } from "@/types/archive";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { BoldText } from "@/lib/bold-text";
+import { formatDate, formatDateTime } from "@/shared/lib/format";
+import { archiveItemHref } from "@/features/archive/lib/report-links";
+import type { ArchiveItem } from "@/shared/contracts/report";
+import { StatusBadge } from "@/shared/ui/status-badge";
+import { BoldText } from "@/shared/ui/bold-text";
 import { DeleteReportButton } from "./delete-report-button";
 
 function toneToStatusTone(tone?: string | null): "green" | "amber" | "red" | "neutral" | "gray" {

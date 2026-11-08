@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { AppShell } from "@/components/ui/app-shell";
-import { sessionBackendFetch } from "@/lib/session-backend";
+import { AppShell } from "@/shared/ui/app-shell";
+import { sessionBackendFetch } from "@/shared/server/session-backend";
 import { SessionControls } from "@/features/flow/components/session-controls";
-import { archiveHref, archivePagination, lastArchiveOffset, type ArchiveSearchParams } from "@/lib/archive-pagination";
+import { archiveHref, archivePagination, lastArchiveOffset, type ArchiveSearchParams } from "@/features/archive/lib/pagination";
 
 export const dynamic = "force-dynamic";
 

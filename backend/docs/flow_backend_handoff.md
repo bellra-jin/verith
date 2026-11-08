@@ -46,7 +46,7 @@ resolve가 없으면 unavailable/degraded 카드가 될 가능성이 높다.
 
 관련 근거:
 
-- AI 저장 명세: [ai/src/agents/flow/docs/storage-spec.md](../../ai/src/agents/flow/docs/storage-spec.md)
+- AI 저장 명세: [ai/docs/contracts/flow/storage-spec.md](../../ai/docs/contracts/flow/storage-spec.md)
 - backend root 테이블: [backend/db/models/flow/flow_report.py](../../backend/db/models/flow/flow_report.py)
 - backend 해석 테이블: [backend/db/models/flow/report_interpretation.py](../../backend/db/models/flow/report_interpretation.py)
 - backend 검증 테이블: [backend/db/models/flow/report_verification.py](../../backend/db/models/flow/report_verification.py)

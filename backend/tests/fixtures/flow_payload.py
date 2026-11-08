@@ -7,8 +7,8 @@ from uuid import uuid4
 _AI_SRC = str(Path(__file__).resolve().parents[3] / "ai" / "src")
 sys.path.append(_AI_SRC)
 try:
-    from agents.flow.export.to_json import build_payload
-    from agents.flow.schemas import GateResult
+    from agents.flow.api.payload import build_payload
+    from agents.flow.domain.models import GateResult
 finally:
     sys.path.remove(_AI_SRC)
 

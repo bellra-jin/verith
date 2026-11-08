@@ -19,7 +19,7 @@ Backend 가 `stocks`(공통 종목 마스터)를 KIS 공개 종목마스터로 �
 ## 2. 사용하는 tail 필드 (offset·width) — 실데이터 검산 확정
 `--inspect` 실데이터 앵커 검산으로 확정한 값이다(공식 field_specs 누적합은 tail 길이가 1 커서 group 이
 ' S'로 밀렸었다 — 실측으로 교정). **KOSPI/KOSDAQ 위치가 다르므로 시장별 spec 을 둔다**
-(`src/api/constants/kis_master.py`).
+(`src/modules/stocks/domain/constants/kis_master.py`).
 
 | 필드 | KOSPI (offset,w) | KOSDAQ (offset,w) | 용도 |
 |---|---|---|---|

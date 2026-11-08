@@ -11,8 +11,8 @@ import zipfile
 
 import pytest
 
-from src.api.clients.kis_master_client import KisMasterClient, KisMasterError
-from src.api.constants.kis_master import MARKET_KOSPI
+from src.modules.stocks.infrastructure.kis_master_client import KisMasterClient, KisMasterError
+from src.modules.stocks.domain.constants.kis_master import MARKET_KOSPI
 
 
 def _zip_of(payload: bytes, name: str = "kospi_code.mst") -> bytes:

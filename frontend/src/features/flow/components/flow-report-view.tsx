@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 
-import type { FlowPayload, FlowGate, FlowPriceRow } from "@/api/flow";
+import type { FlowPayload, FlowGate, FlowPriceRow } from "@/features/flow/api/reports";
 
 // flow 리포트를 payload(JSON)에서 그린다 — HTML 저장 안 함(storage-spec §0).
 // 디자인·파생 규칙은 flow 에이전트의 render(builder.py + supply_demand.html 목업)를 충실히 포팅:

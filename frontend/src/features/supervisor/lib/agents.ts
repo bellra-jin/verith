@@ -7,7 +7,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { AgentType } from "@/types/archive";
+import type { AgentType } from "@/shared/contracts/report";
 
 // 5개 서브에이전트의 표시 메타. 순서는 목업 typeLabels(재무→기술→뉴스→수급→산업)와 동일.
 // 파이프라인 스텝과 완료 후 "리포트 열기" 버튼이 이 메타를 공유한다.

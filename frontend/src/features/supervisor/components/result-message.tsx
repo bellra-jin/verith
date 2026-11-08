@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { ShieldCheck, FileText, ArrowRight, Loader2 } from "lucide-react";
 
-import type { SupervisorAnalyzeResponse } from "@/types/supervisor";
-import type { AgentType } from "@/types/archive";
+import type { SupervisorAnalyzeResponse } from "@/features/supervisor/model/types";
+import type { AgentType } from "@/shared/contracts/report";
 import { AGENT_META, AGENT_ORDER, agentReportHref } from "@/features/supervisor/lib/agents";
 
 // 파이프라인이 실제 저장까지 연결한 리포트 — agent 별 {report_id, 생성중} 상태.

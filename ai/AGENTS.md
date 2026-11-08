@@ -1,13 +1,17 @@
 # AI 서비스 작업 안내
 
+> **최종 구조 우선 계약:** ST-001 v1.15(명시 Flow 설정·최종 marker 정리)에 따라 불필요한 old shim을 제거하며 canonical 구현 하나로 정리한다. Flow 마지막3도 AI 루트 .env 명시 정책으로 이동했다. 실제 설정 값/AI 실행은 미검증이다. [진행 기록](../docs/work/ST-001-layout-progress.md)을 따른다.
+
+> **이동 결정 당시 기준:** ST-001 v1.10의 전 기능 실제 이동 승인은 v1.15 최종 적용/정리로 이어졌습니다. 아래 3-B 당시 폴더 비교 보류/병합 대기는 현재 이동의 선행조건이 아닙니다. [전체 진행 기록](../docs/work/ST-001-layout-progress.md)의 적용/정적/런타임 미검증을 구분하며, AI graph/config/모델 초기화나 새 검사 권한은 허용되지 않습니다.
+
 [상위 공통 안내](../AGENTS.md)·[문서 권위](../docs/documentation.md)와 해당 agent의 기존 로컬
 지침을 읽는다. 예를 들어 News 범위에는 [기존 CLAUDE](src/agents/news/CLAUDE.md)가 있다.
 이 안내는 현재 구조/예외를 설명하며 코드 이동·외부 모델 실행·새 DB 권한 부여 지시가 아니다.
 
 ## 실제 entry와 config
 
-FastAPI app은 [src/main.py](src/main.py)이며 [src/api](src/api)의 Technical/Supervisor/
-Fundamental/Industry router를 등록한다. 등록된 route가 현재 사용자에게 공개된 기능이라는 뜻은 아니다.
+FastAPI app은 [src/main.py](src/main.py)이며 [Technical router](src/agents/technical/api/routes.py)와 [Supervisor](src/supervisor/api/routes.py),
+[Fundamental](src/agents/fundamental/api/routes.py), [Industry](src/agents/industry/api/routes.py) router를 등록한다. 등록된 route가 현재 사용자에게 공개된 기능이라는 뜻은 아니다.
 설정은 소스를 읽어 확인하며 다음 module을 import해 private 값을 검사하지 않는다.
 
 | 영역 | 실제 config |
@@ -29,7 +33,7 @@ AI가 사용자 owner를 정하거나 외부 token을 앱 세션으로 대신 �
 
 ## Fundamental 직접 DB의 한정된 호환 사실
 
-[corp_code.py](src/agents/fundamental/data/corp_code.py)는 stock_corp_codes의 stock_code/
+[corp_code.py](src/agents/fundamental/infrastructure/data/corp_code.py)는 stock_corp_codes의 stock_code/
 corp_code/corp_name_from_dart를 parameterized SELECT로 조회한다. config는 VERITH_DB_URL 우선과
 DATABASE_URL alias를 수용한다. 이 구현을 보존하되 앱 credential을 AI로 복사하라는 안내를 만들지 않는다.
 코드가 SELECT라는 사실과 실제 role의 SELECT-only 권한은 다르며 **실제 최소 권한은 미확인**이다.
@@ -50,6 +54,8 @@ DATABASE_URL alias를 수용한다. 이 구현을 보존하되 앱 credential을
 - 3-A [환경 안내](../docs/development.md)·[AI 예제](../docs/examples/ai.env.example)는 비밀 없는 참고이며
   실제 설정/안전한 비활성화/실행 승인이 아니다. 3-C AI 안전 entry는 **미구현 후속**이다. 아직 없는 script/명령을 안내하거나
   전체 pytest/실제 수집·smoke를 기본 시작 절차로 실행하지 않는다. 3-B도 별도 선행 단계다.
-- 현재 문서 단계는 기능·unit/build/lint·AI/DB/Google/Docker 검사를 실행하지 않는다.
+- 당시 3-A 문서 전용 단계는 기능·unit/build/lint·AI/DB/Google/Docker 검사를 실행하지 않았다.
   과거 검사 보고와 이번 직접 검사를 구분하고 실제 인증 미검증/기존 lint 실패를 숨기지 않는다.
+현재 Backend/Frontend 3-B는 [구현·차단 기록](../docs/work/ST-001-stage-3-B.md)을 따른다.
+AI 3-C 안전 entry는 여전히 미구현이며 3-B helper를 AI 전체 pytest 실행 허가로 확대하지 않는다.
 큰 파일·agent 폴더 구조 분리는 비교 판단 전 보류하며 현재 branch에서 후속 구현을 누적하지 않는다.

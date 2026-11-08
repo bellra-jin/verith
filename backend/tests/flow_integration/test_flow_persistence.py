@@ -15,9 +15,9 @@ from db.models.common.stock import Stock
 from db.models.flow.flow_report import FlowReport
 from db.models.flow.report_interpretation import FlowReportInterpretation
 from db.models.flow.report_verification import FlowReportVerification
-from src.api.repositories import flow_report_repository as flow_repo
-from src.api.schemas.flow_report import FlowReportSaveRequest
-from src.api.services.flow_report_service import (
+from src.modules.flow.infrastructure import report_repository as flow_repo
+from src.modules.flow.api.schemas import FlowReportSaveRequest
+from src.modules.flow.application.report_service import (
     PAYLOAD_SNAPSHOT_KEY,
     STORAGE_FORMAT_KEY,
     FlowPayloadError,
@@ -79,7 +79,7 @@ async def test_postgres_legacy_v1_roundtrip(flow_db):
     root = await flow_repo.get_report(flow_db.session, report_id)
     interp = await flow_repo.get_interpretation(flow_db.session, report_id)
     verif = await flow_repo.get_verification(flow_db.session, report_id)
-    from src.api.services.flow_report_service import FlowReportService
+    from src.modules.flow.application.report_service import FlowReportService
 
     assert FlowReportService._reconstruct_payload(root, interp, verif, []) == payload
 
@@ -281,7 +281,7 @@ async def test_postgres_damaged_projection_fails_closed(flow_db, damage):
 async def test_postgres_failed_save_can_be_rolled_back_without_partial_rows(
     flow_db, monkeypatch
 ):
-    from src.api.services import flow_report_service as module
+    from src.modules.flow.application import report_service as module
 
     async def fail_index(*args, **kwargs):
         raise RuntimeError("synthetic index failure")

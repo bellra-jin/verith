@@ -15,7 +15,7 @@ from db.models.common.stock import Stock
 from db.models.common.stock_alias import StockAlias
 from scripts.seed_stock_aliases import seed as seed_aliases
 from scripts.seed_stocks import seed as seed_stocks
-from src.api.services.stock_resolver_service import StockResolverService
+from src.modules.stocks.application.resolver_service import StockResolverService
 
 # 결합형/우선주/흔한단어 검증용 종목. 일부(삼성전자·삼성전자우·카카오)는 representative canonical seed 로
 # 승격돼 dev DB 에 이미 있을 수 있으므로, in-tx 추가는 **멱등(on_conflict_do_nothing)** 으로 한다.

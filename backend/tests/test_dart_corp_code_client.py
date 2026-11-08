@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.clients.dart_corp_code_client import DartCorpCodeClient, DartCorpCodeError
+from src.modules.stocks.infrastructure.dart_corp_code_client import DartCorpCodeClient, DartCorpCodeError
 from tests.fixtures.dart_corp_code import CORP_XML, corp_zip
 
 

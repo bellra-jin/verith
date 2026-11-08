@@ -21,9 +21,9 @@ import pathlib
 from db.models.common.stock import Stock
 from scripts.seed_stock_aliases import seed as seed_aliases
 from scripts.seed_stocks import seed as seed_stocks
-from src.api.constants.stocks import REPRESENTATIVE_STOCKS, SUPPORTED_STOCKS
-from src.api.schemas.stock_resolve import StockResolveResponse
-from src.api.services.stock_resolver_service import StockResolverService
+from src.modules.stocks.domain.constants.stocks import REPRESENTATIVE_STOCKS, SUPPORTED_STOCKS
+from src.modules.stocks.api.schemas import StockResolveResponse
+from src.modules.stocks.application.resolver_service import StockResolverService
 
 _URL = "/api/stocks/resolve"
 # synthetic(실존 아님) 임의 종목 — seed/commit 되지 않아 격리·데이터주도 검증에 안전. 990xxx 대역.
@@ -96,8 +96,8 @@ async def test_resolver_does_not_check_technical_support(db_session):
 
 # ── 네트워크/AI 의존 없음 (구조적) ──────────────────────────────────────────
 def test_resolver_layer_has_no_network_or_ai_import():
-    import src.api.repositories.stock_repository as repo_mod
-    import src.api.services.stock_resolver_service as svc_mod
+    import src.modules.stocks.infrastructure.stock_repository as repo_mod
+    import src.modules.stocks.application.resolver_service as svc_mod
 
     for m in (svc_mod, repo_mod):
         src = pathlib.Path(m.__file__).read_text(encoding="utf-8")

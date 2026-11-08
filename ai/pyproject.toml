@@ -46,4 +46,4 @@ dev = [
 [tool.pytest.ini_options]
 # 테스트에서 `src.agents...` 를 import 할 수 있도록 ai/ 를 sys.path에 추가.
 pythonpath = ["."]
-testpaths = ["src"]
+testpaths = ["tests"]

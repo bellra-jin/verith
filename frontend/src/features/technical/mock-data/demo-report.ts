@@ -3,7 +3,7 @@ import type {
   TechnicalReportFollowupsReadModel,
   TechnicalReportReadModel,
   TechnicalTraceDetailReadModel,
-} from "@/types/technical";
+} from "@/features/technical/model/types";
 
 export const demoTechnicalReport: TechnicalReportReadModel = {
   report_id: "demo-technical-report",

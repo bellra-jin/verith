@@ -14,23 +14,11 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
-from src.api.schemas.flow_execution import (
-    CommonResponse,
-    ContractViolation,
-    DataObservation,
-    ErrorCode,
-    ExecutionContext,
-    FlowRunRequest,
-    FlowRunState,
-    IdempotencyReference,
-    SafeError,
-    bind_flow_result,
-    validate_result_binding,
-)
-from src.api.schemas.flow_payload import FlowPayloadV1, validate_flow_payload
-from src.api.schemas.flow_report import FlowReportSaveRequest
-from src.api.services import flow_report_service as service_module
-from src.api.services.flow_report_service import (
+from src.modules.flow.domain.execution import CommonResponse, ContractViolation, DataObservation, ErrorCode, ExecutionContext, FlowRunRequest, FlowRunState, IdempotencyReference, SafeError, bind_flow_result, validate_result_binding
+from src.modules.flow.domain.payload import FlowPayloadV1, validate_flow_payload
+from src.modules.flow.api.schemas import FlowReportSaveRequest
+from src.modules.flow.application import report_service as service_module
+from src.modules.flow.application.report_service import (
     PAYLOAD_SNAPSHOT_KEY,
     STORAGE_FORMAT_KEY,
     FlowPayloadError,
@@ -38,6 +26,36 @@ from src.api.services.flow_report_service import (
     FlowStoredPayloadError,
 )
 from tests.fixtures.flow_payload import make_flow_payload
+
+
+CANONICAL_RELOCATED_EXPORTS = {'src.agents.flow.api.payload': ['PAYLOAD_VERSION', 'derive_data_status', 'build_payload', 'to_json'], 'agents.flow.api.payload': ['PAYLOAD_VERSION', 'derive_data_status', 'build_payload', 'to_json'], 'src.agents.flow.domain.models': ['AgentInput', 'GateResult', 'SupplyDemandState', 'AgentOutput'], 'agents.flow.domain.models': ['AgentInput', 'GateResult', 'SupplyDemandState', 'AgentOutput'], 'src.shared.http.access_boundary': ['PUBLIC_ROUTES', 'AccessBoundary'], 'src.modules.auth.infrastructure.google_oidc': ['ISSUER', 'DISCOVERY', 'ENDPOINTS', 'LoginFailed', 'GoogleConfig', 'Attempt', 'Attempts', 'GoogleOIDC'], 'src.shared.infrastructure.clients.ai_client': ['_ANALYZE_PATH', '_FUNDAMENTAL_ANALYZE_PATH', '_INDUSTRY_ANALYZE_PATH', '_INDUSTRY_RENDER_PATH', 'AIClientError', 'AITimeoutError', 'AIUnavailableError', 'AIValidationError', 'AIContractError', 'AIClient'], 'src.modules.stocks.infrastructure.dart_corp_code_client': ['_DEFAULT_TIMEOUT', '_DEFAULT_MAX_BYTES', '_MEMBER_NAME', 'DartCorpCodeError', 'DartCorpCodeClient'], 'src.modules.stocks.infrastructure.kis_master_client': ['_URL', '_MST_NAME', '_DEFAULT_TIMEOUT', '_DEFAULT_MAX_BYTES', 'KisMasterError', 'KisMasterClient'], 'src.shared.config': ['_BACKEND_ROOT', '_ENV_FILE', 'Settings', '_load_settings', 'settings'], 'src.modules.news.domain.importance_rules': ['IMPORTANCE_W_VOLUME', 'IMPORTANCE_W_PUBLISHER', 'IMPORTANCE_W_SENTIMENT', 'IMPORTANCE_VOLUME_MODE', 'IMPORTANCE_PUBLISHER_WEIGHTS', 'IMPORTANCE_DEFAULT_PUBLISHER_WEIGHT'], 'src.modules.stocks.domain.constants.kis_master': ['FRONT_CODE', 'FRONT_STD', 'FRONT_NAME_START', 'KOSPI_TAIL', 'KOSDAQ_TAIL', 'KOSPI_FIELDS', 'KOSDAQ_FIELDS', 'MARKET_KOSPI', 'MARKET_KOSDAQ', 'FLAG_VALUE_SEMANTICS_VERIFIED', 'GROUP_CODE_STOCK', '_FLAG_SET_VALUES_PROVISIONAL', 'spac_flag_set', 'etp_flag_set'], 'src.modules.stocks.domain.constants.stock_aliases': ['ALIAS_SEED', 'REPRESENTATIVE_ALIAS_SEED'], 'src.modules.stocks.domain.constants.stock_match': ['JOSA_SUFFIXES', 'CONTEXT_SUFFIXES', 'SHORT_NAME_MAX_LEN'], 'src.modules.stocks.domain.constants.stocks': ['SUPPORTED_STOCKS', 'STOCK_NAMES', 'allowlist_name', 'REPRESENTATIVE_STOCKS'], 'src.modules.reports.infrastructure.agent_report_repository': ['count_reports', 'add', 'list_reports', 'delete_all_for_type', 'delete_for_technical', 'delete_all_technical'], 'src.modules.stocks.infrastructure.corp_code_repository': ['get_corp_code', 'get_all_corp_codes'], 'src.modules.flow.infrastructure.report_repository': ['ensure_stock', 'add_report', 'get_report', 'get_interpretation', 'get_verification', 'get_agent_indexes', 'get_report_parts', 'delete_agent_index', 'delete_root', 'eligible_flow_ids', 'get_owned_report', 'list_owned_indexes'], 'src.modules.fundamental.infrastructure.report_repository': ['ensure_stock', 'add_report', 'get_report', 'list_reports_by_stock', 'list_ratios', 'list_evidence', 'get_interpretation', 'get_verification', 'list_insights', 'list_filing_snippets', 'delete_agent_index', 'delete_root'], 'src.modules.industry.infrastructure.report_repository': ['add_report', 'get_report', 'list_reports', 'delete_agent_index', 'delete_root'], 'src.modules.news.infrastructure.news_graph_repository': ['_NEWSREF', '_identity', 'merge_graph', 'get_events_by_companies', 'get_events_by_ids', 'get_shared_events', 'companies_exist', 'cleanup_graph'], 'src.modules.news.infrastructure.report_repository': ['add_report', 'get_report', 'delete_root', 'delete_agent_index'], 'src.modules.news.infrastructure.news_repository': ['_UPSERT_UPDATE_COLS', 'upsert_articles', 'get_existing_urls', 'get_articles_by_event', 'get_events_near_embedding', 'get_event_article_stats', 'get_event_aggregates', 'get_daily_article_counts', 'delete_articles_before', 'get_articles_for_importance', 'get_event_centroid_inputs'], 'src.modules.stocks.infrastructure.stock_repository': ['get_all_stocks', 'get_all_aliases'], 'src.modules.technical.infrastructure.report_repository': ['ensure_stock', 'add_report', 'get_report', 'get_stock', 'list_followups', 'add_followup', 'count_followups', 'followup_counts_for', 'list_technical_reports', 'count_technical_reports', 'get_stocks', 'get_interpretation', 'delete_root', 'delete_all_roots'], 'src.modules.auth.api.router': ['router', 'SESSION_COOKIE', 'CORRELATION_COOKIE', 'PRIVATE', 'get_oidc', 'configured', 'secure_cookie', 'unique_cookie', 'validate_local_auth_host', 'request_principal', 'login', 'callback', 'session_info', 'logout'], 'src.modules.flow.api.router': ['FlowContractRoute', 'router', 'get_flow_report_service', 'save_flow_report', 'list_flow_reports', 'get_flow_report', 'delete_all_flow_reports', 'delete_flow_report'], 'src.modules.fundamental.api.router': ['router', 'get_fundamental_report_service', 'create_fundamental_report', 'save_fundamental_report', 'list_fundamental_reports', 'get_fundamental_report', 'delete_all_fundamental_reports', 'delete_fundamental_report'], 'src.modules.industry.api.router': ['router', 'get_industry_report_service', 'create_industry_report', 'list_industry_reports', 'get_industry_report', 'get_industry_report_html', 'delete_all_industry_reports', 'delete_industry_report'], 'src.modules.news.api.router': ['router', 'save_batch', 'existing_urls', 'cleanup', 'get_event_stats', 'get_event_articles', 'query_subject', 'query_shared', 'events_recent', 'events_merge_candidates', 'create_report', 'get_report', 'delete_all_reports', 'delete_report'], 'src.modules.reports.api.router': ['router', 'list_report_archive', 'list_reports'], 'src.modules.stocks.api.router': ['logger', 'router', 'resolve_stock'], 'src.modules.technical.api.router': ['router', 'create_technical_report', 'list_technical_reports', 'get_technical_report', 'get_technical_report_trace', 'create_technical_report_followup', 'get_technical_report_followups', 'delete_all_technical_reports', 'delete_technical_report'], 'src.modules.reports.api.report_schemas': ['AgentReportListItem', 'ReportsListResponse'], 'src.modules.fundamental.domain.ai_output': ['_Lenient', 'FundamentalErdPayloadMirror', 'FundamentalMetaMirror', 'FundamentalAgentOutputMirror'], 'src.modules.technical.domain.ai_output': ['_Lenient', 'MirrorRegime', 'MirrorSignalSummary', 'MirrorTechnicalSignal', 'MirrorRiskItem', 'MirrorRisk', 'MirrorChart', 'MirrorInterpretation', 'MirrorVerification', 'TechnicalAgentOutputMirror'], 'src.modules.flow.domain.execution': ['ContractModel', 'NonBlank', 'FlowRunRequest', 'ExecutionReference', 'ExecutionContext', 'FlowResultReference', 'ErrorCode', 'ERRORS', 'SafeError', 'ContractViolation', 'T', 'CommonResponse', 'FlowRunState', 'DataObservation', 'IdempotencyReference', 'bind_flow_result', 'validate_result_binding'], 'src.modules.flow.domain.payload': ['_iso_date', '_uuid_string', 'ISODate', 'UUIDString', 'Ticker', 'Number', 'PayloadPart', 'FlowMeta', 'FlowStrength', 'FlowConsecutive', 'FlowPersistence', 'FlowDaily', 'FlowOwnership', 'FlowPriceDaily', 'FlowSignals', 'FlowGate', 'FlowVerification', 'FlowInterpretationMeta', 'FlowPayloadV1', 'validate_flow_payload', '_check_json_types', 'validate_storage_string', 'projection_values_equal'], 'src.modules.flow.api.schemas': ['FlowReportSaveRequest', 'FlowReportEnvelope', 'FlowReportListResponse'], 'src.modules.fundamental.api.schemas': ['FundamentalReportCreateRequest', 'FundamentalReportSaveRequest', 'FundamentalReportEnvelope', 'FundamentalReportListResponse'], 'src.modules.industry.api.schemas': ['IndustryReportCreateRequest', 'IndustryReportEnvelope', 'IndustryReportListResponse'], 'src.modules.news.api.schemas': ['SentimentLabel', 'ArticleIn', 'NodeLabel', 'RelType', 'GraphNode', 'GraphRelationship', 'GraphBatch', 'NewsBatchSaveRequest', 'SaveResponse', 'ExistingUrlsRequest', 'ExistingUrlsResponse', 'CleanupResponse', 'ArticleRef', 'EventArticleStats', 'CandidateEvent', 'MergeCandidateQuery', 'SentimentGauge', 'Event', 'EventWithArticles', 'DailyCount', 'SubjectQueryResponse'], 'src.modules.news.api.report_schemas': ['NewsReportCreateRequest', 'NewsReportEnvelope'], 'src.modules.reports.api.archive_schemas': ['ArchiveCardStock', 'ArchiveCard', 'ArchiveCardStatus', 'ArchiveCardMeta', 'ArchiveItem', 'ArchiveListResponse'], 'src.modules.stocks.api.schemas': ['MatchType', 'ResolveStatus', 'ResolveReason', 'StockResolveRequest', 'ResolvedStock', 'StockCandidate', 'StockResolveResponse'], 'src.modules.technical.api.schemas': ['TechnicalReportCreateRequest', 'StockBlock', 'MetaBlock', 'SummaryBlock', 'InterpretationBlock', 'DriversBlock', 'SignalItem', 'SignalsBlock', 'RiskItemBlock', 'RisksBlock', 'ChartItem', 'ChartsBlock', 'VerificationBlock', 'GenerationPathBlock', 'DataQualityBlock', 'VerificationSummaryBlock', 'StabilityBlock', 'TraceFlagsBlock', 'TraceSummaryBlock', 'SignalQualityBlock', 'VerificationGateBlock', 'SourceLinkageBlock', 'TrustSummaryBlock', 'AnnotationBrief', 'IndicatorCalcBasis', 'IndicatorCard', 'TechnicalReportReadModel', 'ChartItemFull', 'TechnicalChartsReadModel', 'TraceStepItem', 'TraceOverallBlock', 'TechnicalTraceDetailReadModel', 'FollowupContextBlock', 'FollowupCreateRequest', 'FollowupItem', 'FollowupReportSummary', 'ListSummaryBlock', 'ListStatusBlock', 'ListEngagementBlock', 'ListMetaBlock', 'TechnicalReportListItem', 'TechnicalReportListResponse', 'TechnicalReportFollowupsReadModel'], 'src.modules.auth.application.session_service': ['AuthenticationRequired', 'Principal', 'token_digest', 'link_verified_identity', 'issue_session', 'authenticate', 'validate_principal', 'revoke_session', 'csrf_token', 'verify_csrf'], 'src.modules.stocks.application.corp_code_sync_service': ['_DEFAULT_MIN', 'CorpCodeSyncError', 'CorpCodeSyncSummary', 'sync_corp_codes'], 'src.modules.stocks.domain.dart_corp_code_parser': ['CorpCodeParseError', 'CorpCodeRecord', 'CorpCodeParseResult', '_text', '_valid_modify_date', 'parse_corp_code'], 'src.modules.flow.application.report_service': ['PAYLOAD_SNAPSHOT_KEY', 'STORAGE_FORMAT_KEY', 'STORAGE_FORMAT', 'FlowPayloadError', 'FlowStoredPayloadError', 'FlowReportService'], 'src.modules.fundamental.application.report_service': ['_parse_dt', '_uuid', '_decimal', '_model_dict', '_REPORT_FIELDS', '_RATIO_FIELDS', '_EVIDENCE_FIELDS', '_INTERPRETATION_FIELDS', '_VERIFICATION_FIELDS', '_INSIGHT_FIELDS', '_SNIPPET_FIELDS', 'FundamentalReportService'], 'src.modules.news.domain.importance': ['_VOLUME_TRANSFORMS', '_DEFAULT_VOLUME_MODE', '_WS_RE', '_ArticleLike', '_normalize_publisher', '_volume_transform', 'publisher_weight', 'sentiment_magnitude', 'compute_importance'], 'src.modules.industry.application.report_service': ['_parse_dt', '_d', '_require_str', '_validate_payload', '_answer_text', '_headline', 'IndustryReportService'], 'src.modules.news.application.cleanup_service': ['logger', '_ROLLING_HOURS', 'NewsCleanupService'], 'src.modules.news.application.graph_query_service': ['_REP_ARTICLE_LIMIT', '_centroid', '_as_uuid', 'NewsGraphQueryService'], 'src.modules.news.application.query_service': ['NewsQueryService'], 'src.modules.news.application.report_service': ['_parse_dt', 'NewsReportService'], 'src.modules.news.application.ingest_service': ['logger', '_to_row', 'NewsService'], 'src.modules.stocks.domain.stock_master_parser': ['_CODE_RE', '_market_spec', 'StockRecord', 'ParseResult', '_tail_field', 'inspect_rows', 'parse_master'], 'src.modules.stocks.application.resolver_service': ['_CODE_RE', '_TOKEN_RE', '_MAX_RUN', '_MATCH_PRIORITY', '_MAX_CANDIDATES', '_CONTEXT_SET', '_STRIP_SUFFIXES', 'EmptyQueryError', '_Entry', '_Match', '_Cand', 'StockResolverService'], 'src.modules.stocks.application.stock_sync_service': ['_DEFAULT_MIN', 'StockSyncError', 'SyncSummary', 'sync_stocks'], 'src.modules.technical.application.report_service': ['_parse_dt', '_d', '_list', 'build_read_model', '_SNAPSHOT_REGIME_KEYS', '_SNAPSHOT_BIAS_KEYS', '_SNAPSHOT_STATUS_KEYS', '_SNAPSHOT_SCORE_KEYS', '_SNAPSHOT_ASOF_KEYS', '_first', '_followup_context', '_followup_item', '_SNAPSHOT_VERSION', '_parent_context_snapshot', 'build_followups_read_model', '_CONSENSUS_LABELS', 'build_charts_read_model', 'build_trace_detail', '_INDICATOR_TITLE', '_SIGNAL_LABEL', '_INDICATOR_ANNOTATION_KINDS', '_PATTERN_CANDIDATE_KINDS', '_NUM_RE', '_MA_ROWS', '_RSI_POINTS', '_VOL_BARS', '_metric_num', '_annotation_briefs', '_daily_chart_data', '_ma_series', '_calc_basis', 'build_indicator_cards', '_derive_status', 'build_list_item', '_ARCHIVE_TYPE_LABEL', '_ARCHIVE_DETAIL_BASE', '_clip', '_archive_tone', 'build_archive_item', 'TechnicalReportService'], 'src.modules.stocks.domain.text_normalize': ['_DISALLOWED', 'normalize_stock_text']}
+
+def test_relocation_public_contract_baseline(monkeypatch):
+    """Compare public schemas/JSON with the protected pre-move capture."""
+    import hashlib
+    from pydantic import BaseModel
+    from src.api import main
+    from src.modules.flow.domain import execution as flow_execution, payload as flow_payload
+    from src.modules.flow.api import schemas as flow_report
+    from tests.fixtures import flow_payload as fixture_module
+
+    monkeypatch.setattr(fixture_module, "uuid4", lambda: UUID("00000000-0000-4000-8000-000000000001"))
+    schemas = {}
+    for module in (flow_execution, flow_payload, flow_report):
+        for name, value in vars(module).items():
+            if (not name.startswith("_") and name != "AgentReportListItem" and isinstance(value, type)
+                    and issubclass(value, BaseModel) and value is not BaseModel):
+                schemas[name] = value.model_json_schema()
+    values = {"openapi": main.app.openapi(), "schemas": schemas, "payload": make_flow_payload()}
+    digests = {name: hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+               for name, value in values.items()}
+    # Filled from the pre-move protected worker, never from post-move output.
+    expected = {
+        "openapi": "dbec0f00b8c57c5a906639c7763e83e38f7c847e1ee5a4116342450a2195bc24",
+        "payload": "a60b8618350693c42cebdf75b72d22163b2145f77857b7285dc614262d72af5a",
+        "schemas": "91065e01c38b32b5a39a8746b8dc8ca216f471580eb2c59f0d5262065e20772b",
+    }
+    assert digests == expected
 
 
 @pytest.fixture
@@ -109,7 +127,7 @@ INVALID_VALUES = [
 
 @pytest.fixture
 def memory(monkeypatch):
-    from src.api.services.auth_service import Principal
+    from src.modules.auth.application.session_service import Principal
     from datetime import UTC, datetime, timedelta
 
     principal = Principal(
@@ -185,7 +203,7 @@ def memory(monkeypatch):
 @pytest.fixture
 async def client(memory):
     # Load settings only after isolated_environment and no_network are active.
-    from src.api.routes.flow_reports import get_flow_report_service, router
+    from src.modules.flow.api.router import get_flow_report_service, router
 
     app = FastAPI()
     app.include_router(router)
@@ -664,11 +682,9 @@ async def test_new_snapshot_projection_damage_is_rejected_without_legacy_fallbac
 async def test_all_flow_list_paths_reject_inconsistent_snapshot(
     memory, payload, endpoint
 ):
-    from src.api.routes.flow_reports import get_flow_report_service
-    from src.api.routes.flow_reports import (
-        router as flow_router,
-    )
-    from src.api.routes.reports import router as common_router
+    from src.modules.flow.api.router import get_flow_report_service
+    from src.modules.flow.api.router import router as flow_router
+    from src.modules.reports.api.router import router as common_router
 
     await memory.service.save_report(
         FlowReportSaveRequest(payload=payload, question="질문")
@@ -761,3 +777,441 @@ def test_valid_unicode_and_literal_escape_sequences_are_preserved(payload):
     original = copy.deepcopy(payload)
     request = FlowReportSaveRequest(payload=payload, question="질문😀")
     assert request.payload == original
+
+
+@pytest.mark.parametrize(
+    "old_name,new_name,names",
+    [('src.api.schemas.flow_payload',
+      'src.modules.flow.domain.payload',
+      ['_iso_date',
+       '_uuid_string',
+       'ISODate',
+       'UUIDString',
+       'Ticker',
+       'Number',
+       'PayloadPart',
+       'FlowMeta',
+       'FlowStrength',
+       'FlowConsecutive',
+       'FlowPersistence',
+       'FlowDaily',
+       'FlowOwnership',
+       'FlowPriceDaily',
+       'FlowSignals',
+       'FlowGate',
+       'FlowVerification',
+       'FlowInterpretationMeta',
+       'FlowPayloadV1',
+       'validate_flow_payload',
+       '_check_json_types',
+       'validate_storage_string',
+       'projection_values_equal']),
+     ('src.api.schemas.flow_execution',
+      'src.modules.flow.domain.execution',
+      ['ContractModel',
+       'NonBlank',
+       'FlowRunRequest',
+       'ExecutionReference',
+       'ExecutionContext',
+       'FlowResultReference',
+       'ErrorCode',
+       'ERRORS',
+       'SafeError',
+       'ContractViolation',
+       'T',
+       'CommonResponse',
+       'FlowRunState',
+       'DataObservation',
+       'IdempotencyReference',
+       'bind_flow_result',
+       'validate_result_binding']),
+     ('src.api.schemas.flow_report',
+      'src.modules.flow.api.schemas',
+      ['FlowReportSaveRequest', 'FlowReportEnvelope', 'FlowReportListResponse']),
+     ('src.api.routes.flow_reports',
+      'src.modules.flow.api.router',
+      ['FlowContractRoute',
+       'router',
+       'get_flow_report_service',
+       'save_flow_report',
+       'list_flow_reports',
+       'get_flow_report',
+       'delete_all_flow_reports',
+       'delete_flow_report']),
+     ('agents.flow.schemas',
+      'agents.flow.domain.models',
+      ['AgentInput', 'GateResult', 'SupplyDemandState', 'AgentOutput']),
+     ('agents.flow.export.to_json',
+      'agents.flow.api.payload',
+      ['PAYLOAD_VERSION', 'derive_data_status', 'build_payload', 'to_json'])],
+)
+def test_relocated_exports_have_canonical_origin_without_shims(old_name, new_name, names):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(new_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if new_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*new_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*old_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in names:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == new_name
+    if hasattr(canonical, "router"):
+        from src.api.main import app
+        # Installed FastAPI represents include_router with a lazy wrapper;
+        # leaf APIRoutes are not flattened into app.routes.
+        registered = [item for item in app.routes
+                      if getattr(item, "original_router", None) is canonical.router]
+        assert len(registered) == 1
+        paths = app.openapi()["paths"]
+        for route in canonical.router.routes:
+            for method in route.methods:
+                assert method.lower() in paths[route.path]
+
+
+def test_relocated_flow_service_repository_use_canonical_patch_namespace(monkeypatch):
+    from src.modules.flow.application import report_service as canonical_service
+    from src.modules.flow.infrastructure import report_repository as canonical_repository
+
+    assert service_module is canonical_service
+    assert canonical_service.FlowReportService.__module__ == canonical_service.__name__
+    assert canonical_repository.get_owned_report.__module__ == canonical_repository.__name__
+    assert canonical_service.flow_repo is canonical_repository
+    sentinel = object()
+    monkeypatch.setattr(canonical_service, "validate_principal", sentinel)
+    assert canonical_service.FlowReportService.save_report.__globals__["validate_principal"] is sentinel
+    monkeypatch.setattr(canonical_repository, "get_owned_report", sentinel)
+    assert canonical_service.flow_repo.get_owned_report is sentinel
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.clients.dart_corp_code_client',
+      'src.modules.stocks.infrastructure.dart_corp_code_client'),
+     ('src.api.clients.kis_master_client', 'src.modules.stocks.infrastructure.kis_master_client'),
+     ('src.api.constants.kis_master', 'src.modules.stocks.domain.constants.kis_master'),
+     ('src.api.constants.stock_aliases', 'src.modules.stocks.domain.constants.stock_aliases'),
+     ('src.api.constants.stock_match', 'src.modules.stocks.domain.constants.stock_match'),
+     ('src.api.constants.stocks', 'src.modules.stocks.domain.constants.stocks'),
+     ('src.api.repositories.corp_code_repository',
+      'src.modules.stocks.infrastructure.corp_code_repository'),
+     ('src.api.repositories.stock_repository',
+      'src.modules.stocks.infrastructure.stock_repository'),
+     ('src.api.routes.stocks', 'src.modules.stocks.api.router'),
+     ('src.api.schemas.stock_resolve', 'src.modules.stocks.api.schemas'),
+     ('src.api.services.corp_code_sync_service',
+      'src.modules.stocks.application.corp_code_sync_service'),
+     ('src.api.services.dart_corp_code_parser', 'src.modules.stocks.domain.dart_corp_code_parser'),
+     ('src.api.services.stock_master_parser', 'src.modules.stocks.domain.stock_master_parser'),
+     ('src.api.services.stock_resolver_service',
+      'src.modules.stocks.application.resolver_service'),
+     ('src.api.services.stock_sync_service', 'src.modules.stocks.application.stock_sync_service'),
+     ('src.api.text_normalize', 'src.modules.stocks.domain.text_normalize')],
+)
+def test_stocks_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.repositories.technical_report_repository',
+      'src.modules.technical.infrastructure.report_repository'),
+     ('src.api.routes.technical_reports', 'src.modules.technical.api.router'),
+     ('src.api.schemas.ai_technical_output', 'src.modules.technical.domain.ai_output'),
+     ('src.api.schemas.technical_report', 'src.modules.technical.api.schemas'),
+     ('src.api.services.technical_report_service',
+      'src.modules.technical.application.report_service')],
+)
+def test_technical_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.repositories.fundamental_report_repository',
+      'src.modules.fundamental.infrastructure.report_repository'),
+     ('src.api.routes.fundamental_reports', 'src.modules.fundamental.api.router'),
+     ('src.api.schemas.ai_fundamental_output', 'src.modules.fundamental.domain.ai_output'),
+     ('src.api.schemas.fundamental_report', 'src.modules.fundamental.api.schemas'),
+     ('src.api.services.fundamental_report_service',
+      'src.modules.fundamental.application.report_service')],
+)
+def test_fundamental_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize("status_code", [200, 422, 504, 503])
+async def test_fundamental_adapter_contract_with_memory_transport(status_code):
+    import httpx
+    from src.shared.infrastructure.clients.ai_client import AIClient, AITimeoutError, AIUnavailableError, AIValidationError
+
+    seen = []
+    payload = {"request_id": "synthetic", "ticker": "005930"}
+    def respond(request):
+        seen.append((request.method, request.url.path, json.loads(request.content)))
+        return httpx.Response(status_code, json={"synthetic": True})
+    client = AIClient("http://memory.invalid", 1, transport=httpx.MockTransport(respond))
+    if status_code == 200:
+        assert await client.analyze_fundamental(payload) == {"synthetic": True}
+    else:
+        expected = {422: AIValidationError, 504: AITimeoutError, 503: AIUnavailableError}[status_code]
+        with pytest.raises(expected):
+            await client.analyze_fundamental(payload)
+    assert seen == [("POST", "/internal/fundamental/analyze", payload)]
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.repositories.industry_report_repository',
+      'src.modules.industry.infrastructure.report_repository'),
+     ('src.api.routes.industry_reports', 'src.modules.industry.api.router'),
+     ('src.api.schemas.industry_report', 'src.modules.industry.api.schemas'),
+     ('src.api.services.industry_report_service',
+      'src.modules.industry.application.report_service')],
+)
+def test_industry_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize("method,path,is_html", [
+    ("analyze_industry", "/internal/industry/analyze", False),
+    ("render_industry_html", "/internal/industry/render", True),
+])
+@pytest.mark.parametrize("status_code", [200, 422, 504, 503])
+async def test_industry_adapter_contract_with_memory_transport(method, path, is_html, status_code):
+    import httpx
+    from src.shared.infrastructure.clients.ai_client import AIClient, AITimeoutError, AIUnavailableError, AIValidationError
+
+    seen = []
+    payload = {"request_id": "synthetic", "ticker": "005930"}
+    def respond(request):
+        seen.append((request.method, request.url.path, json.loads(request.content)))
+        if is_html:
+            return httpx.Response(status_code, text="<html>synthetic</html>")
+        return httpx.Response(status_code, json={"synthetic": True})
+    client = AIClient("http://memory.invalid", 1, transport=httpx.MockTransport(respond))
+    if status_code == 200:
+        result = await getattr(client, method)(payload)
+        assert result == ("<html>synthetic</html>" if is_html else {"synthetic": True})
+    else:
+        expected = {422: AIValidationError, 504: AITimeoutError, 503: AIUnavailableError}[status_code]
+        with pytest.raises(expected):
+            await getattr(client, method)(payload)
+    assert seen == [("POST", path, payload)]
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.constants.importance', 'src.modules.news.domain.importance_rules'),
+     ('src.api.repositories.news_graph_repository',
+      'src.modules.news.infrastructure.news_graph_repository'),
+     ('src.api.repositories.news_report_repository',
+      'src.modules.news.infrastructure.report_repository'),
+     ('src.api.repositories.news_repository', 'src.modules.news.infrastructure.news_repository'),
+     ('src.api.routes.news', 'src.modules.news.api.router'),
+     ('src.api.schemas.news', 'src.modules.news.api.schemas'),
+     ('src.api.schemas.news_report', 'src.modules.news.api.report_schemas'),
+     ('src.api.services.importance', 'src.modules.news.domain.importance'),
+     ('src.api.services.news_cleanup_service', 'src.modules.news.application.cleanup_service'),
+     ('src.api.services.news_graph_query_service',
+      'src.modules.news.application.graph_query_service'),
+     ('src.api.services.news_query_service', 'src.modules.news.application.query_service'),
+     ('src.api.services.news_report_service', 'src.modules.news.application.report_service'),
+     ('src.api.services.news_service', 'src.modules.news.application.ingest_service')],
+)
+def test_news_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.repositories.agent_report_repository',
+      'src.modules.reports.infrastructure.agent_report_repository'),
+     ('src.api.routes.reports', 'src.modules.reports.api.router'),
+     ('src.api.schemas.agent_report', 'src.modules.reports.api.report_schemas'),
+     ('src.api.schemas.report_archive', 'src.modules.reports.api.archive_schemas')],
+)
+def test_reports_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.auth.google', 'src.modules.auth.infrastructure.google_oidc'),
+     ('src.api.routes.auth', 'src.modules.auth.api.router'),
+     ('src.api.services.auth_service', 'src.modules.auth.application.session_service')],
+)
+def test_auth_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+@pytest.mark.parametrize(
+    "legacy_name,canonical_name",
+    [('src.api.access_boundary', 'src.shared.http.access_boundary'),
+     ('src.api.clients.ai_client', 'src.shared.infrastructure.clients.ai_client'),
+     ('src.api.config', 'src.shared.config')],
+)
+def test_shared_canonical_exports_origins_without_shims(legacy_name, canonical_name):
+    import importlib
+    from pathlib import Path
+
+    canonical = importlib.import_module(canonical_name)
+    backend = Path(__file__).resolve().parents[2]
+    source_root = backend.parent / "ai/src" if canonical_name.startswith("agents.") else backend
+    expected = source_root.joinpath(*canonical_name.split(".")).with_suffix(".py")
+    removed = source_root.joinpath(*legacy_name.split(".")).with_suffix(".py")
+    assert Path(canonical.__spec__.origin).resolve() == expected
+    assert expected.is_file()
+    assert not removed.exists()
+    for name in CANONICAL_RELOCATED_EXPORTS[canonical_name]:
+        value = getattr(canonical, name)
+        if callable(value) and getattr(value, "__name__", None) == name:
+            assert value.__module__ == canonical_name
+
+
+def test_relocated_settings_root_singleton_and_dependencies():
+    from pathlib import Path
+    from src.shared import config as canonical_config
+    from src.api import main
+    from db import session
+    from src.modules.auth.api import router as auth_router
+
+    backend = Path(__file__).resolve().parents[2]
+    assert canonical_config._BACKEND_ROOT == backend
+    assert canonical_config._ENV_FILE == backend / ".env"
+    assert main.settings is canonical_config.settings
+    assert auth_router.settings is canonical_config.settings
+    assert session.settings is canonical_config.settings
+    assert auth_router.get_session is session.get_session
+
+
+def test_current_copied_python_consumers_have_no_removed_module_imports():
+    import ast
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[2]
+    removed = set()
+    for feature in CANONICAL_RELOCATED_EXPORTS:
+        # Deleted paths are explicit metadata in parametrized origin cases.
+        assert feature.startswith(("src.modules.", "src.shared.", "src.agents.flow.", "agents.flow."))
+    tree = ast.parse(Path(__file__).read_text())
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name.endswith("without_shims"):
+            cases = node.decorator_list[0].args[1]
+            for case in ast.literal_eval(cases):
+                removed.add(case[0])
+    assert len(removed) == 59  # Includes AI two; Flow service/repository use live globals below.
+    removed.update({"src.api.services.flow_report_service", "src.api.repositories.flow_report_repository"})
+    assert len(removed) == 61
+    for source in sorted((backend / "src").rglob("*.py")) + sorted((backend / "db").rglob("*.py")) + [backend / "tests/fixtures/flow_payload.py"]:
+        package = list(source.relative_to(backend).with_suffix("").parts[:-1])
+        for node in ast.walk(ast.parse(source.read_text())):
+            if isinstance(node, ast.Import):
+                assert all(alias.name not in removed for alias in node.names), source
+            elif isinstance(node, ast.ImportFrom):
+                base = ".".join(package[:len(package)-node.level+1] + (node.module.split(".") if node.module else [])) if node.level else node.module
+                assert base not in removed, source
+                assert all((base + "." + alias.name) not in removed for alias in node.names), source

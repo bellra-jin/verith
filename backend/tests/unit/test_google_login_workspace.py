@@ -20,7 +20,7 @@ from scripts.google_login_workspace import (
 def fake_project(tmp_path):
     repo = tmp_path / "repo"
     files = {
-        "backend/src/api/config.py": "# synthetic configuration source\ns = Settings()\n",
+        "backend/src/shared/config.py": "# synthetic configuration source\ns = Settings()\n",
         "backend/db/migrations/env.py": "# synthetic migration source\n",
         "backend/alembic.ini": "[alembic]\n",
         "backend/.env": "GOOGLE_CLIENT_SECRET=FAKE_PRIVATE_NEVER_READ\n",
@@ -62,7 +62,7 @@ def test_copy_does_not_open_env_and_cleanup_preserves_original_and_dependencies(
     prepared.cleanup()
     assert not prepared.root.exists()
     assert (fake_project / "frontend/node_modules/marker.txt").is_file()
-    assert (fake_project / "backend/src/api/config.py").is_file()
+    assert (fake_project / "backend/src/shared/config.py").is_file()
 
 
 @pytest.mark.parametrize(
@@ -78,7 +78,7 @@ def test_unsafe_copy_fails_and_removes_only_its_workspace(fake_project, damage):
             "fake credential material"
         )
     if damage == "missing_config":
-        (fake_project / "backend/src/api/config.py").unlink()
+        (fake_project / "backend/src/shared/config.py").unlink()
     if damage == "unknown_config":
         (fake_project / "frontend/next.config.ts").write_text("unexpected fake config")
     before = set(fake_project.parent.iterdir())

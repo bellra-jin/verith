@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Printer, Trash2 } from "lucide-react";
 
-import { deleteFlowReport } from "@/api/flow";
+import { deleteFlowReport } from "@/features/flow/api/reports";
 
 // flow 상세 상단 액션바 — 목록 복귀 · 인쇄(PDF) · 삭제. flow 상세는 iframe 이 아니라
 // React 렌더라서 window.print() 로 바로 인쇄/PDF 저장이 된다(technical 과 동일).

@@ -6,13 +6,7 @@ parser 가 이 bytes 를 decode→slice 하면 실제 파일과 동일하게 동
 
 from __future__ import annotations
 
-from src.api.constants.kis_master import (
-    KOSDAQ_FIELDS,
-    KOSDAQ_TAIL,
-    KOSPI_FIELDS,
-    KOSPI_TAIL,
-    MARKET_KOSPI,
-)
+from src.modules.stocks.domain.constants.kis_master import KOSDAQ_FIELDS, KOSDAQ_TAIL, KOSPI_FIELDS, KOSPI_TAIL, MARKET_KOSPI
 
 
 def mst_line(

@@ -9,8 +9,8 @@ from db.models.common.stock import Stock
 from db.models.common.stock_alias import StockAlias
 from scripts.seed_stock_aliases import seed as seed_aliases
 from scripts.seed_stocks import seed as seed_stocks
-from src.api.services.stock_resolver_service import StockResolverService
-from src.api.text_normalize import normalize_stock_text
+from src.modules.stocks.application.resolver_service import StockResolverService
+from src.modules.stocks.domain.text_normalize import normalize_stock_text
 
 _NONEXISTENT = "존재하지않는테스트종목zzz"  # 실존 종목 가정에 의존하지 않는 not_found 입력
 

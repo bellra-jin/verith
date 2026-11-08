@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getNewsReport } from "@/api/news";
-import { BackendApiError } from "@/api/backend";
+import { getNewsReport } from "@/features/news/api/reports";
+import { BackendApiError } from "@/shared/api/backend";
 import { NewsReportView } from "@/features/news/components/news-report-view";
 import { NewsActions } from "@/features/news/components/news-actions";
 

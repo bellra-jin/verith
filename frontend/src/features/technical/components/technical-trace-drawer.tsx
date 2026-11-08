@@ -15,8 +15,8 @@ import {
   Workflow,
 } from "lucide-react";
 
-import type { TechnicalTraceDetailReadModel, TechnicalReportReadModel } from "@/types/technical";
-import { StatusBadge } from "@/components/ui/status-badge";
+import type { TechnicalTraceDetailReadModel, TechnicalReportReadModel } from "@/features/technical/model/types";
+import { StatusBadge } from "@/shared/ui/status-badge";
 
 const METHOD_ITEMS = [
   {

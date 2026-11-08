@@ -1,4 +1,4 @@
-import { AppShell } from "@/components/ui/app-shell";
+import { AppShell } from "@/shared/ui/app-shell";
 
 export const metadata = { title: "veriθ · 새 분석 준비 중" };
 

@@ -14,7 +14,7 @@ import pytest_asyncio
 from db.graph.driver import get_graph_session
 from db.models.news.news import News
 from db.session import get_session
-from src.api.repositories import news_graph_repository as graph_repo
+from src.modules.news.infrastructure import news_graph_repository as graph_repo
 from src.api.main import app
 
 EVENT_A = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000000")

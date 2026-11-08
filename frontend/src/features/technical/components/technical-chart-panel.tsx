@@ -23,8 +23,8 @@ import {
 } from "recharts";
 import { MousePointerClick, Info, GitCommitHorizontal, History } from "lucide-react";
 
-import type { TechnicalChartsReadModel } from "@/types/technical";
-import { formatNumber } from "@/lib/format";
+import type { TechnicalChartsReadModel } from "@/features/technical/model/types";
+import { formatNumber } from "@/shared/lib/format";
 import {
   type ChartAnnotation,
   candleDate,
@@ -34,7 +34,7 @@ import {
   getPriceChartAnnotations,
   getRsiAnnotations,
   partitionAnnotationsByKind,
-} from "@/lib/technical-chart";
+} from "@/features/technical/lib/chart";
 
 function findClosestDateIndex(dateStr: string | null | undefined, data: PricePoint[]): number {
   if (!dateStr || data.length === 0) return -1;

@@ -10,7 +10,7 @@ from db.models.common.agent_report import AgentReport
 from db.models.flow.flow_report import FlowReport
 from scripts.cf002_interactive_login import database_status, owned_session
 from scripts.google_login_controller import ControllerError, LoginController
-from src.api.services.auth_service import issue_session, link_verified_identity
+from src.modules.auth.application.session_service import issue_session, link_verified_identity
 
 
 async def verify_controller(proof):
@@ -80,7 +80,7 @@ async def verify_controller(proof):
     seed_b = await controller.command("seed-B")
     # A newly made owner-NULL legacy fixture, never reassignment of existing data.
     from uuid import uuid4
-    from src.api.services.flow_report_service import FlowReportService
+    from src.modules.flow.application.report_service import FlowReportService
 
     legacy_id = uuid4()
     async with owned_session(proof) as session:

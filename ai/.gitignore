@@ -1,3 +1,8 @@
 # technical agent 로컬 trace(관측) — 커밋 안 함
 traces/
 *.jsonl
+!/evals/news/datasets/event_goldset.jsonl
+!/evals/news/datasets/kg_goldset.jsonl
+!/evals/news/datasets/qa_goldset.jsonl
+!/evals/news/datasets/retriever_goldset.jsonl
+!/evals/news/datasets/sentiment_goldset.jsonl

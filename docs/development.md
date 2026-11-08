@@ -1,5 +1,9 @@
 # 공용 환경 참고와 실행 경계
 
+> **최종 구조 우선 계약:** ST-001 v1.15(명시 Flow 설정·최종 marker 정리)에 따라 불필요한 old shim을 제거하며 canonical 구현 하나로 정리한다. Flow 마지막3도 AI 루트 .env 명시 정책으로 이동했다. 실제 설정 값/AI 실행은 미검증이다. [진행 기록](work/ST-001-layout-progress.md)을 따른다.
+
+> **현재 안내 — ST-001 v1.10:** 실제 폴더 이동은 [전체 진행 기록](work/ST-001-layout-progress.md)을 따릅니다. 아래 3-A 정적 검사·v1.7/3-B 보류·실패·명령은 당시 이력이며 재배치 비교 대기는 해소됐습니다. 현재 FE-01 standalone core/image tsc와 대상 lint는 통과했고 full generated-route/typegen·build/HTTP 검증은 별개로 미완료입니다. manifest/과거 source hash·수치를 새 상태로 덮어쓰지 않습니다.
+
 ST-001 v1.3 / 3-A, 검토 기준 `6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef`.
 공용 source를 정적으로 읽어 작성한 **비밀 없는 참고 예제**다. 실제 설정·안전한 검사 bootstrap·
 실행 승인이나 검증된 재현 환경이 아니다. 예제를 .env로 복사하거나 source하는 명령을 제공하지 않는다.
@@ -22,8 +26,8 @@ Backend는 SQLAlchemy/asyncpg, Fundamental은 psycopg를 사용한다. 선언/lo
 
 ## Frontend 변수
 
-소비자는 [공개 helper](../frontend/src/api/backend.ts),
-[서버 URL/SSR](../frontend/src/lib/session-backend.ts), [BFF](../frontend/src/lib/session-proxy.ts)다.
+소비자는 [공개 helper](../frontend/src/shared/api/backend.ts),
+[서버 URL/SSR](../frontend/src/shared/server/session-backend.ts), [BFF](../frontend/src/shared/server/session-proxy.ts)다.
 
 | 변수 | 형식·비밀 여부 | 필수 조건·미설정/빈 값 동작 |
 |---|---|---|
@@ -37,7 +41,7 @@ Host/Origin/forwarded-host는 3200 계약을 유지한다. localhost와 127.0.0.
 
 ## Backend 변수
 
-[Settings/_load_settings](../backend/src/api/config.py)를 import하지 않고 읽었다. 기본 dotenv source는
+[Settings/_load_settings](../backend/src/shared/config.py)를 import하지 않고 읽었다. 기본 dotenv source는
 backend/.env이며 프로세스 환경과 별개로 읽힐 수 있다. 예제를 두었다고 dotenv가 비활성화되지 않는다.
 아래 빈 값은 자격 발급이나 인증 비활성화 성공이 아니다.
 
@@ -58,8 +62,8 @@ backend/.env이며 프로세스 환경과 별개로 읽힐 수 있다. 예제를
 | DART_API_KEY | 비밀, 빈 값 | corp-code 수동 sync 전용, 일반 startup 비필수. 실제 sync 전 별도 확인 |
 | DART_BASE_URL | 공개 URL | 기본/예제 https://opendart.fss.or.kr/api. 미설정 시 기본, 빈 값은 문자열로 남음 |
 
-인증 근거는 [Google 구성 검증](../backend/src/api/auth/google.py)과
-[auth routes](../backend/src/api/routes/auth.py)다. 고정 Google discovery/최소 openid/PKCE·
+인증 근거는 [Google 구성 검증](../backend/src/modules/auth/infrastructure/google_oidc.py)과
+[auth routes](../backend/src/modules/auth/api/router.py)다. 고정 Google discovery/최소 openid/PKCE·
 state/nonce/서버 폐기 세션 정책을 바꾸지 않는다. 예제에는 실제 키·테스트 사용자·브라우저 자격이 없다.
 
 ## AI 변수와 fallback
@@ -75,16 +79,16 @@ AI 전체 차단·오프라인 모드·안전한 비활성화가 아니다.** �
 | BACKEND_BASE_URL | [Supervisor config](../ai/src/supervisor/config.py), [News config](../ai/src/agents/news/config.py) | HTTP URL, 비밀 아님. 양쪽 모두 미설정/빈 값/공백이면 localhost:8200. resolver/News 호출 때 연결될 수 있음 |
 | BACKEND_AUTH_TOKEN | 같은 News config | 선택 비밀. 미설정/공백은 None. 기존 주석의 내부망 전제를 새 서비스 인증/현재 차단 해제로 간주하지 않음 |
 | OPENAI_API_KEY / OPENAI_MODEL | [Technical loader](../ai/src/agents/technical/config.py), [Fundamental config](../ai/src/agents/fundamental/core/config.py) | 비밀키/모델명. Technical은 loader 호출 시 둘의 공백을 거부하며 모델 기본 없음. Fundamental은 키 기본 빈 값, 모델 기존 기본 있음; 빈 키는 OpenAI fallback 생략, Qwen까지 중단하는 조건 아님 |
-| OPENAI_API_KEY | [Flow explain](../ai/src/agents/flow/nodes/explain.py), [Flow config](../ai/src/agents/flow/config.py) | SDK 사용 비밀. Flow 모델은 코드 INTERPRETER_MODEL에서 결정하며 OPENAI_MODEL 예제로 바뀌지 않음. dotenv 탐색 후 호출 가능, 키 누락 처리는 SDK/해당 경로에 의존 |
-| KIS_API_KEY / KIS_API_SECRET / KIS_BASE_URL | [Flow KIS](../ai/src/agents/flow/core/kis_client.py), Technical loader | 비밀 2개/HTTP URL. Flow는 누락/빈 값, Technical은 strip 후 공백까지 거부. 두 loader 모두 dotenv 탐색 가능. 예제 endpoint는 .invalid placeholder이며 실제 연결/토큰 발급 안 함 |
+| OPENAI_API_KEY | [Flow explain](../ai/src/agents/flow/infrastructure/llm/explain.py), [Flow config](../ai/src/agents/flow/config.py) | SDK 사용 비밀. Flow 모델은 코드 INTERPRETER_MODEL에서 결정하며 OPENAI_MODEL 예제로 바뀌지 않음. 명시 AI 루트 .env/기존 process env 사용 후 호출 가능, 키 누락 처리는 SDK/해당 경로에 의존 |
+| KIS_API_KEY / KIS_API_SECRET / KIS_BASE_URL | [Flow KIS](../ai/src/agents/flow/infrastructure/kis_client.py), Technical loader | 비밀 2개/HTTP URL. Flow는 누락/빈 값, Technical은 strip 후 공백까지 거부. Flow는 AI 루트 .env만 명시하고 process env의 빈 값도 우선한다. Technical의 기존 loader 탐색은 별도다. 예제 endpoint는 .invalid placeholder이며 실제 연결/토큰 발급 안 함 |
 | DART_API_KEY / DART_BASE_URL | Fundamental config, [Industry config](../ai/src/agents/industry/config.py) | 비밀/공개 URL. Fundamental은 빈 키/기존 공개 URL 기본. Industry get_dart_api_key는 호출 시 누락/빈 값 거부(strip 없음). Industry는 이 DART_BASE_URL 변수를 읽지 않음 |
-| VERITH_DB_URL | Fundamental config·[corp_code](../ai/src/agents/fundamental/data/corp_code.py) | 선택 비밀 DSN, 기본 빈 값. `AliasChoices("VERITH_DB_URL", "DATABASE_URL")` 순서로 앱 자격을 받을 위험. psycopg는 `postgresql://...` 안내; 기존 asyncpg 접두 정규화 호환도 유지 |
+| VERITH_DB_URL | Fundamental config·[corp_code](../ai/src/agents/fundamental/infrastructure/data/corp_code.py) | 선택 비밀 DSN, 기본 빈 값. `AliasChoices("VERITH_DB_URL", "DATABASE_URL")` 순서로 앱 자격을 받을 위험. psycopg는 `postgresql://...` 안내; 기존 asyncpg 접두 정규화 호환도 유지 |
 | QWEN_API_KEY / QWEN_BASE_URL | Fundamental config, News config | **endpoint URL, API 비밀키 아님**. Fundamental은 QWEN_API_KEY가 첫 alias, QWEN_BASE_URL이 둘째; 첫 값이 명시 빈 값이어도 둘째로 넘어간다고 보장하지 않음. 미설정은 기존 별도 모델 주소, 빈 문자열은 보존. News는 QWEN_API_KEY만 읽고 누락/빈 값/공백이면 기존 localhost 추론 주소로 fallback |
-| QWEN_MODEL / LLM_DUMMY_KEY | Fundamental config·[LLM client](../ai/src/agents/fundamental/interpret/llm_client.py) | 모델명/SDK key 필드. 기존 코드 기본값 존재, 명시 빈 값은 그대로. 예제는 승인 대상 placeholder, 기본 무인증 endpoint의 dummy를 유효 서비스 인증으로 간주하지 않음 |
+| QWEN_MODEL / LLM_DUMMY_KEY | Fundamental config·[LLM client](../ai/src/agents/fundamental/infrastructure/llm/client.py) | 모델명/SDK key 필드. 기존 코드 기본값 존재, 명시 빈 값은 그대로. 예제는 승인 대상 placeholder, 기본 무인증 endpoint의 dummy를 유효 서비스 인증으로 간주하지 않음 |
 | LLM_BASE_URL / LLM_MODEL / LLM_API_KEY | Industry get_chat_llm | URL/모델명/비밀. 미설정이면 기존 별도 endpoint/모델/dummy 기본, 명시 빈 값은 그대로 전달. 예제 .invalid/빈 키는 전체 호출 차단 장치 아님 |
 | EMBED_MODEL | Industry get_embeddings | 모델 식별자, 비밀 아님. 미설정이면 기존 기본, 명시 빈 값도 모델 loader에 전달. News의 EMBED_MODEL 상수는 이 env를 읽지 않음. News FinBERT/embedding과 Industry 모델 로딩·다운로드 가능 |
 | NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD | Industry get_neo4j_graph | Bolt URI/사용자/비밀. 호출 시 누락/빈 값 거부(strip 없음). Backend NEO4J_USER와 다름. 실제 권한·Cypher 접근 미검증 |
-| REDIS_URL | [Technical cache factory](../ai/src/agents/technical/services/cache_service.py) | 선택 연결 URL/자격 포함 시 비밀. 미설정/빈 값·dependency/연결 오류는 cache 생략 경로. 기본 Supervisor cache=None. 공백은 명시 차단 보장 아님 |
+| REDIS_URL | [Technical cache factory](../ai/src/agents/technical/infrastructure/cache_service.py) | 선택 연결 URL/자격 포함 시 비밀. 미설정/빈 값·dependency/연결 오류는 cache 생략 경로. 기본 Supervisor cache=None. 공백은 명시 차단 보장 아님 |
 
 Fundamental `_backend_lookup()`는 URL 공백을 거부하지만 `resolve_details()`는 저장소 불가/조회 오류를
 받아 지원 종목의 `static_fallback`으로 진행할 수 있다. `source`와 `CORP_CODE_FALLBACK_STATIC` risk flag·
@@ -131,7 +135,7 @@ container_name·external/named volume·host bind·host network·privileged·sock
 실제 image의 추가 volume·임시 자원 수명/자기 자원만 종료할 절차를 나중에 검증해야 하며 기존 자료를
 가져오거나 삭제하지 않는다. 실서비스·실제 계정·운영/private 데이터용으로 검증한 구성이 아니다.
 
-## 이번 정적 검사와 후속
+## 3-A 당시 정적 검사와 후속 (이력)
 
 새 YAML bytes만 기존 PyYAML SafeLoader 계열로 비확장 파싱하고 중복 key/unsafe tag/예상 밖 구조를
 거부한다. `${...}`는 문자열로 유지하며 parent env를 대입하지 않는다. env 예제는 명시 새 stream만
@@ -141,5 +145,191 @@ container_name·external/named volume·host bind·host network·privileged·sock
 기능/unit/build/lint·새 설치·앱 import·Docker up/build/pull/config·migration/seed·DB/Google/AI·
 모델 다운로드는 미실행이다. 기존 전체 lint 실패와 실제 인증 미검증은 [검증 상태](documentation.md#검증-상태와-이력)에
 보존한다. private override/권한/실제 포트·namespace는 미확인이다. 3-A 검토/사용자 병합 후 최신 develop에서
-3-B Backend/Frontend 수집 전 안전 entry → 3-C AI 안전 entry를 각각 구현한다. 둘 다 아직 미구현이며
+3-B Backend/Frontend 수집 전 안전 entry → 3-C AI 안전 entry를 각각 구현한다. 3-A 당시 둘 다 미구현이었으며,
+현재 3-B 구현/차단은 아래 실행표로 구분한다. 3-C는 여전히 미구현이다.
 큰 파일 분리/구조 재배치는 비교 판단 전 보류한다.
+
+<a id="3-b-검사-입구와-현재-차단"></a>
+
+## 3-B 검사 입구와 당시 차단 (이력)
+
+ST-001 v1.7 / 기준 `7df12403848e480f223767232540d4c2c055ba5e`의 당시 구현 이력이다.
+위 3-A 변수/미설정 표는 그대로 유지하며 실제 설정이나 앱 동작을 바꾸지 않는다.
+[전체 결과·차단·선택 목록](work/ST-001-stage-3-B.md)을 함께 읽는다. **3-B 전체 수용은 미완료**다.
+
+공개 시작은 저장소 루트에서 기존 검증된 절대 interpreter와 clean env다. 아래 `$(pwd -P)`는
+현재 저장소의 canonical 절대 경로를 shell이 결정하며 worker가 임의 interpreter를 선택하는 입력이 아니다.
+현재 Backend는 backend/.venv/bin/python(Python 3.12), Node는 /opt/homebrew/Cellar/node/22.7.0/bin/node다.
+symlink의 canonical target·소유/mode·dependency root와 고정 패키지 존재를 입구에서 재확인한다.
+다른 interpreter/새 설치로 조용히 대체하지 않는다.
+
+```sh
+/usr/bin/env -i LANG=en_US.UTF-8 TZ=UTC "$(pwd -P)/backend/.venv/bin/python" -I -S backend/scripts/check_safe.py --help
+/usr/bin/env -i LANG=en_US.UTF-8 TZ=UTC OPENSSL_CONF=/dev/null /opt/homebrew/Cellar/node/22.7.0/bin/node frontend/scripts/check-local-ports.mjs --help
+```
+
+| 입구/모드 | 대상·자원·한도 | 현재 직접 확인 |
+|---|---|---|
+| 양쪽 --help / list / 오류 인자 | 앱/pytest import·사본/소켓/worker 전에 처리 | 각 help/list 0, external/추가 인자 2. 합성 startup canary 미실행 |
+| Backend self-test / unit / 무인자 전체 | fresh -I -S bootstrap, 자기 사본·고정 6개·pytest_asyncio만 명시. 90/300/전체 480초 | v1.5에서 보호 self-test 9개·고정 6파일 unit 244개 통과, guard 0/exit 0/root 정리 완료 |
+| Frontend self-test / unit | 자기 사본·기존 unit 3개와 새 안전성 회귀, 각 120초 | 최신 v1.7 self-test 20개·unit 4파일 35개 실제 통과, exit 0/root 정리 완료 |
+| Frontend build / local-http | 사본 next build --webpack(900초) → production start·가짜 Backend HTTP 3개(각 120초/ready 60초), 정확한 자기 port/nonce/child | v1.5/v1.6 실패 이력 보존. v1.7 진단 1회는 22회 거부/ID 10개로 exit 78·root 정리. HTTP는 미실행. 원본 dev server/기존 build 사용 금지 |
+| Frontend type / lint | 사본 tsc --noEmit --incremental false, 기존 9개+변경 mjs/cjs/HTTP helper 대상 ESLint, 각 180초 | 미실행/미검증. 전체 lint 기존 실패는 유지 |
+
+기능 모드 명령은 위 clean launch의 마지막 --help를 지정된 고정 모드로 바꾼 형태다.
+임의 추가 argv/plugin/경로/db/external 모드를 받지 않는다. npm의 `check:safe` alias도 npm/Node 자체를
+clean env로 시작해야 하며 상속 NODE_OPTIONS 등을 script가 나중에 지워 해결했다고 주장하지 않는다.
+이 문서에서는 검증하지 않은 npm 시작 경로를 권장 명령으로 제공하지 않는다.
+
+초기 `/usr/bin/sandbox-exec` 사전 실행은 exit 71 / `sandbox_apply: Operation not permitted`로 실패했다.
+자기 합성 canary 폴더는 제거됐고 pytest/Next/app worker는 시작하지 않았다. 이후 같은 최소 probe 한정으로 정식 require_escalated를 요청·실행했으나 -6(SIGABRT)/빈 stderr로 실패했으며 원인은 미확인이다. 두 결과는 3-B 기록에 구분한다. OS 보호를 무음 해제하거나
+같은 거부 동작을 다른 실행 경로로 우회하지 않는다. 먼저 OS 보호가 허용되는 실행 대상/권한을 확인하고
+같은 최소 profile과 자기 합성 canary 검증부터 이어가야 한다. 그 전에는 위 기능 모드를 실행하지 않는다.
+OS 허용 환경에서의 실패 수정·독립 검토·실제 선택 검사 완료가 남아 있으며 새로운 기능 설계 결정은 없다.
+
+threat model은 검토한 source/신뢰 dependency의 우발적 private 읽기·자격 상속·외부 연결 방지다.
+악의적 native/dependency·관리자·동시 공격자에 대한 완전한 OS 격리를 주장하지 않는다.
+Python audit/JS preload는 OS 보호의 대체물이 아니다. 현재 profile/native/자손·TCP/UDP/DNS 통제,
+copy race/신호/timeout/TERM·KILL 뒤 종료·HTTP listener 소유 등 실제 회귀는 **미검증**이다.
+
+구현은 Git metadata와 명시 source 교집합/고정 신규 예외, symlink·비정규·hardlink·변경 identity 거부,
+검증 dependency의 읽기 전용 참조를 사용한다. home/repo 전체 읽기나 parent env 전체 상속을 허용하지 않는다.
+소유 임시 root는 nonce/identity와 함께 보관하고 자기 자원만 종료/삭제한다. OS profile은 원본 private/
+외부 network·사본 밖 쓰기를 제한하는 방식이며 실제 지원은 canary 통과 후에만 인정한다.
+실제 DB/Google/AI/모델·Docker·migration/seed·원본 앱 기동·기존 자료 변경은 이 입구의 대상이 아니다.
+3-C는 3-B 검토·수정/검증과 사용자 병합 이후 별도 단계이며 구조 재배치/큰 파일 분리는 계속 보류한다.
+
+
+### 최소 native probe 후속 결과 · 본 검사는 별도
+
+설치 macOS dyld-support.sb의 root literal 필수 규칙을 확인하고, root 디렉터리 자체의 read/existence만
+두 controller profile에 추가했다. subpath /·home/repo 전체 허용이나 system.sb import는 추가하지 않았다.
+과거 use_default exit 71 / 정식 승인 경로 -6 실패는 위 이력이며 다음 결과로 덮어쓰지 않는다.
+
+새 근거에 한정한 정식 require_escalated 최소 probe에서는 true 0·허용 자기 canary cat 0/정확한 내용·
+금지 자기 canary cat 1/정상 권한 거부가 순서대로 통과했고 자기 폴더 제거를 확인했다.
+이는 standalone 최소 profile의 결과이며 본 Python/Node profile·native/자손·네트워크/신호·안전 회귀·
+unit/build/HTTP/type/lint 통과가 아니다. 상세 명령/범위/다음 실행 조건은 3-B 기록에 있다.
+컨트롤러도 같은 양성/음성 판정 순서로 보완했으며 signal/timeout/초기화 실패는 차단 성공으로 세지 않는다.
+본 self-test를 공식 실행 경로에서 수행할 별도 조건/권한과 최종 코드 검토를 확인한 뒤 단계적으로 이어간다.
+
+
+### 보호 self-test 실제 통과와 Native OpenSSL 시작 조건
+
+별도 공식 require_escalated 요청으로 Backend self-test 9개를 실행해 9개 통과/exit 0/자기 root 제거를 확인했다.
+Frontend의 첫 self-test는 suite 수집 전에 Node native startup이 기존 OpenSSL 기본 설정 경로에 접근하려다가
+OS profile에 거부돼 controller exit 78(내부 Node 1)로 종료됐고 root는 제거됐다. 해당 설정 파일 내용은 읽거나
+출력하지 않았으며 그 경로를 profile에 허용하지 않았다.
+
+현재 Frontend 공개 clean launch는 **OPENSSL_CONF=/dev/null을 Node 시작 전에** 지정한다. controller가 나중에
+환경을 지우는 조치로 native startup을 소급 보호하지 않는다. 생성한 child env·CJS allowlist·fork env·HTTP helper도
+같은 고정값을 유지하고 자손 spawn에서 다른 값/누락은 거부한다. 프로세스 전용 설정 입력 제한이며 OS/전역
+OpenSSL 설정 파일·서비스 보안을 변경하거나 TLS 검증을 해제하지 않는다. 이 조건의 최종 Frontend self-test는
+14개 통과/실패·skip·cancel·todo 0/exit 0/자기 root 제거를 확인했다.
+
+실제 self-test의 언어 guard·OS filesystem/native startup·정상 child/group 종료와 합성 로직 회귀는 확인했지만,
+실제 Next fork/IPC·강제 TERM/KILL·live bind/HTTP·실제 DB/Google/AI 통과가 아니다. 다음은 Backend 고정 6개 unit과
+Frontend 기존 unit의 개별 공식 실행 조건 확인이며, unit 결과 확인 뒤 build/HTTP/type/대상 lint로 확장한다.
+이번 self-test 승인을 전체 workload 실행 허가로 확대하지 않는다. 정확한 명령·시점·실패/수정·해시·한계는 3-B 기록에 있다.
+
+
+### 선택 unit 결과 · Backend 입력 범위 답변 대기
+
+Frontend는 추적된 BFF source `src/app/api/private/[...path]/route.ts`가 일반 private-directory 이름 차단에
+잘못 분류돼 두 번째 unit에서 ENOENT가 발생했다. 승인된 tracked src 입력의 정확한 이 파일만 구분하고
+나머지 private/secret/key/dump/backup/log 경로 거부·index/identity/race 검증을 유지했다. 원본 route나
+기존 unit 기대값은 변경하지 않았다. 공식 재실행에서 4파일·29개(10+2+3+14)가 모두 통과했고 root 제거를 확인했다.
+
+Backend 첫 unit은 pytest 기본 logger의 /dev/null 쓰기를 Python guard가 거부해 수집 전에 중단됐다.
+외부 쓰기 예외를 추가하지 않고 생성 pytest config의 log_file을 자기 root/pytest.log로 지정했다.
+재실행은 수집 96개/실행 0/수집 오류 1/guard 위반 1로 중단됐고 root는 제거됐다. Flow fixture가 요구하는
+`ai/src/agents/flow/export/to_json.py`와 `ai/src/agents/flow/schemas.py`가 현재 허용 입력 목록에 없다.
+두 파일은 stdlib/Pydantic의 순수 exporter/schema이지만 현 정본의 config 3개 data-copy 제한 밖이므로
+추가 복사/import는 정본 답변 전 보류한다. fixture 대체·skip·AI 전체 복사·원본 AI root 직접 import로 우회하지 않는다.
+남은 read guard 위반의 원인도 해소 전 통과로 표시하지 않는다. 정확한 근거/대안은 3-B 기록에 있다.
+
+
+### v1.5 적용 결과 · 선택 Backend 통과 / Frontend build 차단
+
+정본 v1.5의 정확한 Flow source 2개를 기존 사본 검증 아래 추가했고, namespace 3개와 module 2개의 origin을
+자기 사본의 정확한 경로와 대조한다. 인접 AI source/config/__init__는 추가하지 않는다.
+Backend는 self-test 9개 통과 뒤 고정 6파일 244개가 통과했지만 read guard 1건으로 전체 exit 78이었다.
+호출 진단과 설치 Python `_osx_support.py:99`의 source-only 대조로 대상이
+`/System/Library/CoreServices/SystemVersion.plist`임을 확인했다. 파일 내용은 조사 도구로 읽지 않았다.
+OS profile의 기존 /System 읽기는 바꾸지 않고 Python guard에 그 고정 파일의 read만 추가했다.
+이후 self-test 9개와 선택 unit 244개가 모두 통과·guard 0·exit 0이며 자기 root 제거를 확인했다.
+인접 metadata 경로/외부 write는 계속 거부한다. 초기 수집 오류·guard 실패는 이전 실행 이력이다.
+
+Frontend build는 별도 공식 실행 3회 모두 webpack의 원본 `frontend/package.json` 읽기에서 차단됐다.
+최종 비민감 진단은 정확한 original-project-root:package.json이며 설치 webpack readFile/CacheBackend.provide
+호출이다. 원본 manifest 내용을 읽게 허용하거나 dependency/source 접근을 넓히지 않았다.
+각 worker 1/controller 78·자기 group/root 정리를 확인했다. 작성 측의 단일 사본 metadata 해법 검토 전 build 반복은 보류한다.
+최신 진단 회귀를 포함한 self-test 14개는 별도 공식 재실행에서 통과·root 제거됐다.
+Frontend unit 29개는 진단 보완 전 실제 결과이며 production HTTP/type/lint는 아직 미실행이다.
+
+
+### v1.6 package snapshot · 아직 실행 검증 전
+
+기존 공개 package copy의 정확한 bytes/identity와 owned snapshot을 고정하고 worker/fork에서 길이·hash·identity를 검증한다.
+정확한 원본 literal의 callback/sync/Promise readFile 내용만 메모리에서 응답하고 원본 open/read 권한은 추가하지 않는다.
+controller의 최초 capture는 기존 copy Buffer를 재사용하고 command 전/후는 6-B.7의 공개 source 재검증을 수행한다.
+신규 safety 16개/unit 31개는 실제 수집/통과 수가 아니라 구현상 선택 집합이다. 공식 self-test 실행 요청은 자동 승인 검토가
+부모 source 재검증을 원본 raw-read 금지와 충돌한다고 판단해 거절하여 시작되지 않았다. 역할 구분의 확인 전 우회/재실행하지 않는다.
+이전 v1.5 Backend 9개/244개·Frontend 14개/29개와 build 실패 3회는 당시 source/실행 기록으로 보존한다.
+
+
+### v1.6 후속 상태 · 공식 실행과 보류 구분
+
+최초 self-test 요청은 CreateProcess 전에 거절됐지만, copy Buffer 재사용 보완 후 별도 공식 요청은 승인돼
+16개 중 15개 통과·1개 실패·exit 78·자기 root 제거를 확인했다. 잘못된 capability의 metadata 오류가 안전한 거부 대신
+ENOENT를 드러낸 문제를 정규화했다. 그 재검증 요청은 최신 실행 보류 지시가 적용되어 CreateProcess 전에 거절됐다.
+현재 신규 실행은 보류하며 parent의 source-copy/command 전후 공개 package 재검증과 worker 원본 raw-read 금지의
+경계를 독립 검토 중이다. 최신 오류 정규화의 실행 검증·unit 31개·build·후속 검사는 미실행이다.
+
+
+### v1.6 최신 직접 검증 · 17/32 통과와 추가 build 소비 차단
+
+2026-11-08T02:54:30+09:00. 오류 메시지 정규화와 독립 검토 P2 두 건을 보완했다. responder의 상수 rawOriginalReadCalls 필드는
+제거했으며 과거 출력의 0은 실측 증거에서 제외한다. 실제 설치 fs mapping의 raw consumer dispatch·원본 요청 거부를
+계측하고, owned root의 bounded journal에 hit/실패/expected-negative를 보존한다. 정상 종료 기록이 없는 worker는
+partial로 표시하며 native는 미관측이다. OS 합성 true/허용 cat/금지 cat 대조와 부모 공개 source 검증 읽기는 별도다.
+controller packageRecord/recheckPackage/checkedCommand의 실제 연결을 합성 source·snapshot 변조, ancestor/root 교체,
+command 실패/중복 실패·child receipt retire·root 소유 거부·형제 보존으로 확인했다. 새 spy가 변조용 쓰기를 읽기로 세던
+첫 오류를 읽기 flags 집계로 수정했고, 최종 공식 self-test 17개·unit 4파일 32개가 모두 통과·exit 0·자기 root 정리됐다.
+
+v1.6 build는 세 공식 실행 모두 컴파일·내장 TypeScript·정적 생성/trace 단계까지 진행했지만 guard 거부로 전체 exit 78이었다.
+첫 build의 parent process 기록은 거부 1건이며 전체 자손 수치로 확대하지 않는다. journal 보강 후 두 실행은 worker 16개
+(정상 exit 기록 1개/partial 15개), 관측된 원본 raw dispatch 0·추가 거부 22건·snapshot callback hit 2회였다.
+부모 공개 package source 검증 읽기는 별도 4회다. 모든 자기 group/root는 제거됐다. private 파일의 실제 내용을 읽은 것은 아니다.
+
+설치 source 대조로 telemetry/is-docker의 /proc/self/cgroup 탐색과 webpack FileSystemInfo._readFileHash의 추가 입력 해시
+요청을 확인했다. 후자의 정확한 대상은 일부 redacted이며 원본 프로젝트/외부/private 분류를 포함한다. 단일 metadata snapshot
+계약을 넘어 새 파일/OS/네트워크 허용·resolver/캐시 동작 변경으로 해결하지 않았다. 추가 계약 판단 전 build 반복을 보류하고
+HTTP/type/대상 lint도 미실행이다. 전체 lint 기존 실패·Backend v1.5 9개/244개 통과·실DB/Google/AI 미실행은 그대로다.
+
+
+### v1.7 진단 한정 결과 · 새 읽기/환경 정책 없음
+
+2026-11-08T03:15:12+09:00. v1.7/hash를 대조한 뒤 fixed public allowset/검증 copy 입력과 실행별 HMAC-SHA-256 식별만 보강했다.
+부모가 매 실행 32-byte 난수 key를 만들고 자기 0700 root/0600 capability에만 저장했다. argv/env/출력/journal/보고서에는
+key를 두지 않는다. 같은 run의 worker는 같은 key로 상관 ID를 만들고 새 실행은 다른 key를 쓴다. 정리 시 capability/원시 journal도 제거했다.
+진단은 기존 deny가 이미 계산한 lexical/canonical 값만 사용하고 unknown open/read/stat/exists/walk를 추가하지 않는다.
+role/private-name flag·known-copy membership·API/caller family·횟수만 출력한다. private 이름의 공개 BFF source는 exact 예외 label이다.
+이 label/ID는 허용 판단에 쓰지 않는다. 기존 원 실패·deny·partial/native 한계와 부모 source 검증/metadata hit/expected negative를 보존했다.
+
+공식 self-test 20/20·unit 4파일 35/35 통과, fail/skip/cancel/todo 0·exit 0·자기 root 제거다.
+후속 진단 build는 한 번 실행해 거부 22회를 정규화 대상 ID 10개로 식별하고 최종 exit 78을 유지했다.
+cgroup 1개 ID 4회, unknown webpack hash 9개 ID 각 2회(총 18회)다. hash 대상은 original-project 1개·original-repo 1개·outside 7개,
+모두 known-copy=false·공개 label 없음이다. outside ID 1개만 private-name flag이며 실제 credential 존재/내용이라는 뜻이 아니다.
+현재 ID 수는 요청 문자열의 상관 식별이며 파일 실재/필수성·22파일을 의미하지 않는다. unknown raw 경로 역탐색은 하지 않았다.
+
+worker 기록 16개 중 exit 1/partial 15개를 그대로 유지했고 JS 관측의 단일 원본 package literal raw dispatch 0·diagnostic failure 0,
+callback metadata hit 2를 확인했다. native 전체를 관측한 것은 아니다. 부모 공개 source 검증은 별도 4회다.
+child/group·자기 root·임시 key 자료 제거를 확인했다. 추가 build 반복/읽기 권한/CI·telemetry 환경/cache·resolver 변경은 하지 않으며,
+HTTP/별도 type/대상 lint는 미실행이다. 식별 후 접근/대체 정책은 미결정이고 3-B 전체 수용도 미완료다.
+
+## 현재 Flow 명시 설정 정책 (ST-001 v1.15)
+
+[Flow KIS](../ai/src/agents/flow/infrastructure/kis_client.py), [해석](../ai/src/agents/flow/infrastructure/llm/explain.py), [수동 lab](../ai/devtools/flow/streamlit_flow_lab.py)은 같은 AI 서비스 루트의 `.env`를 명시한다. process environment는 빈 문자열도 기존 값으로 우선하며 `override=False`다. 파일이 없으면 process environment만 사용하고 feature/source 중간·부모·cwd `.env`로 자동 탐색하지 않는다. 다른 위치의 `.env`에만 의존했던 실행 환경은 사용자가 AI 루트 `.env` 또는 process environment에 설정해야 한다. 이번 정리에서 실제 자격 값을 조회·복사·이전하지 않았다.
+
+합성 검사는 source의 엄격히 검증된 Path/call AST와 StringIO parser 동작을 확인한다. 물리 `.env` I/O·실제 자격·KIS/LLM/Streamlit 성공은 검증하지 않았다. 현재 연결 주소·다른 agent 설정 정책을 일괄 변경하는 계약도 아니다.

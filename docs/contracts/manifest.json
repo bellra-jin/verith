@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checked_at": "2026-11-07T23:52:41+09:00",
+  "checked_at": "2026-11-08T03:15:12+09:00",
   "derivation": "Reviewed technical summaries, not original instructions or runtime authorization",
   "application_order": [
     "CF-001",
@@ -8,10 +8,10 @@
   ],
   "work_item": {
     "id": "ST-001",
-    "source_version": "v1.3",
-    "source_sha256": "73f4c0b6d98fa3e33fc6d1d8f9fc0892f94608175eff3024d47a85300fbf1099",
-    "reviewed_commit": "6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef",
-    "stage": "3-A public environment reference examples only"
+    "source_version": "v1.7",
+    "source_sha256": "23e79f20066664ba8e32fb3c1a040e5bb33fdbfc08e44518c354ccee0e8b2601",
+    "reviewed_commit": "7df12403848e480f223767232540d4c2c055ba5e",
+    "stage": "3-B diagnostic-only follow-up; full validation pending"
   },
   "snapshots": [
     {
@@ -95,6 +95,34 @@
       "source_sha256": "9a7d519f8636e6ba127bb66e74c74ff70d84f50b8705814b91916599c2ef97be",
       "reviewed_commit": "083dea8436b699aa3a52ddbf36848e8fe3535720",
       "stage": "2 repository work guides only"
+    },
+    {
+      "id": "ST-001",
+      "source_version": "v1.3",
+      "source_sha256": "73f4c0b6d98fa3e33fc6d1d8f9fc0892f94608175eff3024d47a85300fbf1099",
+      "reviewed_commit": "6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef",
+      "stage": "3-A public environment reference examples only"
+    },
+    {
+      "id": "ST-001",
+      "source_version": "v1.4",
+      "source_sha256": "e07ce413fb6f763c70a3433898465411f475aed30856be28f04a0295e2d6fe39",
+      "reviewed_commit": "7df12403848e480f223767232540d4c2c055ba5e",
+      "stage": "3-B safe Backend/Frontend checks; full validation pending"
+    },
+    {
+      "id": "ST-001",
+      "source_version": "v1.5",
+      "source_sha256": "96eb6fc2521ca9e1f48439b146f351a3474d371ed7b4ab5e87fc67b01a081c51",
+      "reviewed_commit": "7df12403848e480f223767232540d4c2c055ba5e",
+      "stage": "3-B safe Backend/Frontend checks; full validation pending"
+    },
+    {
+      "id": "ST-001",
+      "source_version": "v1.6",
+      "source_sha256": "3a2dd3d648fc04fc7aafd15fea09ce1a5e82955fcf262b4e8fbc69fc1466d4ce",
+      "reviewed_commit": "7df12403848e480f223767232540d4c2c055ba5e",
+      "stage": "3-B safe Backend/Frontend checks; full validation pending"
     }
   ]
 }

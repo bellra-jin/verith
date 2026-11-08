@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Download, Trash2 } from "lucide-react";
 
-import { deleteFundamentalReport } from "@/api/fundamental";
+import { deleteFundamentalReport } from "@/features/fundamental/api/reports";
 
 // fundamental 상세 상단 액션바 — 목록 복귀 · PDF 다운로드 · 삭제.
 // 화면은 iframe(sandbox) 이라 부모에서 print 가 막힌다 → report_html 을 새 탭(autoprint)으로 열어

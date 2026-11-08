@@ -1,6 +1,6 @@
 import { Newspaper, TrendingUp, ExternalLink, ShieldCheck } from "lucide-react";
 
-import type { NewsReportModel } from "@/types/news";
+import type { NewsReportModel } from "@/features/news/model/types";
 import { NewsSentimentBar } from "./news-sentiment-bar";
 import { AnswerText } from "./answer-text";
 

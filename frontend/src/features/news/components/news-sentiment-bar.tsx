@@ -1,6 +1,6 @@
 import clsx from "clsx";
 
-import type { NewsGauge } from "@/types/news";
+import type { NewsGauge } from "@/features/news/model/types";
 
 // 감성 게이지 — 긍정(emerald)·중립(slate)·부정(rose) 3분할 막대 + 라벨/건수.
 // overall_gauge 와 이벤트별 gauge 에 함께 쓴다(같은 어휘로 대조).

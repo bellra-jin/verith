@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Download, Trash2 } from "lucide-react";
 
-import { deleteNewsReport } from "@/api/news";
+import { deleteNewsReport } from "@/features/news/api/reports";
 
 // news 상세 상단 액션바 — technical 과 동일 구성: 목록 복귀 · PDF 다운로드(인쇄) · 삭제.
 export function NewsActions({ reportId }: { reportId: string }) {

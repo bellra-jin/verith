@@ -1,4 +1,4 @@
-import { sessionProxy } from '@/lib/session-proxy';
+import { sessionProxy } from '@/shared/server/session-proxy';
 export async function GET(request: Request, context: {params:Promise<{action:string}>}) {
   const {action}=await context.params;
   if (!['login','callback','session'].includes(action)) return new Response(null,{status:404});

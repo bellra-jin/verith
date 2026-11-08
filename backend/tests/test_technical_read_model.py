@@ -9,8 +9,8 @@ from __future__ import annotations
 from uuid import uuid4
 
 from db.models.common.stock import Stock
-from src.api.schemas.ai_technical_output import MirrorInterpretation
-from src.api.services.technical_report_service import build_read_model
+from src.modules.technical.domain.ai_output import MirrorInterpretation
+from src.modules.technical.application.report_service import build_read_model
 
 _RID = uuid4()
 
@@ -173,7 +173,7 @@ from datetime import UTC, datetime  # noqa: E402
 
 from db.models.technical.report_followup import TechnicalReportFollowup  # noqa: E402
 from db.models.technical.technical_report import TechnicalReport  # noqa: E402
-from src.api.services.technical_report_service import build_followups_read_model  # noqa: E402
+from src.modules.technical.application.report_service import build_followups_read_model  # noqa: E402
 
 
 def _report(**over) -> TechnicalReport:
@@ -243,7 +243,7 @@ def test_read_model_has_followup_count_default_zero():
 
 def test_parent_snapshot_roundtrips_through_read_context():
     # writer 가 저장한 snapshot 을 read `_followup_context` 가 그대로 요약으로 복원한다(키 정합).
-    from src.api.services.technical_report_service import _followup_context, _parent_context_snapshot
+    from src.modules.technical.application.report_service import _followup_context, _parent_context_snapshot
     from db.models.common.stock import Stock
     stock = Stock(stock_code="373220", stock_name="LG에너지솔루션", market="KOSPI")
     snap = _parent_context_snapshot(report=_report(), stock=stock)
@@ -258,7 +258,7 @@ def test_parent_snapshot_roundtrips_through_read_context():
 # ── list/index item projection ───────────────────────────────────────────────
 def test_list_item_projection_and_blocks():
     from db.models.common.stock import Stock
-    from src.api.services.technical_report_service import build_list_item
+    from src.modules.technical.application.report_service import build_list_item
     stock = Stock(stock_code="373220", stock_name="LG에너지솔루션", market="KOSPI")
     it = build_list_item(report=_report(), stock=stock, followup_count=2)
     assert it.report_id == _RID
@@ -273,7 +273,7 @@ def test_list_item_projection_and_blocks():
 
 def test_list_item_status_matches_detail_trace_summary():
     # 목록 status 축약이 detail trace_summary 파생과 동일 규칙(일관성 잠금).
-    from src.api.services.technical_report_service import build_list_item, build_read_model
+    from src.modules.technical.application.report_service import build_list_item, build_read_model
     raw = _raw(interpretation={"text": "폴백.", "source": "template_fallback"},
                verification={"calc_passed": True, "regime_passed": True, "label_matched": False,
                              "outcome": "template_fallback", "regen_count": 1},
@@ -286,7 +286,7 @@ def test_list_item_status_matches_detail_trace_summary():
 
 
 def test_list_item_backward_safe_empty_payload():
-    from src.api.services.technical_report_service import build_list_item
+    from src.modules.technical.application.report_service import build_list_item
     it = build_list_item(report=_report(output_payload={}), stock=None, followup_count=0)
     assert it.summary.one_line_summary is None
     assert it.status.path_label == "normal" and it.status.verification_warning is False
@@ -296,7 +296,7 @@ def test_list_item_backward_safe_empty_payload():
 
 # ── trust/quality summary projection ─────────────────────────────────────────
 def test_trust_summary_projection():
-    from src.api.services.technical_report_service import build_read_model
+    from src.modules.technical.application.report_service import build_read_model
     raw = _raw()
     raw["technical_signals"] = [
         {"indicator": "moving_average", "signal": "positive", "detail_source": "llm"},
@@ -315,7 +315,7 @@ def test_trust_summary_projection():
 
 
 def test_trust_summary_source_linkage_zero_safe():
-    from src.api.services.technical_report_service import build_read_model
+    from src.modules.technical.application.report_service import build_read_model
     raw = _raw()
     raw["technical_signals"] = []
     ts = build_read_model(report_id=_RID, raw=raw, stock=None).trust_summary
@@ -326,7 +326,7 @@ def test_trust_summary_source_linkage_zero_safe():
 # ── full charts read model ───────────────────────────────────────────────────
 def test_charts_read_model_full_payload():
     from db.models.common.stock import Stock
-    from src.api.services.technical_report_service import build_charts_read_model
+    from src.modules.technical.application.report_service import build_charts_read_model
     raw = _raw()
     raw["charts"] = [
         {"period": "3m", "chart_data": {"candle_unit": "D", "candles": [{"o": 1}], "annotations": [{"kind": "x"}]}},
@@ -342,14 +342,14 @@ def test_charts_read_model_full_payload():
 
 
 def test_charts_read_model_empty_safe():
-    from src.api.services.technical_report_service import build_charts_read_model
+    from src.modules.technical.application.report_service import build_charts_read_model
     cm = build_charts_read_model(report=_report(output_payload={}), stock=None)
     assert cm.charts == [] and cm.available_periods == []
 
 
 # ── detailed trace read model (truthful, duration null) ──────────────────────
 def test_trace_detail_steps_and_null_duration():
-    from src.api.services.technical_report_service import build_trace_detail
+    from src.modules.technical.application.report_service import build_trace_detail
     td = build_trace_detail(report=_report())
     assert td.overall.total_steps == 5 and td.overall.total_duration_ms is None   # 미측정
     assert td.overall.llm_used is True and td.overall.data_source_summary == "KIS"
@@ -361,7 +361,7 @@ def test_trace_detail_steps_and_null_duration():
 
 
 def test_trace_detail_fallback_and_limited():
-    from src.api.services.technical_report_service import build_trace_detail
+    from src.modules.technical.application.report_service import build_trace_detail
     raw = _raw(interpretation={"text": "폴백.", "source": "template_fallback"},
                verification={"calc_passed": True, "regime_passed": True, "label_matched": False,
                              "outcome": "template_fallback", "regen_count": 1},
@@ -378,7 +378,7 @@ def test_trace_detail_fallback_and_limited():
 
 # ── 의미 잠금(semantics) 테스트 — 문서 계약과 projection 일치 고정 ──────────────
 def test_verification_gate_pass_vs_warn_criteria():
-    from src.api.services.technical_report_service import build_read_model
+    from src.modules.technical.application.report_service import build_read_model
     # PASS: outcome=passed AND calc∧regime∧label
     pass_raw = _raw(verification={"calc_passed": True, "regime_passed": True, "label_matched": True,
                                   "outcome": "passed", "regen_count": 0})
@@ -395,7 +395,7 @@ def test_verification_gate_pass_vs_warn_criteria():
 
 
 def test_source_coverage_excludes_template_fallback():
-    from src.api.services.technical_report_service import build_read_model
+    from src.modules.technical.application.report_service import build_read_model
     raw = _raw()
     raw["technical_signals"] = [
         {"indicator": "moving_average", "detail_source": "llm"},
@@ -408,7 +408,7 @@ def test_source_coverage_excludes_template_fallback():
 
 
 def test_charts_all_periods_returned_eager():
-    from src.api.services.technical_report_service import build_charts_read_model
+    from src.modules.technical.application.report_service import build_charts_read_model
     raw = _raw()
     raw["charts"] = [
         {"period": "3m", "chart_data": {"candle_unit": "D", "candles": []}},
@@ -586,7 +586,7 @@ def test_read_model_omits_1d_when_absent():
 
 
 def test_charts_endpoint_model_passes_1d_full():
-    from src.api.services.technical_report_service import build_charts_read_model
+    from src.modules.technical.application.report_service import build_charts_read_model
     cm = build_charts_read_model(report=_report(output_payload=_raw_with_1d()), stock=None)
     assert "1d" in cm.available_periods
     intraday = next(c for c in cm.charts if c.period == "1d")

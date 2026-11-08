@@ -63,7 +63,7 @@ async def test_api_query_not_echoed(client, db_session):
 
 # 23. resolver 는 AI 코드를 import 하지 않는다(=AI/KIS/OpenAI 호출 없음, 구조적 보장)
 def test_resolver_has_no_ai_dependency():
-    import src.api.services.stock_resolver_service as m
+    import src.modules.stocks.application.resolver_service as m
 
     src = pathlib.Path(m.__file__).read_text(encoding="utf-8")
     assert "ai_client" not in src and "AIClient" not in src and "openai" not in src.lower()

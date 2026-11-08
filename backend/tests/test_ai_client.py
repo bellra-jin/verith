@@ -5,12 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from src.api.clients.ai_client import (
-    AIClient,
-    AITimeoutError,
-    AIUnavailableError,
-    AIValidationError,
-)
+from src.shared.infrastructure.clients.ai_client import AIClient, AITimeoutError, AIUnavailableError, AIValidationError
 
 
 def _client(handler) -> AIClient:

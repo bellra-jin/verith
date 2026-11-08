@@ -51,7 +51,7 @@ Backend 가 **DART 법인식별 정본**(`stock_code → corp_code`)을 DART Ope
   손상·빈 응답만 잡는다. 정확한 하한은 실데이터 검산 후 확정, 코드에 실수 고정 금지).
 
 ## 6. 설정 (`DART_API_KEY`)
-- `src/api/config.py` 에 `DART_API_KEY`(+`DART_BASE_URL`) 가 있으나 **sync 전용**이다.
+- `src/shared/config.py` 에 `DART_API_KEY`(+`DART_BASE_URL`) 가 있으나 **sync 전용**이다.
 - **app startup 필수값이 아니다** — `_load_settings()` 의 필수 검증(`DATABASE_URL`·`AI_SERVICE_URL`)에
   포함하지 않는다. 값 존재는 **sync 실행 시점**(client)에서만 검증한다.
 - 키는 **secret** — URL/로그/예외 메시지에 노출하지 않는다(존재 여부만).
@@ -72,7 +72,7 @@ uv run python -m scripts.sync_corp_codes --apply       # 실제 반영(commit)
 - 현재 재무 AI 는 내부 `CORP_CODE_MAP`(10종 하드코딩)에 의존한다.
 - 이번 브랜치는 **backend 정본 저장·sync·repository·문서까지**만 한다. **AI 코드는 건드리지 않는다.**
 - 조회 endpoint·AI wiring·Top Supervisor 연결은 **다음 브랜치**. 진입점은
-  `src/api/repositories/corp_code_repository.py`(`get_corp_code(stock_code)`), 그 위에 내부 조회
+  `src/modules/stocks/infrastructure/corp_code_repository.py`(`get_corp_code(stock_code)`), 그 위에 내부 조회
   endpoint 를 얹을지는 다음 브랜치에서 timeout·인증·경계와 함께 설계한다.
 
 ## 9. 현재 한계 / 후속

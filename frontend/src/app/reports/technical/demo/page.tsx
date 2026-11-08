@@ -1,4 +1,4 @@
-import { getTechnicalFollowups, getTechnicalReport, getTechnicalTrace } from "@/api/technical";
+import { getTechnicalFollowups, getTechnicalReport, getTechnicalTrace } from "@/features/technical/api/reports";
 import { TechnicalChartPanel } from "@/features/technical/components/technical-chart-panel";
 import { TechnicalFollowups } from "@/features/technical/components/technical-followups";
 import { TechnicalHero } from "@/features/technical/components/technical-hero";

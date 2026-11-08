@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.text_normalize import normalize_stock_text
+from src.modules.stocks.domain.text_normalize import normalize_stock_text
 
 
 @pytest.mark.parametrize(

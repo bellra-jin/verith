@@ -1,5 +1,15 @@
 # veriθ Backend — 통합 PostgreSQL 스키마 (팀 공유 문서)
 
+## CF-003 추가: receipt-only Flow 접수
+
+`flow_runs`는 `c3001a7e0001`에서 추가하는 접수 전용 테이블이다. 기존 결과 테이블을 재사용하거나
+pending 결과/index를 만들지 않는다. [API/물리 계약](flow_run_admission.md)과
+[이번 검증 기록](../../docs/work/CF-003-flow-run-admission.md)을 따른다.
+owner FK RESTRICT, owner/operation/key-digest UNIQUE, 예약 attempt UNIQUE,
+flow/version1/digest32/hex64/JSONB object/receipt_only/pending/not_stored/finite 시각 CHECK를 둔다.
+키 원문은 저장하지 않으며 정규화 입력·fingerprint와 최초 추적/run/attempt ID를 보존한다.
+실행권·예산·worker·snapshot·report 연결을 구현한 테이블이 아니다.
+
 `docs/schema.md`
 
 이 문서는 veriθ 백엔드의 **통합 ERD 기준 PostgreSQL 물리 스키마 정본**이다. 테이블·관계·타입·

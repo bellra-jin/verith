@@ -1,5 +1,16 @@
 # 공용 환경 참고와 실행 경계
 
+## CF-003 현재 접수 기반 검증
+
+현재 feature 기준은 PR #6 병합 `d67f731b1c2f452179d66abaa2b3381cccb8a15d`다.
+아래 ST-001 수치/차단/명령은 당시 이력이며 이번 변경의 통과 증거가 아니다.
+[접수 계약](../backend/docs/flow_run_admission.md)·[CF-003 작업 기록](work/CF-003-flow-run-admission.md)을 따른다.
+기존 clean env·절대 Python -I -S의 `backend/scripts/check_safe.py self-test`/`unit`이 보호 단위 입구다.
+새 `backend/scripts/cf002_interactive_login.py --verify-flow-admission-db`는 소유 증명된 새 PG만 사용하는
+고정 DB-only 분기이며 직접 pytest/기존 .env fixture/실제 앱 DB 대체가 아니다.
+전체 launcher·실행 준비/제한은 작업 기록의 최종 실제 명령을 확인한다. 문서의 경로는 실행 승인이나
+Google/AI/키 사용 허가가 아니며 Next/BFF/UI·worker를 기동하지 않는다.
+
 > **최종 구조 우선 계약:** ST-001 v1.15(명시 Flow 설정·최종 marker 정리)에 따라 불필요한 old shim을 제거하며 canonical 구현 하나로 정리한다. Flow 마지막3도 AI 루트 .env 명시 정책으로 이동했다. 실제 설정 값/AI 실행은 미검증이다. [진행 기록](work/ST-001-layout-progress.md)을 따른다.
 
 > **현재 안내 — ST-001 v1.10:** 실제 폴더 이동은 [전체 진행 기록](work/ST-001-layout-progress.md)을 따릅니다. 아래 3-A 정적 검사·v1.7/3-B 보류·실패·명령은 당시 이력이며 재배치 비교 대기는 해소됐습니다. 현재 FE-01 standalone core/image tsc와 대상 lint는 통과했고 full generated-route/typegen·build/HTTP 검증은 별개로 미완료입니다. manifest/과거 source hash·수치를 새 상태로 덮어쓰지 않습니다.

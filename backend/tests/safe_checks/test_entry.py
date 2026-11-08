@@ -9,6 +9,43 @@ import unittest
 
 
 class EntryBoundary(unittest.TestCase):
+    def test_cf003_owned_home_is_scoped_without_tls_changes(self):
+        from types import SimpleNamespace
+        from scripts.cf003_admission_check import owned_postgres_home
+        previous = os.environ.get("HOME")
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+            root = Path(directory)
+            docker = SimpleNamespace(_config=SimpleNamespace(name=str(root)))
+            with owned_postgres_home(docker):
+                self.assertEqual(Path.home(), root.resolve())
+                self.assertNotIn("PGSSLMODE", os.environ)
+            self.assertEqual(os.environ.get("HOME"), previous)
+            root.chmod(0o755)
+            with self.assertRaises(RuntimeError):
+                with owned_postgres_home(docker):
+                    self.fail("unsafe owned-home metadata accepted")
+            root.chmod(0o700)
+
+    def test_cf003_exact_source_and_fixed_unit_selection(self):
+        from scripts import check_safe as controller
+        expected = {
+            "backend/src/modules/flow/api/run_schemas.py",
+            "backend/src/modules/flow/api/run_router.py",
+            "backend/src/modules/flow/application/run_service.py",
+            "backend/src/modules/flow/infrastructure/run_repository.py",
+            "backend/db/models/flow/flow_run.py",
+            "backend/db/migrations/versions/20261108_c3001a7e0001_flow_run_admission.py",
+            "backend/tests/unit/test_cf003_flow_runs.py",
+            "backend/scripts/cf002_interactive_login.py",
+            "backend/scripts/cf003_admission_check.py",
+        }
+        self.assertEqual(controller.CF003_SOURCES, expected)
+        self.assertEqual(controller.UNIT.count("tests/unit/test_cf003_flow_runs.py"), 1)
+        self.assertTrue(expected <= controller.NEW)
+        for p in expected:
+            self.assertTrue(controller.source_allowed(p))
+        self.assertFalse(controller.source_allowed("backend/scripts/cf003_other.py"))
+
     def test_import_time_probe_is_blocked(self):
         # exec models collection-time module top-level code, before any fixture.
         probes = ["open('.env.synthetic', 'r')", "socket.getaddrinfo('synthetic.invalid', 1)",

@@ -1,5 +1,13 @@
 # 문서 목록과 권위
 
+## CF-003 현재 작업 기준
+
+현재 새 기능 기준은 PR #6 병합 `d67f731b1c2f452179d66abaa2b3381cccb8a15d`다.
+[Flow 접수·멱등·본인 조회 계약](../backend/docs/flow_run_admission.md)과
+[CF-003 실제 작업/검증 기록](work/CF-003-flow-run-admission.md)을 따른다.
+receipt_only·기본 비활성이며 AI/worker 실행은 포함하지 않는다. 아래 7df1240·이전 검사 수치는
+그 시점 이력이다. CF 공유 publication/manifest·ST-001 완료 기록은 그대로 보존한다.
+
 > **최종 구조 우선 계약:** ST-001 v1.15(명시 Flow 설정·최종 marker 정리)에 따라 불필요한 old shim을 제거하며 canonical 구현 하나로 정리한다. Flow 마지막3도 AI 루트 .env 명시 정책으로 이동했다. 실제 설정 값/AI 실행은 미검증이다. [진행 기록](work/ST-001-layout-progress.md)을 따른다.
 
 > **실제 이동 결정 당시 — ST-001 v1.10:** 전체 기능의 실제 이동 승인이 적용되며 [전체 진행 기록](work/ST-001-layout-progress.md)을 현재 상태로 봅니다. 아래 v1.7 작업 지시·source SHA·비교 보류 문장은 3-B 당시 이력입니다. Backend 59개 이동/보호 회귀와 FE-01 선택 type/lint 결과를 이력과 구분하며, 전체 AI/Frontend 이동 및 build/HTTP 수용 완료는 아닙니다.

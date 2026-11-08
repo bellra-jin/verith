@@ -30,15 +30,23 @@ from tests.fixtures.flow_payload import make_flow_payload
 
 CANONICAL_RELOCATED_EXPORTS = {'src.agents.flow.api.payload': ['PAYLOAD_VERSION', 'derive_data_status', 'build_payload', 'to_json'], 'agents.flow.api.payload': ['PAYLOAD_VERSION', 'derive_data_status', 'build_payload', 'to_json'], 'src.agents.flow.domain.models': ['AgentInput', 'GateResult', 'SupplyDemandState', 'AgentOutput'], 'agents.flow.domain.models': ['AgentInput', 'GateResult', 'SupplyDemandState', 'AgentOutput'], 'src.shared.http.access_boundary': ['PUBLIC_ROUTES', 'AccessBoundary'], 'src.modules.auth.infrastructure.google_oidc': ['ISSUER', 'DISCOVERY', 'ENDPOINTS', 'LoginFailed', 'GoogleConfig', 'Attempt', 'Attempts', 'GoogleOIDC'], 'src.shared.infrastructure.clients.ai_client': ['_ANALYZE_PATH', '_FUNDAMENTAL_ANALYZE_PATH', '_INDUSTRY_ANALYZE_PATH', '_INDUSTRY_RENDER_PATH', 'AIClientError', 'AITimeoutError', 'AIUnavailableError', 'AIValidationError', 'AIContractError', 'AIClient'], 'src.modules.stocks.infrastructure.dart_corp_code_client': ['_DEFAULT_TIMEOUT', '_DEFAULT_MAX_BYTES', '_MEMBER_NAME', 'DartCorpCodeError', 'DartCorpCodeClient'], 'src.modules.stocks.infrastructure.kis_master_client': ['_URL', '_MST_NAME', '_DEFAULT_TIMEOUT', '_DEFAULT_MAX_BYTES', 'KisMasterError', 'KisMasterClient'], 'src.shared.config': ['_BACKEND_ROOT', '_ENV_FILE', 'Settings', '_load_settings', 'settings'], 'src.modules.news.domain.importance_rules': ['IMPORTANCE_W_VOLUME', 'IMPORTANCE_W_PUBLISHER', 'IMPORTANCE_W_SENTIMENT', 'IMPORTANCE_VOLUME_MODE', 'IMPORTANCE_PUBLISHER_WEIGHTS', 'IMPORTANCE_DEFAULT_PUBLISHER_WEIGHT'], 'src.modules.stocks.domain.constants.kis_master': ['FRONT_CODE', 'FRONT_STD', 'FRONT_NAME_START', 'KOSPI_TAIL', 'KOSDAQ_TAIL', 'KOSPI_FIELDS', 'KOSDAQ_FIELDS', 'MARKET_KOSPI', 'MARKET_KOSDAQ', 'FLAG_VALUE_SEMANTICS_VERIFIED', 'GROUP_CODE_STOCK', '_FLAG_SET_VALUES_PROVISIONAL', 'spac_flag_set', 'etp_flag_set'], 'src.modules.stocks.domain.constants.stock_aliases': ['ALIAS_SEED', 'REPRESENTATIVE_ALIAS_SEED'], 'src.modules.stocks.domain.constants.stock_match': ['JOSA_SUFFIXES', 'CONTEXT_SUFFIXES', 'SHORT_NAME_MAX_LEN'], 'src.modules.stocks.domain.constants.stocks': ['SUPPORTED_STOCKS', 'STOCK_NAMES', 'allowlist_name', 'REPRESENTATIVE_STOCKS'], 'src.modules.reports.infrastructure.agent_report_repository': ['count_reports', 'add', 'list_reports', 'delete_all_for_type', 'delete_for_technical', 'delete_all_technical'], 'src.modules.stocks.infrastructure.corp_code_repository': ['get_corp_code', 'get_all_corp_codes'], 'src.modules.flow.infrastructure.report_repository': ['ensure_stock', 'add_report', 'get_report', 'get_interpretation', 'get_verification', 'get_agent_indexes', 'get_report_parts', 'delete_agent_index', 'delete_root', 'eligible_flow_ids', 'get_owned_report', 'list_owned_indexes'], 'src.modules.fundamental.infrastructure.report_repository': ['ensure_stock', 'add_report', 'get_report', 'list_reports_by_stock', 'list_ratios', 'list_evidence', 'get_interpretation', 'get_verification', 'list_insights', 'list_filing_snippets', 'delete_agent_index', 'delete_root'], 'src.modules.industry.infrastructure.report_repository': ['add_report', 'get_report', 'list_reports', 'delete_agent_index', 'delete_root'], 'src.modules.news.infrastructure.news_graph_repository': ['_NEWSREF', '_identity', 'merge_graph', 'get_events_by_companies', 'get_events_by_ids', 'get_shared_events', 'companies_exist', 'cleanup_graph'], 'src.modules.news.infrastructure.report_repository': ['add_report', 'get_report', 'delete_root', 'delete_agent_index'], 'src.modules.news.infrastructure.news_repository': ['_UPSERT_UPDATE_COLS', 'upsert_articles', 'get_existing_urls', 'get_articles_by_event', 'get_events_near_embedding', 'get_event_article_stats', 'get_event_aggregates', 'get_daily_article_counts', 'delete_articles_before', 'get_articles_for_importance', 'get_event_centroid_inputs'], 'src.modules.stocks.infrastructure.stock_repository': ['get_all_stocks', 'get_all_aliases'], 'src.modules.technical.infrastructure.report_repository': ['ensure_stock', 'add_report', 'get_report', 'get_stock', 'list_followups', 'add_followup', 'count_followups', 'followup_counts_for', 'list_technical_reports', 'count_technical_reports', 'get_stocks', 'get_interpretation', 'delete_root', 'delete_all_roots'], 'src.modules.auth.api.router': ['router', 'SESSION_COOKIE', 'CORRELATION_COOKIE', 'PRIVATE', 'get_oidc', 'configured', 'secure_cookie', 'unique_cookie', 'validate_local_auth_host', 'request_principal', 'login', 'callback', 'session_info', 'logout'], 'src.modules.flow.api.router': ['FlowContractRoute', 'router', 'get_flow_report_service', 'save_flow_report', 'list_flow_reports', 'get_flow_report', 'delete_all_flow_reports', 'delete_flow_report'], 'src.modules.fundamental.api.router': ['router', 'get_fundamental_report_service', 'create_fundamental_report', 'save_fundamental_report', 'list_fundamental_reports', 'get_fundamental_report', 'delete_all_fundamental_reports', 'delete_fundamental_report'], 'src.modules.industry.api.router': ['router', 'get_industry_report_service', 'create_industry_report', 'list_industry_reports', 'get_industry_report', 'get_industry_report_html', 'delete_all_industry_reports', 'delete_industry_report'], 'src.modules.news.api.router': ['router', 'save_batch', 'existing_urls', 'cleanup', 'get_event_stats', 'get_event_articles', 'query_subject', 'query_shared', 'events_recent', 'events_merge_candidates', 'create_report', 'get_report', 'delete_all_reports', 'delete_report'], 'src.modules.reports.api.router': ['router', 'list_report_archive', 'list_reports'], 'src.modules.stocks.api.router': ['logger', 'router', 'resolve_stock'], 'src.modules.technical.api.router': ['router', 'create_technical_report', 'list_technical_reports', 'get_technical_report', 'get_technical_report_trace', 'create_technical_report_followup', 'get_technical_report_followups', 'delete_all_technical_reports', 'delete_technical_report'], 'src.modules.reports.api.report_schemas': ['AgentReportListItem', 'ReportsListResponse'], 'src.modules.fundamental.domain.ai_output': ['_Lenient', 'FundamentalErdPayloadMirror', 'FundamentalMetaMirror', 'FundamentalAgentOutputMirror'], 'src.modules.technical.domain.ai_output': ['_Lenient', 'MirrorRegime', 'MirrorSignalSummary', 'MirrorTechnicalSignal', 'MirrorRiskItem', 'MirrorRisk', 'MirrorChart', 'MirrorInterpretation', 'MirrorVerification', 'TechnicalAgentOutputMirror'], 'src.modules.flow.domain.execution': ['ContractModel', 'NonBlank', 'FlowRunRequest', 'ExecutionReference', 'ExecutionContext', 'FlowResultReference', 'ErrorCode', 'ERRORS', 'SafeError', 'ContractViolation', 'T', 'CommonResponse', 'FlowRunState', 'DataObservation', 'IdempotencyReference', 'bind_flow_result', 'validate_result_binding'], 'src.modules.flow.domain.payload': ['_iso_date', '_uuid_string', 'ISODate', 'UUIDString', 'Ticker', 'Number', 'PayloadPart', 'FlowMeta', 'FlowStrength', 'FlowConsecutive', 'FlowPersistence', 'FlowDaily', 'FlowOwnership', 'FlowPriceDaily', 'FlowSignals', 'FlowGate', 'FlowVerification', 'FlowInterpretationMeta', 'FlowPayloadV1', 'validate_flow_payload', '_check_json_types', 'validate_storage_string', 'projection_values_equal'], 'src.modules.flow.api.schemas': ['FlowReportSaveRequest', 'FlowReportEnvelope', 'FlowReportListResponse'], 'src.modules.fundamental.api.schemas': ['FundamentalReportCreateRequest', 'FundamentalReportSaveRequest', 'FundamentalReportEnvelope', 'FundamentalReportListResponse'], 'src.modules.industry.api.schemas': ['IndustryReportCreateRequest', 'IndustryReportEnvelope', 'IndustryReportListResponse'], 'src.modules.news.api.schemas': ['SentimentLabel', 'ArticleIn', 'NodeLabel', 'RelType', 'GraphNode', 'GraphRelationship', 'GraphBatch', 'NewsBatchSaveRequest', 'SaveResponse', 'ExistingUrlsRequest', 'ExistingUrlsResponse', 'CleanupResponse', 'ArticleRef', 'EventArticleStats', 'CandidateEvent', 'MergeCandidateQuery', 'SentimentGauge', 'Event', 'EventWithArticles', 'DailyCount', 'SubjectQueryResponse'], 'src.modules.news.api.report_schemas': ['NewsReportCreateRequest', 'NewsReportEnvelope'], 'src.modules.reports.api.archive_schemas': ['ArchiveCardStock', 'ArchiveCard', 'ArchiveCardStatus', 'ArchiveCardMeta', 'ArchiveItem', 'ArchiveListResponse'], 'src.modules.stocks.api.schemas': ['MatchType', 'ResolveStatus', 'ResolveReason', 'StockResolveRequest', 'ResolvedStock', 'StockCandidate', 'StockResolveResponse'], 'src.modules.technical.api.schemas': ['TechnicalReportCreateRequest', 'StockBlock', 'MetaBlock', 'SummaryBlock', 'InterpretationBlock', 'DriversBlock', 'SignalItem', 'SignalsBlock', 'RiskItemBlock', 'RisksBlock', 'ChartItem', 'ChartsBlock', 'VerificationBlock', 'GenerationPathBlock', 'DataQualityBlock', 'VerificationSummaryBlock', 'StabilityBlock', 'TraceFlagsBlock', 'TraceSummaryBlock', 'SignalQualityBlock', 'VerificationGateBlock', 'SourceLinkageBlock', 'TrustSummaryBlock', 'AnnotationBrief', 'IndicatorCalcBasis', 'IndicatorCard', 'TechnicalReportReadModel', 'ChartItemFull', 'TechnicalChartsReadModel', 'TraceStepItem', 'TraceOverallBlock', 'TechnicalTraceDetailReadModel', 'FollowupContextBlock', 'FollowupCreateRequest', 'FollowupItem', 'FollowupReportSummary', 'ListSummaryBlock', 'ListStatusBlock', 'ListEngagementBlock', 'ListMetaBlock', 'TechnicalReportListItem', 'TechnicalReportListResponse', 'TechnicalReportFollowupsReadModel'], 'src.modules.auth.application.session_service': ['AuthenticationRequired', 'Principal', 'token_digest', 'link_verified_identity', 'issue_session', 'authenticate', 'validate_principal', 'revoke_session', 'csrf_token', 'verify_csrf'], 'src.modules.stocks.application.corp_code_sync_service': ['_DEFAULT_MIN', 'CorpCodeSyncError', 'CorpCodeSyncSummary', 'sync_corp_codes'], 'src.modules.stocks.domain.dart_corp_code_parser': ['CorpCodeParseError', 'CorpCodeRecord', 'CorpCodeParseResult', '_text', '_valid_modify_date', 'parse_corp_code'], 'src.modules.flow.application.report_service': ['PAYLOAD_SNAPSHOT_KEY', 'STORAGE_FORMAT_KEY', 'STORAGE_FORMAT', 'FlowPayloadError', 'FlowStoredPayloadError', 'FlowReportService'], 'src.modules.fundamental.application.report_service': ['_parse_dt', '_uuid', '_decimal', '_model_dict', '_REPORT_FIELDS', '_RATIO_FIELDS', '_EVIDENCE_FIELDS', '_INTERPRETATION_FIELDS', '_VERIFICATION_FIELDS', '_INSIGHT_FIELDS', '_SNIPPET_FIELDS', 'FundamentalReportService'], 'src.modules.news.domain.importance': ['_VOLUME_TRANSFORMS', '_DEFAULT_VOLUME_MODE', '_WS_RE', '_ArticleLike', '_normalize_publisher', '_volume_transform', 'publisher_weight', 'sentiment_magnitude', 'compute_importance'], 'src.modules.industry.application.report_service': ['_parse_dt', '_d', '_require_str', '_validate_payload', '_answer_text', '_headline', 'IndustryReportService'], 'src.modules.news.application.cleanup_service': ['logger', '_ROLLING_HOURS', 'NewsCleanupService'], 'src.modules.news.application.graph_query_service': ['_REP_ARTICLE_LIMIT', '_centroid', '_as_uuid', 'NewsGraphQueryService'], 'src.modules.news.application.query_service': ['NewsQueryService'], 'src.modules.news.application.report_service': ['_parse_dt', 'NewsReportService'], 'src.modules.news.application.ingest_service': ['logger', '_to_row', 'NewsService'], 'src.modules.stocks.domain.stock_master_parser': ['_CODE_RE', '_market_spec', 'StockRecord', 'ParseResult', '_tail_field', 'inspect_rows', 'parse_master'], 'src.modules.stocks.application.resolver_service': ['_CODE_RE', '_TOKEN_RE', '_MAX_RUN', '_MATCH_PRIORITY', '_MAX_CANDIDATES', '_CONTEXT_SET', '_STRIP_SUFFIXES', 'EmptyQueryError', '_Entry', '_Match', '_Cand', 'StockResolverService'], 'src.modules.stocks.application.stock_sync_service': ['_DEFAULT_MIN', 'StockSyncError', 'SyncSummary', 'sync_stocks'], 'src.modules.technical.application.report_service': ['_parse_dt', '_d', '_list', 'build_read_model', '_SNAPSHOT_REGIME_KEYS', '_SNAPSHOT_BIAS_KEYS', '_SNAPSHOT_STATUS_KEYS', '_SNAPSHOT_SCORE_KEYS', '_SNAPSHOT_ASOF_KEYS', '_first', '_followup_context', '_followup_item', '_SNAPSHOT_VERSION', '_parent_context_snapshot', 'build_followups_read_model', '_CONSENSUS_LABELS', 'build_charts_read_model', 'build_trace_detail', '_INDICATOR_TITLE', '_SIGNAL_LABEL', '_INDICATOR_ANNOTATION_KINDS', '_PATTERN_CANDIDATE_KINDS', '_NUM_RE', '_MA_ROWS', '_RSI_POINTS', '_VOL_BARS', '_metric_num', '_annotation_briefs', '_daily_chart_data', '_ma_series', '_calc_basis', 'build_indicator_cards', '_derive_status', 'build_list_item', '_ARCHIVE_TYPE_LABEL', '_ARCHIVE_DETAIL_BASE', '_clip', '_archive_tone', 'build_archive_item', 'TechnicalReportService'], 'src.modules.stocks.domain.text_normalize': ['_DISALLOWED', 'normalize_stock_text']}
 
-def test_relocation_public_contract_baseline(monkeypatch):
-    """Compare public schemas/JSON with the protected pre-move capture."""
-    import hashlib
+LEGACY_PUBLIC_DIGESTS = {
+    "openapi": "dbec0f00b8c57c5a906639c7763e83e38f7c847e1ee5a4116342450a2195bc24",
+    "payload": "a60b8618350693c42cebdf75b72d22163b2145f77857b7285dc614262d72af5a",
+    "schemas": "91065e01c38b32b5a39a8746b8dc8ca216f471580eb2c59f0d5262065e20772b",
+}
+CF003_ENUM_ADDITIONS = ["FEATURE_UNAVAILABLE", "AUTH_REQUEST_INVALID", "SERVICE_UNAVAILABLE"]
+LEGACY_ERROR_CODES = ["AUTH_REQUIRED", "RESOURCE_NOT_FOUND", "IDEMPOTENCY_CONFLICT", "RESULT_CONFLICT",
+                      "INPUT_INVALID", "UNSUPPORTED_VERSION", "RESULT_CONTRACT_INVALID", "DATA_INSUFFICIENT"]
+CF003_COMPONENTS = {"FlowAdmissionRequest", "FlowRunState", "SafeError", "ErrorCode", "CommonResponse_FlowRunState_"}
+
+
+def public_contract_capture(monkeypatch):
     from pydantic import BaseModel
     from src.api import main
     from src.modules.flow.domain import execution as flow_execution, payload as flow_payload
     from src.modules.flow.api import schemas as flow_report
     from tests.fixtures import flow_payload as fixture_module
-
     monkeypatch.setattr(fixture_module, "uuid4", lambda: UUID("00000000-0000-4000-8000-000000000001"))
     schemas = {}
     for module in (flow_execution, flow_payload, flow_report):
@@ -46,16 +54,96 @@ def test_relocation_public_contract_baseline(monkeypatch):
             if (not name.startswith("_") and name != "AgentReportListItem" and isinstance(value, type)
                     and issubclass(value, BaseModel) and value is not BaseModel):
                 schemas[name] = value.model_json_schema()
-    values = {"openapi": main.app.openapi(), "schemas": schemas, "payload": make_flow_payload()}
+    return {"openapi": main.app.openapi(), "schemas": schemas, "payload": make_flow_payload()}
+
+
+def assert_public_contract_compatibility(values):
+    """Validate exact additions first, then remove only reviewed JSON pointers from a copy."""
+    import hashlib
+    from src.modules.flow.api.run_schemas import FlowAdmissionRequest, RunResponse
+    from src.modules.flow.domain.execution import CommonResponse, FlowRunState
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.openapi.models import Schema
+    projected = copy.deepcopy(values)
+    api = projected["openapi"]
+    components = api["components"]["schemas"]
+    assert list(ErrorCode) == [ErrorCode(value) for value in LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS]
+    assert components["ErrorCode"]["enum"] == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS
+    for path, method, status in [("/api/flow/runs", "post", "202"), ("/api/flow/runs/{run_id}", "get", "200")]:
+        operation = api["paths"][path]
+        assert set(operation) == {method}
+        assert operation[method]["responses"][status]["content"]["application/json"]["schema"] == {
+            "$ref": "#/components/schemas/CommonResponse_FlowRunState_"}
+    assert api["paths"]["/api/flow/runs"]["post"]["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/FlowAdmissionRequest"}
+    assert api["paths"]["/api/flow/runs/{run_id}"]["get"]["parameters"] == [{
+        "name": "run_id", "in": "path", "required": True,
+        "schema": {"type": "string", "format": "uuid", "title": "Run Id"}}]
+    request_schema = components["FlowAdmissionRequest"]
+    assert set(request_schema["properties"]) == set(request_schema["required"]) == {"ticker", "question", "as_of", "idempotency_key"}
+    assert request_schema["additionalProperties"] is False
+    assert request_schema["properties"]["question"]["maxLength"] == 2000
+    assert request_schema["properties"]["question"]["pattern"] == r"\S"
+    assert request_schema["properties"]["ticker"]["pattern"] == r"^[0-9]{6}$"
+    assert request_schema["properties"]["as_of"]["format"] == "date-time"
+    assert RunResponse.__pydantic_generic_metadata__["origin"] is CommonResponse
+    assert RunResponse.__pydantic_generic_metadata__["args"] == (FlowRunState,)
+    expected_components = {}
+    for model in (FlowAdmissionRequest, RunResponse):
+        schema = model.model_json_schema(ref_template="#/components/schemas/{model}",
+                                         mode="validation" if model is FlowAdmissionRequest else "serialization")
+        definitions = schema.pop("$defs", {})
+        expected_components.update(definitions)
+        expected_components["FlowAdmissionRequest" if model is FlowAdmissionRequest else "CommonResponse_FlowRunState_"] = schema
+    assert set(expected_components) == CF003_COMPONENTS
+    for name in CF003_COMPONENTS:
+        # The installed FastAPI OpenAPI encoder omits None-valued Schema defaults.
+        # Apply its encoder only to these five independently checked new components.
+        expected_schema = jsonable_encoder(Schema.model_validate(expected_components[name]), by_alias=True, exclude_none=True)
+        assert components[name] == expected_schema, name
+        del components[name]
+    del api["paths"]["/api/flow/runs"]
+    del api["paths"]["/api/flow/runs/{run_id}"]
+    # Exact possible generic map key, created by Pydantic; never filter by prefix.
+    generic_name = "CommonResponse[FlowRunState]"
+    if generic_name in projected["schemas"]:
+        assert projected["schemas"][generic_name] == RunResponse.model_json_schema()
+        del projected["schemas"][generic_name]
+    # Reviewed existing model definitions only. A fourth value or changed pointer fails.
+    for name in ("CommonResponse", "SafeError", "FlowRunState"):
+        enum = projected["schemas"][name]["$defs"]["ErrorCode"]["enum"]
+        assert enum == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS
+        projected["schemas"][name]["$defs"]["ErrorCode"]["enum"] = LEGACY_ERROR_CODES[:]
     digests = {name: hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-               for name, value in values.items()}
-    # Filled from the pre-move protected worker, never from post-move output.
-    expected = {
-        "openapi": "dbec0f00b8c57c5a906639c7763e83e38f7c847e1ee5a4116342450a2195bc24",
-        "payload": "a60b8618350693c42cebdf75b72d22163b2145f77857b7285dc614262d72af5a",
-        "schemas": "91065e01c38b32b5a39a8746b8dc8ca216f471580eb2c59f0d5262065e20772b",
-    }
-    assert digests == expected
+               for name, value in projected.items()}
+    assert digests == LEGACY_PUBLIC_DIGESTS
+
+
+def test_relocation_public_contract_baseline(monkeypatch):
+    assert_public_contract_compatibility(public_contract_capture(monkeypatch))
+
+
+@pytest.mark.parametrize("change", ["path", "component", "legacy_field", "fourth_enum", "request_field", "legacy_method", "legacy_response", "legacy_enum"])
+def test_cf003_snapshot_projection_rejects_unapproved_changes(monkeypatch, change):
+    values = copy.deepcopy(public_contract_capture(monkeypatch))
+    if change == "path":
+        values["openapi"]["paths"]["/api/flow/unapproved"] = {}
+    elif change == "component":
+        values["openapi"]["components"]["schemas"]["Unapproved"] = {"type": "string"}
+    elif change == "legacy_field":
+        values["schemas"]["FlowRunRequest"]["properties"]["ticker"]["type"] = "integer"
+    elif change == "fourth_enum":
+        values["openapi"]["components"]["schemas"]["ErrorCode"]["enum"].append("UNAPPROVED")
+    elif change == "legacy_method":
+        values["openapi"]["paths"]["/health"]["post"] = {}
+    elif change == "legacy_response":
+        values["openapi"]["paths"]["/health"]["get"]["responses"]["200"]["description"] = "unexpected mutation"
+    elif change == "legacy_enum":
+        values["schemas"]["SafeError"]["$defs"]["ErrorCode"]["enum"].append("UNAPPROVED")
+    else:
+        values["openapi"]["components"]["schemas"]["FlowAdmissionRequest"]["properties"]["owner"] = {"type": "string"}
+    with pytest.raises(AssertionError):
+        assert_public_contract_compatibility(values)
 
 
 @pytest.fixture

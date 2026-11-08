@@ -8,7 +8,7 @@ runtime action; only the exec-isolated Backend reads the two keys. No Console au
 from __future__ import annotations
 import argparse
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import UTC, datetime
 import json
 import os
@@ -33,6 +33,32 @@ from scripts.runner_owned_database import LocalDocker, OwnedPostgres  # noqa: E4
 
 def safe_print(data):
     print(json.dumps(data, ensure_ascii=False), flush=True)
+
+
+def cf003_failure_diagnostic(error, stage):
+    """Fixed CF-003 diagnostics only: never exception text, locals or runtime paths."""
+    stages = {"local_context", "owned_creation", "migration", "admission_check", "cleanup"}
+    kinds = {"OwnedDatabaseError", "VerificationFailure", "TimeoutError", "TimeoutExpired",
+             "OSError", "PermissionError", "AssertionError", "RuntimeError"}
+    sources = {
+        str(_BACKEND / "scripts/runner_owned_database.py"): "owned_database",
+        str(_BACKEND / "scripts/cf002_interactive_login.py"): "db_runner",
+        str(_BACKEND / "scripts/cf003_admission_check.py"): "admission_checker",
+    }
+    functions = {"create", "verify_metadata", "call", "inspect", "verify", "sql",
+                 "preflight", "attest_connection", "main", "migrate_owned",
+                 "owned_session", "verify_admission", "check", "cleanup"}
+    frames = []
+    trace = error.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        if code.co_filename in sources and code.co_name in functions:
+            frames.append({"source": sources[code.co_filename], "function": code.co_name,
+                           "line": trace.tb_lineno})
+        trace = trace.tb_next
+    return {"phase": "cf003_failure_diagnostic", "stage": stage if stage in stages else "other",
+            "error_type": type(error).__name__ if type(error).__name__ in kinds else "other",
+            "frames": frames[-8:]}
 
 
 async def migrate_owned(proof):
@@ -445,6 +471,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--verify-owned-db", action="store_true")
     mode.add_argument("--verify-controller", action="store_true")
+    mode.add_argument("--verify-flow-admission-db", action="store_true")
     mode.add_argument("--verify-fake-environment", action="store_true")
     mode.add_argument("--google-input", choices=["approved-file"])
     parser.add_argument("--lifetime-seconds", type=int, default=3600)
@@ -460,9 +487,11 @@ def main():
     if not 30 <= args.lifetime_seconds <= 7200:
         parser.error("Finite lifetime must be between 30 and 7200 seconds")
     docker = owner = project = None
+    db_test_context = ExitStack()
     children = []
     old_handlers = {}
     interrupted = False
+    cf003_stage = "local_context"
 
     def stop(signum, frame):
         raise KeyboardInterrupt
@@ -470,12 +499,18 @@ def main():
     for signum in (signal.SIGINT, signal.SIGTERM):
         old_handlers[signum] = signal.signal(signum, stop)
     try:
-        if not (args.verify_owned_db or args.verify_controller):
+        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db):
             ensure_local_ports_free()
         docker = LocalDocker()
+        if args.verify_flow_admission_db:
+            from scripts.cf003_admission_check import owned_postgres_home
+
+            db_test_context.enter_context(owned_postgres_home(docker))
         owner = OwnedPostgres(docker)
+        cf003_stage = "owned_creation"
         proof = owner.create()
         safe_print({"phase": "owned_resource_created", **proof.safe_receipt()})
+        cf003_stage = "migration"
         asyncio.run(asyncio.wait_for(migrate_owned(proof), timeout=90))
         safe_print(
             {
@@ -498,6 +533,13 @@ def main():
 
             result = asyncio.run(asyncio.wait_for(verify_controller(proof), timeout=90))
             safe_print({"phase": "synthetic_controller_check", **result})
+            return
+        if args.verify_flow_admission_db:
+            from scripts.cf003_admission_check import verify_admission
+
+            cf003_stage = "admission_check"
+            result = asyncio.run(asyncio.wait_for(verify_admission(proof), timeout=180))
+            safe_print({"phase": "flow_admission_db_check", **result})
             return
         project = prepare_projects(_BACKEND.parent)
         # Secret-free recovery receipt; no DSN/password/Google inputs/tokens/subs.
@@ -627,7 +669,9 @@ def main():
     except KeyboardInterrupt:
         interrupted = True
         safe_print({"phase": "interrupted", "status": "cleaning_owned_resources"})
-    except Exception:
+    except Exception as error:
+        if args.verify_flow_admission_db:
+            safe_print(cf003_failure_diagnostic(error, cf003_stage))
         if project:
             for directory in (project.backend, project.frontend):
                 error_file = directory / "bootstrap_status.json"
@@ -668,8 +712,10 @@ def main():
                 safe_print(
                     {"phase": "owned_db_removed", "resource_id": owner.resource_id}
                 )
-            except BaseException:
+            except BaseException as error:
                 cleanup_failed = True
+                if args.verify_flow_admission_db:
+                    safe_print(cf003_failure_diagnostic(error, "cleanup"))
                 safe_print(
                     {
                         "phase": "cleanup_failed",
@@ -687,6 +733,7 @@ def main():
                 cleanup_failed = True
                 safe_print({"phase": "workspace_cleanup_failed"})
         if docker:
+            db_test_context.close()
             docker.close()
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)

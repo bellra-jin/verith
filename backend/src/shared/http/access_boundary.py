@@ -32,6 +32,34 @@ class AccessBoundary:
                 await send({"type": "websocket.close", "code": 1008})
             return
         method, path = scope["method"], scope["path"]
+        from src.modules.flow.api.run_schemas import (
+            PRIVATE, error_response, http_request_id, is_run_endpoint,
+        )
+
+        if is_run_endpoint(method, path):
+            from src.shared.config import settings
+            from src.modules.auth.api.router import configured
+            from src.modules.flow.domain.execution import ErrorCode
+
+            http_request_id(scope)
+            if not settings.FLOW_RUN_ADMISSION_ENABLED:
+                await error_response(scope, ErrorCode.FEATURE_UNAVAILABLE)(scope, receive, send)
+                return
+            if not configured():
+                await error_response(scope, ErrorCode.AUTH_REQUIRED)(scope, receive, send)
+                return
+
+            async def run_private_send(message):
+                if message["type"] == "http.response.start":
+                    headers = [(key, value) for key, value in message.get("headers", [])
+                               if key.lower() not in {b"cache-control", b"vary"}]
+                    message = {**message, "headers": headers + [
+                        (key.lower().encode(), value.encode()) for key, value in PRIVATE.items()
+                    ]}
+                await send(message)
+
+            await self.app(scope, receive, run_private_send)
+            return
         if (method, path) in PUBLIC_ROUTES:
             await self.app(scope, receive, send)
             return

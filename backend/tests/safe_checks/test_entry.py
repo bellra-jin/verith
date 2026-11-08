@@ -577,11 +577,34 @@ class CF014Boundary(unittest.TestCase):
         self.assertLessEqual(names,{'dataclasses','hashlib','json','math','re','observation_window','verification.consecutive'})
 
 
+class CF015Boundary(unittest.TestCase):
+    def test_exact_fourteen_AI_inputs_and_one_collection(self):
+        import hashlib
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        self.assertEqual(len(c.CF015_INPUTS),14)
+        self.assertEqual(c.CF015_TESTS,('tests/unit/test_cf015_fundamental_analysis.py',))
+        for name,digest in c.CF015_INPUTS.items():self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
+        for name,digest in c.CF012_INPUTS.items():self.assertEqual(c.CF015_INPUTS[name],digest)
+        for name in ('ai/src/agents/flow/domain/interpretation_claims.py','ai/src/agents/flow/domain/verification/consecutive.py'):self.assertEqual(c.CF015_INPUTS[name],c.CF014_INPUTS[name])
+
+    def test_fixed_profiles_and_no_protection_change(self):
+        import ast
+        from scripts import check_safe as c
+        self.assertEqual(len(c.FLOW_INPUTS),2);self.assertEqual(len(c.CF004_INPUTS),1)
+        root=Path(__file__).resolve().parents[3]
+        tree=ast.parse((root/'backend/tests/unit/test_cf015_fundamental_analysis.py').read_text())
+        imports=[node for node in tree.body if isinstance(node,ast.ImportFrom) and node.module in {'tests.unit.test_flow_contract','tests.unit.test_cf012_flow_analysis'}]
+        self.assertEqual({a.name for node in imports for a in node.names},{'test_relocation_public_contract_baseline','test_confirmed_collision_stays_terminal_after_winner_deleted','test_other_integrity_failure_is_not_confirmed_report_collision'})
+        self.assertTrue(all(a.asname.startswith('_') for node in imports for a in node.names))
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
     adapter_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf013_self_only",False)
     quality_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf014_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    fundamental_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf015_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

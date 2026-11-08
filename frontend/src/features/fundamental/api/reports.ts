@@ -1,26 +1,15 @@
-import { backendFetch } from "@/shared/api/backend";
-
-// FundamentalReportEnvelope — { report_id, report }. report 는 저장 시 재구성된 상세 payload
-// (fundamental_report + ratios + evidence + interpretation + verification …). 상세 화면은
-// report.fundamental_report.report_html(self-contained fragment)을 iframe 으로 띄운다.
-export type FundamentalReportEnvelope = {
-  report_id: string;
-  report: {
-    fundamental_report?: { report_html?: string | null } & Record<string, unknown>;
-  } & Record<string, unknown>;
-};
-
-// 서버측(상세 페이지 = server component)에서 존재 확인 — 없으면 404 로 notFound() 처리.
-export async function getFundamentalReport(reportId: string): Promise<FundamentalReportEnvelope> {
-  return backendFetch<FundamentalReportEnvelope>(`/api/fundamental/reports/${reportId}`);
+import {canonicalUuid,fetchSession} from '../lib/analysis-request';
+export type FundamentalReportEnvelope={report_id:string;report:Record<string,unknown>};
+export async function getFundamentalReport(reportId:string,signal?:AbortSignal):Promise<FundamentalReportEnvelope>{
+ const id=canonicalUuid(reportId);const response=await fetch('/api/private/fundamental/reports/'+id,{cache:'no-store',signal:signal??AbortSignal.timeout(15000)});
+ if(!response.ok)throw Error('본인 결과를 확인할 수 없습니다.');const raw:unknown=await response.json();
+ if(typeof raw!=='object'||raw===null)throw Error('저장 결과가 잘못됐습니다.');const v=raw as Record<string,unknown>;
+ if(typeof v.report_id!=='string'||canonicalUuid(v.report_id)!==id||typeof v.report!=='object'||v.report===null||Array.isArray(v.report))throw Error('저장 결과가 잘못됐습니다.');
+ return {report_id:id,report:v.report as Record<string,unknown>};
 }
-
-// DELETE /api/fundamental/reports/{id} → 204. 브라우저에서 백엔드 직접 호출(technical·news·industry 와 동일).
-export async function deleteFundamentalReport(reportId: string): Promise<void> {
-  await backendFetch<void>(`/api/fundamental/reports/${reportId}`, { method: "DELETE" });
+export async function deleteFundamentalReport(reportId:string):Promise<void>{
+ const signal=AbortSignal.timeout(15000);const session=await fetchSession(signal);
+ const response=await fetch('/api/private/fundamental/reports/'+canonicalUuid(reportId),{method:'DELETE',headers:{'X-CSRF-Token':session.csrf_token},cache:'no-store',signal});
+ if(response.status!==204)throw Error('본인 결과를 삭제할 수 없습니다.');
 }
-
-// DELETE /api/fundamental/reports → fundamental 리포트 전체 삭제. { deleted: N } 반환.
-export async function deleteAllFundamentalReports(): Promise<{ deleted: number }> {
-  return backendFetch<{ deleted: number }>(`/api/fundamental/reports`, { method: "DELETE" });
-}
+export async function deleteAllFundamentalReports():Promise<never>{throw Error('전체 삭제는 지원하지 않습니다.');}

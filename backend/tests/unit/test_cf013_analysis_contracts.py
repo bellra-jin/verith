@@ -171,6 +171,8 @@ def test_neutral_modules_and_unregistered_example_do_not_reverse_import_domains(
         assert not any('flow' in name or 'fundamental' in name or 'config' in name or 'db.' in name for name in imports)
     source=(root/'examples/analysis/fundamental_adapter.py').read_text()
     assert 'FundamentalReportService' not in source and 'create_report' not in source
-    service=(root/'src/modules/flow/application/analysis_service.py').read_text()
+    facade=(root/'src/modules/flow/application/analysis_service.py').read_text()
+    assert 'FlowProfile' in facade and 'AnalysisCoordinator' in facade
+    service=(root/'src/modules/analysis/application/coordinator.py').read_text()
     for text in ('adapter.build_request()','adapter.validate_and_freeze(response)','adapter.stage(self.session,self.principal,frozen)'):assert text in service
-    assert 'FlowReportIdConflict' in service and "row.state='stored'" in service and 'self.session.commit()' in service
+    assert 'FlowReportIdConflict' in (root/'src/modules/flow/application/analysis_profile.py').read_text() and "row.state='stored'" in service and 'self.session.commit()' in service

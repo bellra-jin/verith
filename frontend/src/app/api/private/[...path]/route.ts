@@ -1,9 +1,18 @@
+import { fundamentalAnalysisEnabled } from '@/shared/server/fundamental-analysis-config';
 import { flowAnalysisEnabled } from '@/shared/server/flow-analysis-config';
 import { flowDemoEnabled } from '@/shared/server/flow-demo-config';
 import { sessionProxy, demoProxyError, analysisProxyError } from '@/shared/server/session-proxy';
 async function handle(request: Request, context:{params:Promise<{path:string[]}>}) {
   const {path}=await context.params;
   const route=path.join('/');
+  if(route==='fundamental'||route.startsWith('fundamental/')){
+    if(!fundamentalAnalysisEnabled())return analysisProxyError('FEATURE_UNAVAILABLE',403);
+    const url=new URL(request.url),id='[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}';
+    const analysis=route==='fundamental/analyses'&&request.method==='POST'||request.method==='GET'&&new RegExp('^fundamental/analyses/'+id+'$').test(route);
+    const reports=route==='fundamental/reports'&&request.method==='GET'||['GET','DELETE'].includes(request.method)&&new RegExp('^fundamental/reports/'+id+'$').test(route);
+    if(!analysis&&!reports||analysis&&url.search)return analysisProxyError('INPUT_INVALID',422);
+    return sessionProxy(request,'/api/'+route,url.search);
+  }
   if(route==='flow/analyses'||route.startsWith('flow/analyses/')){
     if(!flowAnalysisEnabled())return analysisProxyError('FEATURE_UNAVAILABLE',403);
     const exact=route==='flow/analyses'&&request.method==='POST'||request.method==='GET'&&/^flow\/analyses\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(route);

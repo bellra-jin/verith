@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -132,3 +132,25 @@ async def delete_root(session: AsyncSession, report_id: UUID) -> int:
         delete(FundamentalReport).where(FundamentalReport.id == report_id)
     )
     return result.rowcount or 0
+
+
+# Every eligible root has exactly one total Fundamental index, same owner, and
+# one immutable stored-ledger association. Filter before count/pagination.
+def eligible_ids(owner_user_id):
+    from db.models.fundamental.analysis_run import FundamentalAnalysisRun
+    indexes=select(AgentReport.agent_report_id).where(AgentReport.agent_type=='fundamental').group_by(AgentReport.agent_report_id).having(func.count()==1,func.count().filter(AgentReport.owner_user_id==owner_user_id)==1)
+    return select(FundamentalReport.id).join(FundamentalAnalysisRun,(FundamentalAnalysisRun.adopted_report_id==FundamentalReport.id)&(FundamentalAnalysisRun.owner_user_id==owner_user_id)&(FundamentalAnalysisRun.state=='stored')).where(FundamentalReport.owner_user_id==owner_user_id,FundamentalReport.id.in_(indexes))
+
+async def get_owned_report(session,report_id,*,owner_user_id,lock=False):
+    statement=select(FundamentalReport).where(FundamentalReport.id==report_id,FundamentalReport.id.in_(eligible_ids(owner_user_id)))
+    if lock:statement=statement.with_for_update(of=FundamentalReport)
+    return await session.scalar(statement.execution_options(populate_existing=True))
+
+async def get_agent_indexes(session,report_id):
+    return list((await session.scalars(select(AgentReport).where(AgentReport.agent_type=='fundamental',AgentReport.agent_report_id==report_id))).all())
+
+async def list_owned_indexes(session,*,owner_user_id,stock_code=None,limit=20,offset=0,count=False):
+    statement=select(AgentReport).where(AgentReport.agent_type=='fundamental',AgentReport.owner_user_id==owner_user_id,AgentReport.agent_report_id.in_(eligible_ids(owner_user_id)))
+    if stock_code:statement=statement.where(AgentReport.stock_code==stock_code)
+    if count:return await session.scalar(select(func.count()).select_from(statement.subquery()))
+    return list((await session.scalars(statement.order_by(AgentReport.created_at.desc(),AgentReport.id.desc()).limit(limit).offset(offset))).all())

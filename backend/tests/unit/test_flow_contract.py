@@ -121,6 +121,37 @@ def project_cf012_exact_additions(api):
     del api['paths'][PATH];del api['paths'][PATH+'/{analysis_id}']
 
 
+def project_cf015_exact_additions(api):
+    """Validate exact new financial DTOs/paths; preserve the old Flow baseline."""
+    from src.modules.fundamental.api.analysis_schemas import PATH,FundamentalAnalysisRequest,FundamentalAnalysisView,FundamentalAnalysisResponse
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.openapi.models import Schema
+    components=api['components']['schemas'];expected={}
+    names=('FundamentalAnalysisRequest','FundamentalAnalysisView','CommonResponse_FundamentalAnalysisView_')
+    request=components[names[0]]
+    assert request['additionalProperties'] is False
+    assert set(request['properties'])==set(request['required'])=={'ticker','question','idempotency_key','allow_analysis'}
+    assert request['properties']['allow_analysis']['const'] is True
+    assert request['properties']['ticker']['pattern']=='^[0-9]{6}$'
+    assert components[names[1]]['properties']['state']['enum']==['running','result_ready','stored','failed','unknown']
+    for model,name in zip((FundamentalAnalysisRequest,FundamentalAnalysisView,FundamentalAnalysisResponse),names):
+        value=model.model_json_schema(ref_template='#/components/schemas/{model}',mode='validation' if name==names[0] else 'serialization')
+        expected.update(value.pop('$defs',{}));expected[name]=value
+    for name in names:
+        assert components[name]==jsonable_encoder(Schema.model_validate(expected[name]),by_alias=True,exclude_none=True)
+        del components[name]
+    for path,method in ((PATH,'post'),(PATH+'/{analysis_id}','get')):
+        assert set(api['paths'][path])=={method}
+        for status in ('200','202'):assert api['paths'][path][method]['responses'][status]['content']['application/json']['schema']=={'$ref':'#/components/schemas/'+names[2]}
+    assert api['paths'][PATH]['post']['requestBody']['content']['application/json']['schema']=={'$ref':'#/components/schemas/'+names[0]}
+    del api['paths'][PATH];del api['paths'][PATH+'/{analysis_id}']
+    # Approved owned list adds an optional ticker filter; only this parameter changes.
+    parameters=api['paths']['/api/fundamental/reports']['get']['parameters']
+    stock=next(p for p in parameters if p['name']=='stock_code')
+    assert stock=={'name':'stock_code','in':'query','required':False,'schema':{'anyOf':[{'type':'string','pattern':'^[0-9]{6}$'},{'type':'null'}],'title':'Stock Code'}}
+    stock['required']=True;stock['schema']={'type':'string','pattern':r'^\d{6}$','title':'Stock Code'}
+
+
 def assert_public_contract_compatibility(values):
     """Validate exact additions first, then remove only reviewed JSON pointers from a copy."""
     import hashlib
@@ -130,6 +161,11 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf015_exact_additions(api)
+    from src.modules.fundamental.api.analysis_schemas import FundamentalAnalysisResponse
+    if "CommonResponse[FundamentalAnalysisView]" in projected["schemas"]:
+        assert projected["schemas"]["CommonResponse[FundamentalAnalysisView]"]==FundamentalAnalysisResponse.model_json_schema()
+        del projected["schemas"]["CommonResponse[FundamentalAnalysisView]"]
     project_cf012_exact_additions(api)
     from src.modules.flow.api.analysis_schemas import AnalysisResponse
     if "CommonResponse[AnalysisView]" in projected["schemas"]:

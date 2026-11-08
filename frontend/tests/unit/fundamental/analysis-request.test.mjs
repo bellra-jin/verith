@@ -63,3 +63,8 @@ test('source links accept only http/https and preserve zero/null, raw UUIDs neve
  const component=fs.readFileSync(path.join(root,'src/features/fundamental/components/analysis-request.tsx'),'utf8');
  assert.ok(component.includes('Date.now()<Date.parse(value.deadline_at)'));assert.ok(component.includes('상태 다시 조회 (실행 없음)'));assert.ok(component.includes('if(id)pollRequest.current(id)'));assert.ok(component.includes('analysisId??pending.current?.analysis_id??view?.analysis_id'));assert.equal(component.includes('disabled={!verified||busy||!view}'),false);
 });
+test('financial engine timestamp is not a source date; original date/zero/null/period stays unchanged',()=>{
+ const h=load();const raw={as_of:'2026-11-08T18:00:00+00:00',period_label:'2023',zero:0,missing:null};const original=JSON.stringify(raw);
+ assert.equal(h.displayValue(raw.as_of),raw.as_of);assert.equal(h.displayValue(raw.period_label),'2023');assert.equal(h.displayValue(raw.zero),'0');assert.equal(h.displayValue(raw.missing),'자료 없음');assert.equal(JSON.stringify(raw),original);
+ const source=fs.readFileSync(path.join(root,'src/features/fundamental/components/fundamental-report-view.tsx'),'utf8');assert.ok(source.includes('엔진 기록 시각 (자료 기준일 미확인)'));assert.equal(source.includes('자료 기준일 (요청 시각과 다름)'),false);assert.ok(source.includes('displayValue(root.as_of)'));assert.ok(source.includes('displayValue(root.period_label)'));assert.equal(source.includes('root.as_of='),false);assert.ok(source.includes('생성 기록이며 원천 금융자료의 기준일이나 공시 시점을 보증하지 않습니다'));
+});

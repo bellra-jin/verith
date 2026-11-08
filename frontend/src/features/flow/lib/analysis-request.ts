@@ -79,3 +79,69 @@ export class AnalysisIntent{
  accepts(ticket:number):boolean{return this.generation===ticket;}
  finish(ticket:number):void{if(this.accepts(ticket))this.busy=false;}
 }
+
+// One fixed budget per analysis; responses and timer reservations cannot extend it.
+export class AnalysisObservation {
+ private id:string|null=null;
+ private started=0;
+ private last=0;
+ private until=0;
+ private finalUsed=false;
+ private deadlineBound=false;
+ private closed=false;
+ begin(id:string,monotonic:number):void{
+  id=canonicalUuid(id);if(this.id===id)return;
+  this.id=id;this.started=this.last=monotonic;this.until=monotonic+120000;this.finalUsed=false;this.deadlineBound=false;
+  this.closed=!Number.isFinite(monotonic)||monotonic<0;
+ }
+ stop():void{this.closed=true;}
+ permit(monotonic:number):boolean{
+  if(this.id===null||this.closed)return false;
+  if(!Number.isFinite(monotonic)||monotonic<this.last){this.closed=true;return false;}
+  this.last=monotonic;
+  if(monotonic>=this.until){
+   if(this.finalUsed){this.closed=true;return false;}
+   this.finalUsed=true;
+  }
+  return true;
+ }
+ next(view:AnalysisView,monotonic:number,wall:number):{kind:'stop'|'wait'|'final';delay:number}{
+  const stop=()=>({kind:'stop' as const,delay:0});
+  if(this.closed)return stop();
+  if(!uuid(view.analysis_id)||canonicalUuid(view.analysis_id)!==this.id||view.state!=='running'||!Number.isFinite(monotonic)||monotonic<this.last||!Number.isFinite(wall)){
+   this.closed=true;return stop();
+  }
+  this.last=monotonic;
+  if(!this.deadlineBound){
+   const deadline=Date.parse(view.deadline_at);
+   if(!stamp(view.deadline_at)||!/(?:Z|[+-]\d{2}:\d{2})$/i.test(view.deadline_at)||!Number.isFinite(deadline)){this.closed=true;return stop();}
+   this.until=Math.min(this.started+120000,monotonic+Math.max(0,deadline-wall));this.deadlineBound=true;
+  }
+  if(this.finalUsed){this.closed=true;return stop();}
+  if(monotonic<this.until)return {kind:'wait',delay:Math.min(1000,this.until-monotonic)};
+  return {kind:'final',delay:0};
+ }
+}
+
+export function observationId(urlId:string|null,pendingId:string|undefined|null):string|null{
+ // An explicit URL can never be replaced by another tab's pending identity.
+ if(urlId!==null)return uuid(urlId)?canonicalUuid(urlId):null;
+ return uuid(pendingId)?canonicalUuid(pendingId):null;
+}
+export class AnalysisAccountChanged extends Error{}
+export async function observeAnalysis(userId:string,id:string|null,signal:AbortSignal,current:()=>boolean,allowRead:()=>boolean=()=>true):Promise<{view:AnalysisView|null;stopped?:boolean}|null>{
+ try{
+ if(!current())return null;
+ if(signal.aborted)throw new AnalysisHttpError(503);
+ const session=await fetchSession(signal);
+ if(!current())return null;
+ if(signal.aborted)throw new AnalysisHttpError(503);
+ if(session.user_id!==canonicalUuid(userId))throw new AnalysisAccountChanged('로그인 계정이 변경됐습니다.');
+ if(id!==null&&!allowRead())return {view:null,stopped:true};
+ const view=id===null?null:await getAnalysis(canonicalUuid(id),signal);
+ if(!current())return null;
+ if(signal.aborted)throw new AnalysisHttpError(503);
+ return {view};
+ }catch(error){if(!current())return null;
+ if(signal.aborted)throw new AnalysisHttpError(503);throw error;}
+}

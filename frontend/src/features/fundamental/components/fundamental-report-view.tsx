@@ -24,7 +24,8 @@ export function FundamentalReportView({reportId}:{reportId:string}){
  const interpretation=record(erd.report_interpretation)?erd.report_interpretation:{};
  return <main><h1>{displayValue(raw.corp_name)} 재무 결과</h1><FundamentalActions reportId={value.report_id}/>
   <p>저장된 원본 해석입니다. 실제 공급자와 재무 품질은 미검증이며 과거 시점 분석을 보장하지 않습니다.</p>
-  <dl><dt>종목</dt><dd>{displayValue(raw.ticker)}</dd><dt>점수</dt><dd>{displayValue(raw.score)}</dd><dt>판정</dt><dd>{displayValue(raw.verdict)}</dd><dt>데이터 상태</dt><dd>{displayValue(root.data_status)}</dd><dt>자료 기준일 (요청 시각과 다름)</dt><dd>{displayValue(root.as_of)}</dd><dt>재무 기간</dt><dd>{displayValue(root.period_label)}</dd></dl>
+  <dl><dt>종목</dt><dd>{displayValue(raw.ticker)}</dd><dt>점수</dt><dd>{displayValue(raw.score)}</dd><dt>판정</dt><dd>{displayValue(raw.verdict)}</dd><dt>데이터 상태</dt><dd>{displayValue(root.data_status)}</dd><dt>엔진 기록 시각 (자료 기준일 미확인)</dt><dd>{displayValue(root.as_of)}</dd><dt>재무 기간</dt><dd>{displayValue(root.period_label)}</dd></dl>
+  <p>엔진 기록 시각은 생성 기록이며 원천 금융자료의 기준일이나 공시 시점을 보증하지 않습니다. 재무 기간과 공시 발췌는 저장된 원래 값입니다.</p>
   <h2>해석 원문</h2><p style={{whiteSpace:'pre-wrap'}}>{displayValue(interpretation.interpretation)}</p>
   <h2>지표</h2><ul>{rows(erd.report_ratios).map((row,i)=><li key={i}>{displayValue(row.label)}: {displayValue(row.display_value??row.value)} {displayValue(row.unit)} · {displayValue(row.status)} · {displayValue(row.reason)}</li>)}</ul>
   <h2>근거·출처</h2><ul>{rows(erd.report_evidence).map((row,i)=>{const url=safeSourceUrl(row.source_url);return <li key={i}>{displayValue(row.claim)} · {displayValue(row.display_value??row.amount)} {displayValue(row.unit)} · {url?<a href={url} target="_blank" rel="noreferrer noopener">출처</a>:<span>{displayValue(row.source_url)}</span>}</li>;})}</ul>

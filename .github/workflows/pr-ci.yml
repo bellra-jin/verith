@@ -47,12 +47,19 @@ jobs:
           # The setup-python interpreter only inspects files here; protected tests
           # exclusively use the verified, isolated installation below.
           "$pythonLocation/bin/python" -I -S - "$cf014_root" "$GITHUB_ENV" <<'PY'
-          import os, stat, sys
+          import json, os, stat, sys
           from pathlib import Path
           root = Path(sys.argv[1])
           assert root.is_absolute() and not root.is_symlink() and root.resolve(strict=True) == root
           assert root.stat().st_uid == os.getuid() and stat.S_IMODE(root.stat().st_mode) == 0o700
           runtime = root / 'runtime/cpython-3.12.10-macos-aarch64-none'
+          minor_link = root / 'runtime/cpython-3.12-macos-aarch64-none'
+          def reject(path, reason, target=None):
+              relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else '<outside-owned-root>'
+              target_label = (target.relative_to(root).as_posix() if target.is_relative_to(root)
+                              else '<outside-owned-root>') if target is not None else None
+              print(json.dumps(dict(path=relative, reason=reason, target=target_label)))
+              raise SystemExit(78)
           assert runtime.is_dir() and not runtime.is_symlink()
           executable = (runtime / 'bin/python3.12').resolve(strict=True)
           assert executable.is_relative_to(runtime) and executable.is_file()
@@ -60,11 +67,21 @@ jobs:
               for path in [Path(current), *(Path(current)/name for name in directories+files)]:
                   metadata = path.lstat()
                   if stat.S_ISLNK(metadata.st_mode):
-                      assert not Path(os.readlink(path)).is_absolute()
-                      assert path.resolve(strict=True).is_relative_to(root)
+                      raw_target = Path(os.readlink(path))
+                      try:
+                          target = path.resolve(strict=True)
+                      except (OSError, RuntimeError):
+                          reject(path, 'LINK_UNRESOLVED')
+                      if not target.is_relative_to(root):
+                          reject(path, 'LINK_ESCAPE', target)
+                      if raw_target.is_absolute() and not (path == minor_link and raw_target == runtime
+                              and target == runtime.resolve(strict=True)):
+                          reject(path, 'UNEXPECTED_ABSOLUTE_LINK', target)
                   else:
-                      assert stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)
-                      assert metadata.st_uid == os.getuid() and not metadata.st_mode & 0o022
+                      if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
+                          reject(path, 'ENTRY_TYPE')
+                      if metadata.st_uid != os.getuid() or metadata.st_mode & 0o022:
+                          reject(path, 'ENTRY_METADATA')
           with open(sys.argv[2], 'a', encoding='utf-8') as target:
               target.write(f'CF014_PYTHON={executable}\nCF014_PYTHON_OWNER={root}\n')
           print('Owned runtime paths/links/uid/mode verified; toolcache unchanged')

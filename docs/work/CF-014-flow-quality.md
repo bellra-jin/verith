@@ -65,7 +65,20 @@ embedded catalog·HashReader·HashMismatch 경로를 읽었다. clean env에서 
 이 filesystem metadata 검사만 수행하며, lock 설치와 보호 검사는 새 절대 Python만 쓴다.
 venv canonical interpreter가 자기 디렉터리 밖이면 실패하고 toolcache로 후퇴하지 않는다.
 표준 CI의 일회용 runner 공간에만 설치하며 원래 toolcache/OS 권한·guard는 불변이다.
-후속 실제 실행 결과는 별도로 확인한다.
+[전용 Python 첫 회차](https://github.com/bellra-jin/verith/actions/runs/42504452140)는
+head `dafb7849d373dca8bf2f212073f64b409d700873` / checkout merge
+`52cada0c7485a2b9b59ae1cd28d984c9e2e2bd86`에서 공식 managed Python 설치 후,
+추가한 모든 절대 symlink 거부 assertion에서 중단했다. 실패 링크 자체 경로는 미수집이므로
+아래 알려진 링크와 같았다고 확정하지 않는다. 해당 회차 wheel/self/unit은 미실행이다.
+
+[공식 uv managed source](https://raw.githubusercontent.com/astral-sh/uv/0.13.7/crates/uv-python-managed/src/managed.rs)의
+minor-version link 생성 경로에 맞춰 자기 root의
+`runtime/cpython-3.12-macos-aarch64-none` 한 개만 정확한 patch runtime
+`runtime/cpython-3.12.10-macos-aarch64-none`으로의 raw 절대 대상 및 canonical 대상이
+모두 일치할 때 지원한다. 그 외 절대 링크·모든 root 외부 escape는 계속 거부한다.
+뜻밖의 거부는 자기 root 상대경로/고정 사유/대상 상대경로만 기록하고 외부 대상은
+고정 redaction한다. 기존 metadata/OS/FS/network guard와 제품 source는 변경하지 않는다.
+후속 실제 결과는 별도로 확인한다.
 
 ## 범위·호환·source 검토
 

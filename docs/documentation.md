@@ -1,5 +1,12 @@
 # 문서 목록과 권위
 
+## CF-004 현재 무키 작업
+
+PR #7 병합 `38c0b34a5741198484278767a7ada1c925f71301` 위의 Flow KIS 캐시 보완이다.
+[캐시 계약](../ai/docs/contracts/flow/kis-token-cache.md)·[직접 검증 기록](work/CF-004-flow-kis-token-cache.md)을 따른다.
+stdlib 캐시 문맥/strict 검증/안전 저장과 한정 보호 회귀이며 실제 키·캐시·KIS/AI 실행은 포함하지 않는다.
+아래 CF-003/ST-001 안내와 숫자는 각 단계 이력으로 보존한다.
+
 ## CF-003 현재 작업 기준
 
 현재 새 기능 기준은 PR #6 병합 `d67f731b1c2f452179d66abaa2b3381cccb8a15d`다.

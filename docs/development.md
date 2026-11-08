@@ -1,5 +1,14 @@
 # 공용 환경 참고와 실행 경계
 
+## CF-004 한정 캐시 검사
+
+현재 무키 Flow 캐시 보완은 [캐시 계약](../ai/docs/contracts/flow/kis-token-cache.md)과
+[CF-004 작업 기록](work/CF-004-flow-kis-token-cache.md)을 따른다. 기존 Backend 보호 입구의
+`self-test`/`unit`에 exact stdlib AI source 하나와 고정 unit 하나만 추가한다. clean env와
+기존 절대 Backend Python `-I -S`를 사용하며 전체 launcher는 작업 기록에 있다.
+실제 KIS client import·AI pytest·키/.env·기존 캐시·외부 KIS/AI·DB는 실행하지 않는다.
+아래 CF-003/ST-001 수치와 명령은 해당 단계 이력이며 이번 검증 결과로 재사용하지 않는다.
+
 ## CF-003 현재 접수 기반 검증
 
 현재 feature 기준은 PR #6 병합 `d67f731b1c2f452179d66abaa2b3381cccb8a15d`다.

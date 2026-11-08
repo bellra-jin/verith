@@ -33,6 +33,7 @@ AUDITED_CLIENT_TESTS = ("tests/test_ai_client.py",)
 AUDITED_NEWS_TESTS = ("tests/test_importance.py",)
 UNIT += AUDITED_STOCK_TESTS + AUDITED_TECHNICAL_TESTS + AUDITED_CLIENT_TESTS + AUDITED_NEWS_TESTS
 UNIT += ("tests/unit/test_cf003_flow_runs.py",)
+UNIT += ("tests/unit/test_cf004_kis_token_cache.py",)
 NEW = {"backend/scripts/check_safe.py", "backend/scripts/safe_checks_bootstrap.py",
        "backend/tests/safe_checks/test_entry.py",
        "backend/src/modules/flow/domain/payload.py",
@@ -110,6 +111,9 @@ CF003_SOURCES = frozenset({
     "backend/scripts/cf003_admission_check.py",
 })
 NEW.update(CF003_SOURCES)
+CF004_INPUTS = {"ai/src/agents/flow/infrastructure/token_cache.py": "3e090e2992aa9a0c7f78f644132765e616c002b35b5994ebc71a3f2fd26bad7f"}
+NEW.update(CF004_INPUTS)
+NEW.add("backend/tests/unit/test_cf004_kis_token_cache.py")
 FLOW_INPUTS = {'ai/src/agents/flow/api/payload.py': 'e3076a97d9c4c5cc6159f0488f351b07613353dbe67371a001ff6ee995479fc2', 'ai/src/agents/flow/domain/models.py': '5d3e2c5a243a0faed6f638f2af802a138d338e5bc324ebab3b2573810162fd12'}
 REMOVED_SOURCES = frozenset(['backend/src/api/access_boundary.py', 'backend/src/api/auth/google.py', 'backend/src/api/clients/ai_client.py', 'backend/src/api/clients/dart_corp_code_client.py', 'backend/src/api/clients/kis_master_client.py', 'backend/src/api/config.py', 'backend/src/api/constants/importance.py', 'backend/src/api/constants/kis_master.py', 'backend/src/api/constants/stock_aliases.py', 'backend/src/api/constants/stock_match.py', 'backend/src/api/constants/stocks.py', 'backend/src/api/repositories/agent_report_repository.py', 'backend/src/api/repositories/corp_code_repository.py', 'backend/src/api/repositories/flow_report_repository.py', 'backend/src/api/repositories/fundamental_report_repository.py', 'backend/src/api/repositories/industry_report_repository.py', 'backend/src/api/repositories/news_graph_repository.py', 'backend/src/api/repositories/news_report_repository.py', 'backend/src/api/repositories/news_repository.py', 'backend/src/api/repositories/stock_repository.py', 'backend/src/api/repositories/technical_report_repository.py', 'backend/src/api/routes/auth.py', 'backend/src/api/routes/flow_reports.py', 'backend/src/api/routes/fundamental_reports.py', 'backend/src/api/routes/industry_reports.py', 'backend/src/api/routes/news.py', 'backend/src/api/routes/reports.py', 'backend/src/api/routes/stocks.py', 'backend/src/api/routes/technical_reports.py', 'backend/src/api/schemas/agent_report.py', 'backend/src/api/schemas/ai_fundamental_output.py', 'backend/src/api/schemas/ai_technical_output.py', 'backend/src/api/schemas/flow_execution.py', 'backend/src/api/schemas/flow_payload.py', 'backend/src/api/schemas/flow_report.py', 'backend/src/api/schemas/fundamental_report.py', 'backend/src/api/schemas/industry_report.py', 'backend/src/api/schemas/news.py', 'backend/src/api/schemas/news_report.py', 'backend/src/api/schemas/report_archive.py', 'backend/src/api/schemas/stock_resolve.py', 'backend/src/api/schemas/technical_report.py', 'backend/src/api/services/auth_service.py', 'backend/src/api/services/corp_code_sync_service.py', 'backend/src/api/services/dart_corp_code_parser.py', 'backend/src/api/services/flow_report_service.py', 'backend/src/api/services/fundamental_report_service.py', 'backend/src/api/services/importance.py', 'backend/src/api/services/industry_report_service.py', 'backend/src/api/services/news_cleanup_service.py', 'backend/src/api/services/news_graph_query_service.py', 'backend/src/api/services/news_query_service.py', 'backend/src/api/services/news_report_service.py', 'backend/src/api/services/news_service.py', 'backend/src/api/services/stock_master_parser.py', 'backend/src/api/services/stock_resolver_service.py', 'backend/src/api/services/stock_sync_service.py', 'backend/src/api/services/technical_report_service.py', 'backend/src/api/text_normalize.py', 'ai/src/agents/flow/schemas.py', 'ai/src/agents/flow/export/to_json.py'])
 EXTRA = {"backend/tests/fixtures/kis_master.py", "backend/tests/fixtures/dart_corp_code.py","backend/tests/db_safety.py", "backend/tests/fixtures/flow_payload.py",
@@ -303,7 +307,7 @@ def prove_os_boundary(owned, executable, profile, registry):
 
 
 def source_allowed(p):
-    return p not in REMOVED_SOURCES and not private_path(p) and (p in EXTRA or p in FLOW_INPUTS or p in NEW
+    return p not in REMOVED_SOURCES and not private_path(p) and (p in EXTRA or p in FLOW_INPUTS or p in CF004_INPUTS or p in NEW
         or p in {"backend/"+u for u in UNIT}
         or p.startswith(("backend/src/", "backend/db/")) and p.endswith(".py")
         or p.startswith("backend/tests/") and p.endswith("/__init__.py"))
@@ -320,7 +324,7 @@ def selected_sources(repo):
         if source_allowed(p):
             if mode != "100644" or stage != "0": raise UnsafeCheck("unsupported source index metadata")
             selected.add(p)
-    required = EXTRA | FLOW_INPUTS.keys() | {"backend/"+u for u in UNIT}
+    required = EXTRA | FLOW_INPUTS.keys() | CF004_INPUTS.keys() | {"backend/"+u for u in UNIT}
     if not required <= selected | NEW: raise UnsafeCheck("required selected source missing from index or exact new inputs")
     return sorted(selected | NEW)
 
@@ -350,7 +354,7 @@ def execute(repo, modes):
         fingerprints = {}
         for p in selected_sources(repo):
             data = regular_bytes(repo, p)
-            if p in FLOW_INPUTS and hashlib.sha256(data).hexdigest() != FLOW_INPUTS[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             target = checkout / p
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,34 @@ import unittest
 
 
 class EntryBoundary(unittest.TestCase):
+    def test_cf004_exact_pin_and_namespace_boundary(self):
+        import hashlib
+        from scripts import check_safe as controller
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        from types import SimpleNamespace
+        expected = "ai/src/agents/flow/infrastructure/token_cache.py"
+        self.assertEqual(set(controller.CF004_INPUTS), {expected})
+        self.assertEqual(controller.UNIT.count("tests/unit/test_cf004_kis_token_cache.py"), 1)
+        checkout = Path(__file__).resolve().parents[3]
+        data = controller.regular_bytes(checkout, expected)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), controller.CF004_INPUTS[expected])
+        self.assertNotEqual(hashlib.sha256(data+b"\n# synthetic mutation").hexdigest(), controller.CF004_INPUTS[expected])
+        self.assertFalse(controller.source_allowed("ai/src/agents/flow/infrastructure/adjacent.py"))
+        source = Path(os.environ["TMPDIR"]) / "synthetic-checkout/backend"
+        ai = source.parent / "ai/src"
+        modules = {name: SimpleNamespace(__spec__=SimpleNamespace(origin=None, submodule_search_locations=[str(ai.joinpath(*name.split('.')))]))
+                   for name in ("agents", "agents.flow", "agents.flow.api", "agents.flow.domain", "agents.flow.infrastructure")}
+        for name, relative in (("agents.flow.api.payload", "agents/flow/api/payload.py"),
+                               ("agents.flow.domain.models", "agents/flow/domain/models.py"),
+                               ("agents.flow.infrastructure.token_cache", "agents/flow/infrastructure/token_cache.py")):
+            modules[name] = SimpleNamespace(__spec__=SimpleNamespace(origin=str(ai / relative)))
+        self.assertTrue(valid_flow_origins(source, modules))
+        modules["agents.flow.infrastructure"].__spec__.submodule_search_locations.append("/synthetic/other")
+        self.assertFalse(valid_flow_origins(source, modules))
+        modules["agents.flow.infrastructure"].__spec__.submodule_search_locations.pop()
+        modules["agents.flow.infrastructure.token_cache"].__spec__.origin = str(ai / "agents/flow/infrastructure/adjacent.py")
+        self.assertFalse(valid_flow_origins(source, modules))
+
     def test_cf003_owned_home_is_scoped_without_tls_changes(self):
         from types import SimpleNamespace
         from scripts.cf003_admission_check import owned_postgres_home
@@ -100,14 +128,14 @@ class EntryBoundary(unittest.TestCase):
         source = Path(os.environ["TMPDIR"]) / "synthetic-checkout/backend"
         ai = source.parent / "ai/src"
         modules = {name: SimpleNamespace(__spec__=SimpleNamespace(origin=None, submodule_search_locations=[str(ai.joinpath(*name.split('.')))]))
-                   for name in ("agents", "agents.flow", "agents.flow.api", "agents.flow.domain")}
-        for name, relative in (("agents.flow.api.payload", "agents/flow/api/payload.py"), ("agents.flow.domain.models", "agents/flow/domain/models.py")):
+                   for name in ("agents", "agents.flow", "agents.flow.api", "agents.flow.domain", "agents.flow.infrastructure")}
+        for name, relative in (("agents.flow.api.payload", "agents/flow/api/payload.py"), ("agents.flow.domain.models", "agents/flow/domain/models.py"), ("agents.flow.infrastructure.token_cache", "agents/flow/infrastructure/token_cache.py")):
             modules[name] = SimpleNamespace(__spec__=SimpleNamespace(origin=str(ai / relative)))
         self.assertTrue(valid_flow_origins(source, modules))
         modules["agents"].__spec__.submodule_search_locations.append("/synthetic/unapproved")
         self.assertFalse(valid_flow_origins(source, modules))
         modules["agents"].__spec__.submodule_search_locations.pop()
-        for name in ("agents.flow.api.payload", "agents.flow.domain.models"):
+        for name in ("agents.flow.api.payload", "agents.flow.domain.models", "agents.flow.infrastructure.token_cache"):
             old = modules[name].__spec__.origin
             modules[name].__spec__.origin = "/synthetic/unapproved/module.py"
             self.assertFalse(valid_flow_origins(source, modules))

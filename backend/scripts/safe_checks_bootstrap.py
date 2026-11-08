@@ -100,7 +100,7 @@ def valid_results(status, collected, passed, bad, violations):
 
 def valid_flow_origins(source, modules):
     ai = (source.parent / "ai/src").resolve()
-    for name in ("agents", "agents.flow", "agents.flow.api", "agents.flow.domain"):
+    for name in ("agents", "agents.flow", "agents.flow.api", "agents.flow.domain", "agents.flow.infrastructure"):
         spec = getattr(modules.get(name), "__spec__", None)
         locations = getattr(spec, "submodule_search_locations", None)
         if getattr(spec, "origin", "invalid") is not None or locations is None:
@@ -108,7 +108,8 @@ def valid_flow_origins(source, modules):
         if [Path(p).resolve() for p in locations] != [ai.joinpath(*name.split("."))]:
             return False
     for name, relative in (("agents.flow.api.payload", "agents/flow/api/payload.py"),
-                           ("agents.flow.domain.models", "agents/flow/domain/models.py")):
+                           ("agents.flow.domain.models", "agents/flow/domain/models.py"),
+                           ("agents.flow.infrastructure.token_cache", "agents/flow/infrastructure/token_cache.py")):
         spec = getattr(modules.get(name), "__spec__", None)
         origin = getattr(spec, "origin", None)
         if not origin or Path(origin).resolve() != ai / relative:

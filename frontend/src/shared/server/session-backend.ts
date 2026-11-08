@@ -5,7 +5,8 @@ import { headers } from "next/headers";
 export function sessionBackendUrl(): string | null {
   const value = process.env.BACKEND_URL;
   if (!value) return null;
-  const url = new URL(value);
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null;
   return url.origin;
 }

@@ -8,11 +8,12 @@ import {spawn,execFileSync} from 'node:child_process';
 export const modes=['self-test','unit','local-http','build','type','lint'];
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const repo=path.dirname(project);
-const unit=['unit/bff/disabled-routes.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs','unit/flow/observation.test.mjs'];
-const http=['integration/bff/disabled-http.test.mjs','integration/bff/session-http.test.mjs','integration/bff/ports-http.test.mjs'];
+const unit=['unit/bff/disabled-routes.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs','unit/flow/observation.test.mjs','unit/flow/synthetic-demo.test.mjs'];
+const http=['integration/bff/disabled-http.test.mjs','integration/bff/session-http.test.mjs','integration/bff/ports-http.test.mjs','integration/bff/synthetic-demo-http.test.mjs'];
 const fixed=['tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts','package.json','package-lock.json','tsconfig.json','next.config.ts','postcss.config.mjs','eslint.config.mjs',
  ...unit.map(p=>'tests/'+p),...http.map(p=>'tests/'+p),'tests/helpers/safe-http.mjs','scripts/safe-checks-guard.cjs','scripts/check-local-ports.mjs'];
 const fresh=new Set(['scripts/safe-checks-guard.cjs','tests/helpers/safe-http.mjs','tests/tooling/safe-checks.test.mjs','tests/unit/flow/observation.test.mjs','tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts']);
+for(const file of ["src/shared/server/flow-demo-config.ts", "src/app/flow/demo/page.tsx", "src/features/flow/components/synthetic-demo.tsx", "src/features/flow/lib/synthetic-demo.ts", "tests/unit/flow/synthetic-demo.test.mjs", "tests/integration/bff/synthetic-demo-http.test.mjs"])fresh.add(file);
 const icons=new Set(['file.svg','globe.svg','next.svg','vercel.svg','window.svg'].map(p=>'public/'+p));
 export const relocationSources=Object.freeze({
   "src/api/backend.ts": "src/shared/api/backend.ts",
@@ -320,6 +321,7 @@ async function execute(selected){
   if(selected.includes('lint'))console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
    ...Object.values(relocationSources).filter(p=>/\.(ts|tsx)$/.test(p)),
    'src/features/technical/components/indicator-card.tsx',
+   'src/shared/server/flow-demo-config.ts','src/app/flow/demo/page.tsx','src/features/flow/components/synthetic-demo.tsx','src/features/flow/lib/synthetic-demo.ts','src/app/api/private/[...path]/route.ts','src/proxy.ts','tests/unit/flow/synthetic-demo.test.mjs',
    'src/features/flow/lib/observation-window.ts','src/features/flow/components/flow-report-view.tsx','tests/unit/flow/observation.test.mjs',
    'src/shared/server/session-backend.ts','src/shared/server/session-proxy.ts','src/features/archive/lib/pagination.ts','src/app/page.tsx','src/app/reports/flow/[reportId]/page.tsx','src/features/flow/components/session-controls.tsx','src/shared/api/backend.ts',
    'tests/unit/config/ports.test.mjs',...http.map(p=>'tests/'+p),'tests/tooling/safe-checks.test.mjs','tests/helpers/safe-http.mjs','scripts/check-local-ports.mjs','scripts/safe-checks-guard.cjs'],180000));

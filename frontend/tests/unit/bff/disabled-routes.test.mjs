@@ -68,7 +68,7 @@ test("client analysis entry cannot call an upstream or return demo-success", asy
 
 test("SSR reports are rewritten before page data access without external calls", () => {
   const { proxy, config } = load("src/proxy.ts", () => { throw new Error("unexpected upstream"); });
-  assert.deepEqual(Array.from(config.matcher), ["/reports/:path*"]);
+  assert.deepEqual(Array.from(config.matcher), ["/reports/:path*", "/flow/demo/:path*"]);
   const response = proxy({url:"http://unit/reports/technical/demo",nextUrl:{pathname:"/reports/technical/demo"}});
   assert.equal(response.headers.get("x-middleware-rewrite"), "http://unit/unavailable");
   assert.equal(response.headers.get("cache-control"), "private, no-store");

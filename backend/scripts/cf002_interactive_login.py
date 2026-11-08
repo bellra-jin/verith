@@ -482,6 +482,7 @@ def main():
     mode.add_argument("--verify-flow-admission-db", action="store_true")
     mode.add_argument("--verify-flow-input-snapshot-db", action="store_true")
     mode.add_argument("--verify-flow-fake-execution-db", action="store_true")
+    mode.add_argument("--verify-flow-synthetic-demo-db", action="store_true")
     mode.add_argument("--verify-fake-environment", action="store_true")
     mode.add_argument("--google-input", choices=["approved-file"])
     parser.add_argument("--lifetime-seconds", type=int, default=3600)
@@ -511,7 +512,7 @@ def main():
     for signum in (signal.SIGINT, signal.SIGTERM):
         old_handlers[signum] = signal.signal(signum, stop)
     try:
-        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db):
+        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db):
             ensure_local_ports_free()
         docker = LocalDocker()
         if args.verify_flow_admission_db:
@@ -523,6 +524,10 @@ def main():
 
             db_test_context.enter_context(owned_postgres_home(docker))
         elif args.verify_flow_fake_execution_db:
+            from scripts.cf003_admission_check import owned_postgres_home
+
+            db_test_context.enter_context(owned_postgres_home(docker))
+        elif args.verify_flow_synthetic_demo_db:
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
@@ -598,6 +603,13 @@ def main():
             cf003_stage = "admission_check"
             result = asyncio.run(asyncio.wait_for(verify_fake_execution(proof), timeout=180))
             safe_print({"phase": "flow_fake_execution_db_check", **result})
+            return
+        if args.verify_flow_synthetic_demo_db:
+            from scripts.cf008_synthetic_demo_check import verify_synthetic_demo
+
+            cf003_stage = "admission_check"
+            result = asyncio.run(asyncio.wait_for(verify_synthetic_demo(proof), timeout=180))
+            safe_print({"phase": "flow_synthetic_demo_db_check", **result})
             return
         project = prepare_projects(_BACKEND.parent)
         # Secret-free recovery receipt; no DSN/password/Google inputs/tokens/subs.
@@ -728,7 +740,11 @@ def main():
         interrupted = True
         safe_print({"phase": "interrupted", "status": "cleaning_owned_resources"})
     except Exception as error:
-        if args.verify_flow_fake_execution_db:
+        if args.verify_flow_synthetic_demo_db:
+            detail = cf003_failure_diagnostic(error, cf003_stage)
+            detail["phase"] = "cf008_failure_diagnostic"
+            safe_print(detail)
+        elif args.verify_flow_fake_execution_db:
             detail = cf003_failure_diagnostic(error, cf003_stage)
             detail["phase"] = "cf007_failure_diagnostic"
             safe_print(detail)
@@ -783,7 +799,11 @@ def main():
                 )
             except BaseException as error:
                 cleanup_failed = True
-                if args.verify_flow_fake_execution_db:
+                if args.verify_flow_synthetic_demo_db:
+                    detail = cf003_failure_diagnostic(error, "cleanup")
+                    detail["phase"] = "cf008_failure_diagnostic"
+                    safe_print(detail)
+                elif args.verify_flow_fake_execution_db:
                     detail = cf003_failure_diagnostic(error, "cleanup")
                     detail["phase"] = "cf007_failure_diagnostic"
                     safe_print(detail)

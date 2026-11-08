@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     TEST_DATABASE_URL: str = ""
     ENABLE_NEWS_GRAPH: bool = False
     FLOW_RUN_ADMISSION_ENABLED: bool = False
+    FLOW_SYNTHETIC_DEMO_ENABLED: bool = False
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = Field(default="", repr=False)
     AUTH_REDIRECT_URI: str = ""

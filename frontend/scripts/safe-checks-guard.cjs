@@ -146,6 +146,10 @@ function deniedFileLabel(value,root,dependency) {
   for(const name of ['package.json','package-lock.json','tsconfig.json'])if(value===path.join(path.dirname(path.dirname(dependency)),name))return 'original-repo-root:'+name;
   return scope+(publicNames.has(leaf)?':public-manifest-relative-location-redacted':':target-redacted');
 }
+function validateDemoFlag(value){
+  if(value!==undefined&&value!=='true'&&value!=='false')throw Error('SAFE_CHECK_DENIED: demo flag');
+  return value;
+}
 function forkPlan(modulePath,args,options,cap,real=fs.realpathSync.native){
   const target=real(path.join(cap.dependency,'next/dist/compiled/jest-worker/processChild.js'));
   if(typeof modulePath!=='string'||real(modulePath)!==target||!Array.isArray(args)||args.length!==0)throw Error('SAFE_CHECK_DENIED: fork target/argv');
@@ -157,11 +161,14 @@ function forkPlan(modulePath,args,options,cap,real=fs.realpathSync.native){
   if(!Array.isArray(extra)||extra.some(a=>!['--enable-source-maps'].includes(a)))throw Error('SAFE_CHECK_DENIED: fork execArgv');
   const env={};
   for(const k of ['LANG','TZ','HOME','TMPDIR','PATH','NEXT_TELEMETRY_DISABLED','NO_UPDATE_NOTIFIER','ST001_SAFE_CAP','NODE_ENV','BACKEND_URL','NEXT_PUBLIC_API_URL','AI_SUPERVISOR_URL'])if(cap.environment[k]!==undefined)env[k]=cap.environment[k];
+  const demo=validateDemoFlag(cap.environment.FLOW_SYNTHETIC_DEMO_ENABLED);
+  if(demo!==undefined)env.FLOW_SYNTHETIC_DEMO_ENABLED=demo;
   // Reconstruct the one mandatory preload; never forward Next's spread parent env.
   env.NODE_OPTIONS='--require='+cap.guard;
   env.OPENSSL_CONF='/dev/null';
   const input=options.env??{};
   if(input.ST001_SAFE_CAP!==env.ST001_SAFE_CAP)throw Error('SAFE_CHECK_DENIED: fork capability');
+  if(Object.prototype.hasOwnProperty.call(input,'FLOW_SYNTHETIC_DEMO_ENABLED')&&validateDemoFlag(input.FLOW_SYNTHETIC_DEMO_ENABLED)!==demo)throw Error('SAFE_CHECK_DENIED: demo flag');
   if(input.JEST_WORKER_ID!==undefined){if(!/^[1-9][0-9]*$/.test(input.JEST_WORKER_ID))throw Error('SAFE_CHECK_DENIED: worker id');env.JEST_WORKER_ID=input.JEST_WORKER_ID;}
   if(input.IS_NEXT_WORKER==='true')env.IS_NEXT_WORKER='true';
   if(input.NEXT_PRIVATE_BUILD_WORKER!==undefined){if(input.NEXT_PRIVATE_BUILD_WORKER!=='1')throw Error('SAFE_CHECK_DENIED: build worker marker');env.NEXT_PRIVATE_BUILD_WORKER='1';}
@@ -331,10 +338,11 @@ function install(cap) {
   return {file,endpoint,violations,observation,expectedNegative(){expectedNegatives++;persist('expected-negative');}};
 }
 
-module.exports={install,forkPlan,deniedFileLabel,manifestIdentity,loadPackageSnapshot,packageResponder,createDiagnostics,journalLine,observation(){if(!installed)throw Error('missing installed guard');return installed.observation();},expected(probe){if(!installed)throw Error('missing installed guard');const before=installed.violations.length;try{probe();throw Error('probe unexpectedly allowed');}catch(error){if(!String(error.message).startsWith('SAFE_CHECK_DENIED:')||installed.violations.length!==before+1)throw error;installed.violations.splice(before);installed.expectedNegative();}}};
+module.exports={install,forkPlan,validateDemoFlag,deniedFileLabel,manifestIdentity,loadPackageSnapshot,packageResponder,createDiagnostics,journalLine,observation(){if(!installed)throw Error('missing installed guard');return installed.observation();},expected(probe){if(!installed)throw Error('missing installed guard');const before=installed.violations.length;try{probe();throw Error('probe unexpectedly allowed');}catch(error){if(!String(error.message).startsWith('SAFE_CHECK_DENIED:')||installed.violations.length!==before+1)throw error;installed.violations.splice(before);installed.expectedNegative();}}};
 if(process.env.ST001_SAFE_CAP){
+  validateDemoFlag(process.env.FLOW_SYNTHETIC_DEMO_ENABLED);
   const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
-  const allowed=new Set(['LANG','TZ','HOME','TMPDIR','PATH','NEXT_TELEMETRY_DISABLED','NO_UPDATE_NOTIFIER','NODE_OPTIONS','ST001_SAFE_CAP','BACKEND_URL','NEXT_PUBLIC_API_URL','AI_SUPERVISOR_URL','NODE_ENV','__CF_USER_TEXT_ENCODING','OPENSSL_CONF','IS_NEXT_WORKER','JEST_WORKER_ID','FORCE_COLOR','NEXT_PRIVATE_BUILD_WORKER','__NEXT_PRERENDER_CLIENT_ASSET_SUFFIX']);
+  const allowed=new Set(['LANG','TZ','HOME','TMPDIR','PATH','NEXT_TELEMETRY_DISABLED','NO_UPDATE_NOTIFIER','NODE_OPTIONS','ST001_SAFE_CAP','BACKEND_URL','NEXT_PUBLIC_API_URL','AI_SUPERVISOR_URL','NODE_ENV','__CF_USER_TEXT_ENCODING','OPENSSL_CONF','IS_NEXT_WORKER','JEST_WORKER_ID','FORCE_COLOR','NEXT_PRIVATE_BUILD_WORKER','__NEXT_PRERENDER_CLIENT_ASSET_SUFFIX','FLOW_SYNTHETIC_DEMO_ENABLED']);
   for(const key of Object.keys(process.env))if(!allowed.has(key))delete process.env[key];
   if(process.env.OPENSSL_CONF!=='/dev/null')throw Error('SAFE_CHECK_DENIED: unpinned OpenSSL startup config');
   installed=install(cap);

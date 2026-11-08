@@ -9,6 +9,62 @@ import {createRequire} from 'node:module';
 import {independentCleanup,expiryCleanup} from '../helpers/safe-http.mjs';
 import {readSource,sourceAllowed} from '../../scripts/check-local-ports.mjs';
 const require=createRequire(import.meta.url);
+test('CF009 exact demo flag accepts only absent or string true/false without coercion or value exposure',()=>{
+ const {validateDemoFlag}=require('../../scripts/safe-checks-guard.cjs');
+ for(const value of [undefined,'true','false'])assert.equal(validateDemoFlag(value),value);
+ const canary='CF009-SYNTHETIC-VALUE-DO-NOT-EXPOSE';
+ const malformed=['',' ','TRUE','False',' true','false ','1',canary,null,true,false,0,1,{},[],new String('true'),Symbol(canary),1n,()=>canary,{toString(){throw Error(canary);}}];
+ for(const value of malformed)assert.throws(()=>validateDemoFlag(value),error=>error.message==='SAFE_CHECK_DENIED: demo flag'&&!String(error).includes(canary));
+});
+test('CF009 actual preload block preserves the validated flag and removes secret/unknown lookalikes in a limited VM',()=>{
+ const {validateDemoFlag}=require('../../scripts/safe-checks-guard.cjs');
+ const source=fs.readFileSync(path.join(process.cwd(),'scripts/safe-checks-guard.cjs'),'utf8');
+ const parsed=ts.createSourceFile('safe-checks-guard.cjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const blocks=parsed.statements.filter(node=>ts.isIfStatement(node)&&node.expression.getText(parsed)==='process.env.ST001_SAFE_CAP');assert.equal(blocks.length,1);
+ const block=blocks[0].getText(parsed);
+ function preload(value){
+  const env={ST001_SAFE_CAP:'synthetic-cap.json',NODE_OPTIONS:'--require=/owned/safe-checks-guard.cjs',OPENSSL_CONF:'/dev/null',GOOGLE_CLIENT_SECRET:'CF009-SECRET-CANARY',UNREVIEWED_ENV:'synthetic',FLOW_SYNTHETIC_DEMO_ENABLED_LOOKALIKE:'true'};
+  if(value!==undefined)env.FLOW_SYNTHETIC_DEMO_ENABLED=value;
+  let reads=0,installs=0;
+  const context={process:{env},validateDemoFlag,installed:undefined,fs:{readFileSync(name,encoding){assert.equal(name,'synthetic-cap.json');assert.equal(encoding,'utf8');reads++;return '{}';}},install(cap){assert.equal(JSON.stringify(cap),'{}');installs++;return 'synthetic-install';}};
+  return {env,run(){vm.runInNewContext(block,context,{timeout:100});},counts:()=>({reads,installs})};
+ }
+ for(const value of [undefined,'true','false']){
+  const p=preload(value);p.run();assert.deepEqual(p.counts(),{reads:1,installs:1});
+  assert.equal(Object.hasOwn(p.env,'FLOW_SYNTHETIC_DEMO_ENABLED'),value!==undefined);assert.equal(p.env.FLOW_SYNTHETIC_DEMO_ENABLED,value);
+  assert.deepEqual(Object.keys(p.env).sort(),['ST001_SAFE_CAP','NODE_OPTIONS','OPENSSL_CONF',...(value===undefined?[]:['FLOW_SYNTHETIC_DEMO_ENABLED'])].sort());
+  assert.equal(p.env.OPENSSL_CONF,'/dev/null');assert.equal(p.env.NODE_OPTIONS,'--require=/owned/safe-checks-guard.cjs');
+ }
+ for(const value of ['',' TRUE','1','CF009-SECRET-CANARY',null,false,1,{}]){
+  const p=preload(value);assert.throws(()=>p.run(),error=>error.message==='SAFE_CHECK_DENIED: demo flag');assert.deepEqual(p.counts(),{reads:0,installs:0});
+ }
+});
+test('CF009 actual fork plan keeps parent flag and rejects child injection/overrides while other protections stay pinned',()=>{
+ const {forkPlan}=require('../../scripts/safe-checks-guard.cjs');
+ const target=fs.realpathSync(path.join(process.cwd(),'node_modules/next/dist/compiled/jest-worker/processChild.js'));
+ const base={root:process.cwd(),dependency:path.join(process.cwd(),'node_modules'),guard:path.join(process.cwd(),'scripts/safe-checks-guard.cjs')};
+ const flag='FLOW_SYNTHETIC_DEMO_ENABLED';
+ function plan(parent,child,includeChild=false){
+  const environment={LANG:'en_US.UTF-8',ST001_SAFE_CAP:process.env.ST001_SAFE_CAP,GOOGLE_CLIENT_SECRET:'CF009-SECRET-CANARY',FLOW_SYNTHETIC_DEMO_ENABLED_LOOKALIKE:'true'};
+  if(parent!==undefined)environment[flag]=parent;
+  const env={ST001_SAFE_CAP:process.env.ST001_SAFE_CAP,JEST_WORKER_ID:'1',IS_NEXT_WORKER:'true',GOOGLE_CLIENT_SECRET:'CF009-SECRET-CANARY',UNREVIEWED_ENV:'synthetic',FLOW_SYNTHETIC_DEMO_ENABLED_LOOKALIKE:'true',NODE_OPTIONS:'--require=/synthetic/unapproved.cjs'};
+  if(includeChild)env[flag]=child;
+  return forkPlan(target,[],{cwd:base.root,env,execArgv:[],silent:true},{...base,environment});
+ }
+ const baseline=plan(undefined).options.env;
+ for(const parent of [undefined,'true','false'])for(const includeChild of [false,true]){
+  const p=plan(parent,parent,includeChild);assert.equal(p.options.env[flag],parent);assert.equal(Object.hasOwn(p.options.env,flag),parent!==undefined);
+  const other={...p.options.env};delete other[flag];assert.deepEqual(other,baseline);
+  for(const key of ['GOOGLE_CLIENT_SECRET','UNREVIEWED_ENV','FLOW_SYNTHETIC_DEMO_ENABLED_LOOKALIKE'])assert.equal(Object.hasOwn(p.options.env,key),false);
+  assert.equal(p.options.env.NODE_OPTIONS,'--require='+base.guard);assert.equal(p.options.env.OPENSSL_CONF,'/dev/null');assert.equal(p.options.env.ST001_SAFE_CAP,process.env.ST001_SAFE_CAP);
+  assert.deepEqual(p.options.stdio,['pipe','pipe','pipe','ipc']);assert.equal(p.options.detached,false);assert.equal(p.options.cwd,base.root);assert.equal(p.options.execPath,process.execPath);assert.deepEqual(p.options.execArgv,[]);
+ }
+ for(const parent of [undefined,'true','false'])for(const child of [undefined,'true','false','',' TRUE','1','CF009-SECRET-CANARY',null,false,1,{}]){
+  if(child===parent)continue;
+  assert.throws(()=>plan(parent,child,true),error=>error.message==='SAFE_CHECK_DENIED: demo flag');
+ }
+ for(const parent of ['',' TRUE','1','CF009-SECRET-CANARY',null,false,1,{}])assert.throws(()=>plan(parent),error=>error.message==='SAFE_CHECK_DENIED: demo flag');
+});
 test('CF008 exact fresh inputs preserve private route exception and adjacent denial',()=>{
  for(const file of ['src/shared/server/flow-demo-config.ts','src/app/flow/demo/page.tsx','src/features/flow/components/synthetic-demo.tsx','src/features/flow/lib/synthetic-demo.ts','tests/unit/flow/synthetic-demo.test.mjs','tests/integration/bff/synthetic-demo-http.test.mjs']){assert.equal(sourceAllowed(file),true);assert.ok(readSource(process.cwd(),file).length>0);}
  assert.equal(sourceAllowed('src/app/api/private/adjacent/route.ts'),false);

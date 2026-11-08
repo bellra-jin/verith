@@ -36,9 +36,36 @@ setup-python v6.0.0 `e797f83bcb11b83ae66e0230d6156d7c80228e7c`, setup-uv v10.3.2
 `07a047e608db84b3d8c06cd9a7c7dcc9c355c18e`를 pin했다.
 uv arm64 archive checksum은 [공식 0.13.7 release](https://github.com/astral-sh/uv/releases/tag/0.13.7)의
 [checksum](https://releases.astral.sh/github/uv/releases/download/0.13.7/uv-aarch64-apple-darwin.tar.gz.sha256)을 사용한다.
-로컬 통과와 원격 실행 성공은 별개이며, 현재 원격 결과는 PR 게시 후 확인할 예정이다. native canary나 runtime/dependency metadata
+로컬 통과와 원격 실행 성공은 별개다. 첫 원격 run은 아래 metadata 경계에서 중단했고, 공식 전용 runtime으로 후속 확인한다. native canary나 runtime/dependency metadata
 보호 실패는 해당 원인으로 보고하며 조건 완화로 통과시키지 않는다.
 
+
+## 첫 원격 CI와 전용 runtime 보완
+
+[첫 CI](https://github.com/bellra-jin/verith/actions/runs/42503459227)는 PR head
+`7be00f4b12bbb89d58dcb5fc78aa850e7357110b` / 실제 checkout merge
+`cda7f15cdc3f31c4a766465be954ee59767fec4c`에서 설치까지 성공한 뒤 metadata guard
+exit78로 중단했다. [진단 CI](https://github.com/bellra-jin/verith/actions/runs/42503736352)는
+head `19d4f5f7488d5012c678118e67bbef7a6641177f` / checkout merge
+`bb33b0c40589e1f965918cd09c02d4a0bd286d94`였다. runner uid501,
+canonical `/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12` 및 runtime
+`/Library/Frameworks/Python.framework/Versions/3.12`가 uid0/mode0775여서 group-write 조건에
+걸렸다. site-packages는 uid501/mode0755로 적합했다. 두 회차 원격 self/unit 실행은 0이다.
+기존 toolcache chmod·복사·guard 예외 추가 없이 중단했다.
+
+후속 workflow는 checksum pin된 uv0.13.7의 내장 Python metadata를 사용한다.
+[정확 항목](https://raw.githubusercontent.com/astral-sh/uv/0.13.7/crates/uv-python-managed/download-metadata.json)의
+`cpython-3.12.10-darwin-aarch64-none` URL은
+`https://github.com/astral-sh/python-build-standalone/releases/download/20250529/cpython-3.12.10%2B20250529-aarch64-apple-darwin-install_only_stripped.tar.gz`,
+SHA-256은 `2579c9ffcbb0a745f1de3d645612c7466269eb9a23316a54ece49d50c1c9122f`다.
+[공식 다운로드 코드](https://raw.githubusercontent.com/astral-sh/uv/0.13.7/crates/uv-python-managed/src/downloads.rs)의
+embedded catalog·HashReader·HashMismatch 경로를 읽었다. clean env에서 metadata override를
+사용하지 않고 canonical 공식 release source로 제한한다. uv의 안전 추출 경로와 별도로
+새0700 디렉터리의 전체 경로/링크 및 uid/mode를 읽기 검증한다. setup-python runtime은
+이 filesystem metadata 검사만 수행하며, lock 설치와 보호 검사는 새 절대 Python만 쓴다.
+venv canonical interpreter가 자기 디렉터리 밖이면 실패하고 toolcache로 후퇴하지 않는다.
+표준 CI의 일회용 runner 공간에만 설치하며 원래 toolcache/OS 권한·guard는 불변이다.
+후속 실제 실행 결과는 별도로 확인한다.
 
 ## 범위·호환·source 검토
 

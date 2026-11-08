@@ -9,9 +9,10 @@ const root=path.resolve(import.meta.dirname, '../../..');
 function load(relative,fetchSpy,options={}) {
  const source=ts.transpileModule(fs.readFileSync(path.join(root,relative),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  const bundle={exports:{}};
- vm.runInNewContext(source,{module:bundle,exports:bundle.exports,Response,Request,Headers,URL,URLSearchParams,fetch:fetchSpy,process:{env:options.env ?? {}},require(name){
+ vm.runInNewContext(source,{module:bundle,exports:bundle.exports,Response,Request,Headers,URL,URLSearchParams,TextEncoder,AbortSignal:options.AbortSignal ?? AbortSignal,fetch:fetchSpy,process:{env:options.env ?? {}},require(name){
   if(name==='server-only')return {};
   if(name==='./session-backend')return {sessionBackendUrl:()=> options.base===undefined?'http://backend.unit':options.base};
+  if(name==='./flow-analysis-config'||name==='@/shared/server/flow-analysis-config')return load('src/shared/server/flow-analysis-config.ts',fetchSpy,options);
   if(name==='./flow-demo-config'||name==='@/shared/server/flow-demo-config')return {flowDemoEnabled:()=>options.demo===true};
   if(name==='node:crypto')return {randomUUID};
   if(name==='next/headers')return {headers:async()=>new Headers()};
@@ -95,4 +96,35 @@ test('demo valid fixed upstream transport rejection returns safe private envelop
  let calls=0;const api=load('src/shared/server/session-proxy.ts',async()=>{calls++;throw Error('synthetic-sensitive-transport');},{demo:true,base:'http://backend.unit'});
  const response=await api.sessionProxy(new Request('https://app.unit/api/private/flow/synthetic-demo/runs/00000000-0000-4000-8000-000000000001'),'/api/flow/synthetic-demo/runs/00000000-0000-4000-8000-000000000001');
  assert.equal(calls,1);assert.equal(response.status,503);const body=await response.json();assert.equal(body.data,null);assert.equal(body.error.code,'SERVICE_UNAVAILABLE');assert.doesNotMatch(JSON.stringify(body),/synthetic-sensitive-transport/);assert.equal(response.headers.get('vary'),'Cookie, Origin');
+});
+
+test('analysis gate uses actual exact environment value and strict fixed forwarding',async()=>{
+ for(const value of [undefined,'false','TRUE','1','true']){
+  const config=load('src/shared/server/flow-analysis-config.ts',()=>{}, {env:value===undefined?{}:{FLOW_ANALYSIS_ENABLED:value}});
+  assert.equal(config.flowAnalysisEnabled(),value==='true');
+ }
+ const seen=[];
+ const proxy=load('src/shared/server/session-proxy.ts',async(url,options)=>{seen.push({url,options});return Response.json({synthetic:true});},{env:{FLOW_ANALYSIS_ENABLED:'true'}});
+ const body=JSON.stringify({ticker:'005930',question:'합성',as_of:'2026-11-08T00:00:00Z',idempotency_key:'fixed',allow_analysis:true});
+ const headers={'content-type':'application/json',cookie:'verith_session=synthetic',origin:'https://app.unit','x-csrf-token':'synthetic',authorization:'forbidden','x-flow-service-token':'forbidden','x-user-id':'forbidden'};
+ const result=await proxy.sessionProxy(new Request('https://app.unit/api/private/flow/analyses',{method:'POST',headers,body}),'/api/flow/analyses');
+ assert.equal(result.status,200);assert.equal(result.headers.get('cache-control'),'private, no-store');assert.equal(seen.length,1);
+ assert.equal(seen[0].url,'http://backend.unit/api/flow/analyses');assert.equal(seen[0].options.redirect,'manual');assert.ok(seen[0].options.signal instanceof AbortSignal);
+ for(const name of ['authorization','x-user-id','x-flow-service-token'])assert.equal(seen[0].options.headers.get(name),null);
+ assert.equal(seen[0].options.headers.get('cookie'),'verith_session=synthetic');
+ for(const size of [4096,4097]){
+  const request=new Request('https://app.unit/api/private/flow/analyses',{method:'POST',headers,body:body+' '.repeat(size-new TextEncoder().encode(body).length)});
+  assert.equal((await proxy.sessionProxy(request,'/api/flow/analyses')).status,size===4096?200:422);
+ }
+});
+test('analysis single wall deadline bounds unfinished body and upstream response',async()=>{
+ for(const slowBody of [true,false]){
+  const deadline=new AbortController(),seen=[],timeouts=[];
+  const proxy=load('src/shared/server/session-proxy.ts',async(url,options)=>{seen.push(options);return new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('{'));}}));},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout(value){timeouts.push(value);return deadline.signal;}}});
+  const body=slowBody?new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('{'));}}):'{}';
+  const request=new Request('https://app.unit/api/private/flow/analyses',{method:'POST',headers:{'content-type':'application/json'},body,duplex:'half'});
+  const operation=proxy.sessionProxy(request,'/api/flow/analyses');setImmediate(()=>deadline.abort());
+  const result=await operation;assert.equal(result.status,slowBody?422:503);assert.deepEqual(timeouts,[130000]);assert.equal(seen.length,slowBody?0:1);
+  if(!slowBody)assert.equal(seen[0].signal,deadline.signal);
+ }
 });

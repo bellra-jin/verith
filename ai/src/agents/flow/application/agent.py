@@ -33,6 +33,7 @@ def run(
     stock_name: str = config.TARGET_NAME,
     ticker: str | None = config.TARGET_TICKER,
     base_date: date | None = None,
+    *, execution_context=None,
 ) -> AgentOutput:
     """수급 리포트를 생성해 AgentOutput으로 반환한다.
 
@@ -47,13 +48,19 @@ def run(
     # ── 초기 상태 구성 ───────────────────────────────────
     # input: 팀 입력 계약(AgentInput). base_date: M1 확정일.
     # report_id 는 SupplyDemandState 가 진입 시 자동 발급(uuid4).
+    if execution_context is not None:
+        request=execution_context.request
+        if (query,stock_name,ticker,base_date)!=(request.question,request.stock_name,request.ticker,request.candidate_date):
+            raise ValueError("Live Flow arguments must be explicit and bound")
+        execution_context.check('graph')
     initial = SupplyDemandState(
         input=AgentInput(query=query, stock_name=stock_name, ticker=ticker),
         base_date=base_date,
     )
 
     # ── 그래프 실행 ──────────────────────────────────────
-    final = _GRAPH.invoke(initial)
+    graph = _GRAPH if execution_context is None else build_graph(execution_context)
+    final = graph.invoke(initial)
 
     # ── 결과에서 산출물 꺼내 출력 계약으로 ───────────────
     # html 은 render 노드가 채운 값. report_id 는 흐름을 관통한 상관관계 ID.

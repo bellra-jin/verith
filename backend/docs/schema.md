@@ -302,3 +302,7 @@ preflight 및 실제 SQLAlchemy 연결 재확인 후 동일 연결을 Alembic에
 `flow_fake_executions`(c7001)은 input_snapshot_id UNIQUE FK/RESTRICT로 봉인 입력당 단일 실행권/결과를 저장한다. owner/run은 기존 input/run JOIN으로 판단하고 parent 열/제약을 추가하지 않는다. id/input/version/engine/claim/start/deadline은 불변, 상태는 running→succeeded/failed/timed_out 단1회이며 DELETE는 모든 상태에서 거부한다.
 
 DB clock 기준10초 deadline·finite시각·상태별 결과/hash/error/finished NULL조합과 canonical 결과 object/UTF-8크기/hash/ID 관계를 검사한다. succeeded만 결과가 있다. token 원문은 저장하지 않고 digest32bytes만 보존한다. 기존 receipt/payload/report/index/stock은 바꾸지 않으며 관리자 DDL/장기 purge 정책은 별도다. [내부 계약](flow_fake_execution.md)을 따른다.
+
+## CF-012 Flow 분석 원장
+
+`flow_analysis_runs`는 receipt/synthetic/fake와 별도인 인증 분석 원장이다. owner/operation/key digest, attempt 및 채택 report ID가 유일하며 claim·시간·상태별 snapshot/null 관계를 DB 제약으로 검사한다. running→result_ready→stored→deleted와 failed/unknown terminal을 구분한다. result_ready의 canonical input/result 및 SHA를 먼저 commit하고 root/자식/index 게시와 stored 전이는 원자 처리한다. deleted는 요청·이름·입력·결과 본문을 비우고 최소 식별/hash만 보존한다. [공유 계약](../../docs/contracts/flow-analysis-v1.md).

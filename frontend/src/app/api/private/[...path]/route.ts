@@ -1,8 +1,15 @@
+import { flowAnalysisEnabled } from '@/shared/server/flow-analysis-config';
 import { flowDemoEnabled } from '@/shared/server/flow-demo-config';
-import { sessionProxy, demoProxyError } from '@/shared/server/session-proxy';
+import { sessionProxy, demoProxyError, analysisProxyError } from '@/shared/server/session-proxy';
 async function handle(request: Request, context:{params:Promise<{path:string[]}>}) {
   const {path}=await context.params;
   const route=path.join('/');
+  if(route==='flow/analyses'||route.startsWith('flow/analyses/')){
+    if(!flowAnalysisEnabled())return analysisProxyError('FEATURE_UNAVAILABLE',403);
+    const exact=route==='flow/analyses'&&request.method==='POST'||request.method==='GET'&&/^flow\/analyses\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(route);
+    if(!exact||new URL(request.url).search)return analysisProxyError('INPUT_INVALID',422);
+    return sessionProxy(request,'/api/'+route);
+  }
   if(route==='flow/synthetic-demo/runs' || route.startsWith('flow/synthetic-demo/runs/')) {
     if(!flowDemoEnabled())return demoProxyError('FEATURE_UNAVAILABLE',403);
     const exact=route==='flow/synthetic-demo/runs' && request.method==='POST' || request.method==='GET' && /^flow\/synthetic-demo\/runs\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(route);

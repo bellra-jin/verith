@@ -121,6 +121,14 @@ CF007_SOURCES = frozenset({'backend/src/modules/flow/application/fake_execution_
 NEW.update(CF007_SOURCES)
 CF008_SOURCES = frozenset({'backend/src/modules/flow/api/synthetic_demo_router.py', 'backend/src/modules/flow/api/synthetic_demo_schemas.py', 'backend/scripts/cf008_synthetic_demo_check.py', 'backend/tests/unit/test_cf008_flow_synthetic_demo.py', 'backend/src/modules/flow/application/synthetic_demo_service.py'})
 NEW.update(CF008_SOURCES)
+CF012_SOURCES = frozenset({'backend/tests/unit/test_cf012_flow_analysis.py', 'backend/src/modules/flow/application/analysis_service.py', 'backend/src/modules/flow/api/analysis_schemas.py', 'backend/db/models/flow/analysis_run.py', 'backend/db/migrations/versions/20261108_c12001a7e0001_flow_analysis_runs.py', 'backend/src/modules/flow/domain/analysis.py', 'backend/src/modules/flow/api/analysis_router.py', 'backend/scripts/cf012_analysis_check.py', 'backend/src/modules/flow/infrastructure/analysis_repository.py'})
+NEW.update(CF012_SOURCES)
+CF012_INPUTS = {'ai/src/agents/flow/api/http.py': 'ab949f3dd353e1fa8a496e58f36383f2c3baeac632076cea3a9607c8553538c5', 'ai/src/agents/flow/api/schemas.py': 'a7544de75f4ac7e6049c7d384f75753fccf5bbbc5e3f9f2c17512b232adb6a62', 'ai/src/agents/flow/application/execution_runtime.py': '213bcbdb3709fdf4c388c2cadbd07c3e3648854d6dacc4753ac356800ec8c817', 'ai/src/shared/runtime/deadline.py': '4a51cd138da3a37d158e03019e4b38c203bd276948a21987b0d07d35a68cb60e'}
+NEW.update(CF012_INPUTS)
+NEW.update({"backend/tests/unit/test_runner_owned_database.py", "backend/scripts/runner_owned_database.py", "backend/scripts/google_login_workspace.py"})
+OWNED_TESTS = ("tests/unit/test_runner_owned_database.py",)
+CF012_TESTS = ("tests/unit/test_cf012_flow_analysis.py", "tests/unit/test_flow_contract.py")
+UNIT += ("tests/unit/test_cf012_flow_analysis.py",)
 CF005_INPUTS = {"ai/src/agents/flow/domain/observation_window.py": "acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27"}
 CF005_SOURCE_ONLY = frozenset({
     "ai/src/agents/flow/domain/verification/signals.py",
@@ -350,7 +358,7 @@ def selected_sources(repo):
     return sorted(selected | NEW)
 
 
-def execute(repo, modes):
+def execute(repo, modes, *, analysis_only=False, owned_only=False):
     if not sys.flags.isolated or not sys.flags.no_site:
         raise UnsafeCheck("use the documented clean env -i Python -I -S launch")
     if set(os.environ) - {"LANG", "TZ", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}:
@@ -375,7 +383,7 @@ def execute(repo, modes):
         fingerprints = {}
         for p in selected_sources(repo):
             data = regular_bytes(repo, p)
-            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS)[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             target = checkout / p
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -389,7 +397,7 @@ def execute(repo, modes):
             cap = {"root": str(owned.path), "source": str(checkout / "backend"),
                    "site": str(site), "runtime": str(runtime), "mode": mode,
                    "parent_pid": os.getpid(), "lifetime": 90 if mode == "self-test" else 300,
-                   "tests": list(UNIT)}
+                   "tests": list(OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only}
             capfile = owned.path / "capability.json"
             capfile.write_text(json.dumps(cap))
             worker = checkout / "backend/scripts/safe_checks_bootstrap.py"
@@ -408,16 +416,16 @@ def execute(repo, modes):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("mode", nargs="?", choices=("list", *MODES))
+    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit"))
     values = list(sys.argv[1:] if argv is None else argv)
-    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"]]:
+    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"]]:
         parser.error("unsupported mode or extra arguments")
     args = parser.parse_args(values)
     if args.mode == "list":
         print("self-test: synthetic guards only\nunit: fixed six complete files plus audited pure stock/technical files (no DB/external)")
         return 0
     try:
-        execute(Path(__file__).resolve().parents[2], MODES if args.mode is None else (args.mode,))
+        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode=="analysis-self" else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit")
     except (UnsafeCheck, OSError, subprocess.SubprocessError) as exc:
         print(f"SAFE_CHECK_BLOCKED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 78

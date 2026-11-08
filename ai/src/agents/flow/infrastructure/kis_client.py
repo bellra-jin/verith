@@ -104,14 +104,16 @@ def _load_credentials() -> tuple[str, str, str]:
     return app_key, app_secret, base_url.rstrip("/")
 
 
-def _issue_token(client: httpx.Client, app_key: str, app_secret: str) -> dict:
+def _issue_token(client: httpx.Client, app_key: str, app_secret: str, *, execution_context=None) -> dict:
     """발급 JSON의 원형 token/TTL을 검증한다. 원문 예외·응답은 노출하지 않는다."""
     try:
         resp = client.post(
             _OAUTH_PATH,
             json={"grant_type": "client_credentials",
                   "appkey": app_key, "appsecret": app_secret},
+            **({} if execution_context is None else {"timeout":execution_context.timeout("kis_token", _TIMEOUT)}),
         )
+        if execution_context is not None: execution_context.check('kis_token_result')
         if resp.status_code != 200:
             raise KisError("KIS 토큰 발급 실패.")
         body = resp.json()
@@ -125,11 +127,11 @@ def _issue_token(client: httpx.Client, app_key: str, app_secret: str) -> dict:
 _TOKEN_CACHE_PATH = Path.home() / ".cache" / "verith" / "kis_token.json"
 
 
-def _get_token(client: httpx.Client, app_key: str, app_secret: str, base_url: str) -> str:
+def _get_token(client: httpx.Client, app_key: str, app_secret: str, base_url: str, *, execution_context=None) -> str:
     """서버/자격 문맥별 캐시. 실발급 single-flight나 반응형 재발급은 보장하지 않는다."""
     try:
         return get_token(_TOKEN_CACHE_PATH, base_url, app_key, app_secret, time.time(),
-                         lambda: _issue_token(client, app_key, app_secret))
+                         lambda: _issue_token(client, app_key, app_secret, **({} if execution_context is None else {"execution_context":execution_context})))
     except TokenCacheError:
         raise KisError("KIS 토큰 캐시 처리 실패.") from None
 
@@ -146,7 +148,7 @@ def _auth_headers(app_key: str, app_secret: str, token: str, tr_id: str) -> dict
     }
 
 
-def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what: str) -> dict:
+def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what: str, *, execution_context=None) -> dict:
     """조회 GET 의 HTTP 층 공통 경로 — 실패 처리를 한 곳에 모은다.
 
     유일한 재시도: KIS 유량 제어 신호(HTTP 500 + EGW00201)에 한해 0.6초 대기 후
@@ -155,7 +157,9 @@ def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what
     msg_cd·msg1 을 담아 원인이 바로 보이게 한다(상태코드만으론 진단 불가 교훈).
     """
     for attempt in (1, 2):
-        resp = client.get(path, headers=headers, params=params)
+        kwargs = {} if execution_context is None else {"timeout":execution_context.timeout("kis_data", _TIMEOUT)}
+        resp = client.get(path, headers=headers, params=params, **kwargs)
+        if execution_context is not None: execution_context.check("kis_data_result")
         if resp.status_code == 200:
             return resp.json()
         try:
@@ -164,6 +168,7 @@ def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what
         except ValueError:
             msg_cd, msg1 = None, None
         if attempt == 1 and resp.status_code == 500 and msg_cd == _RATE_LIMIT_MSG_CD:
+            if execution_context is not None: execution_context.wait_allowed(_RATE_LIMIT_RETRY_WAIT_SEC)
             time.sleep(_RATE_LIMIT_RETRY_WAIT_SEC)
             continue
         raise KisError(
@@ -175,6 +180,7 @@ def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what
 def fetch_supply_demand(
     base_date: date | str,
     ticker: str,
+    *, execution_context=None,
 ) -> tuple[pd.DataFrame, str | None]:
     """기준일(base_date)까지의 일별 투자자매매동향을 signals 스키마로 반환한다.
 
@@ -195,11 +201,12 @@ def fetch_supply_demand(
                    대상이 아니며(숫자 아님·대조할 제2 출처 없음), 매핑·가공도
                    하지 않는다(우리 해석 금지 — 원본 이름 그대로).
     """
+    if execution_context is not None: execution_context.check('kis_credentials')
     app_key, app_secret, base_url = _load_credentials()
     date_str = base_date.strftime("%Y%m%d") if isinstance(base_date, date) else str(base_date)
 
     with httpx.Client(base_url=base_url, timeout=_TIMEOUT) as client:
-        token = _get_token(client, app_key, app_secret, base_url)
+        token = _get_token(client, app_key, app_secret, base_url, **({} if execution_context is None else {"execution_context":execution_context}))
         body = _get_json(
             client, _QUOTATIONS_PATH,
             headers=_auth_headers(app_key, app_secret, token, _TR_ID),
@@ -211,6 +218,7 @@ def fetch_supply_demand(
                 "FID_ETC_CLS_CODE": "",
             },
             what="투자자매매동향",
+            **({} if execution_context is None else {"execution_context":execution_context}),
         )
 
     if body.get("rt_cd") != "0":
@@ -259,6 +267,7 @@ def _to_signals_frame(rows: list[dict]) -> pd.DataFrame:
 def fetch_daily_quotes(
     base_date: date | str,
     ticker: str,
+    *, execution_context=None,
 ) -> pd.DataFrame:
     """base_date까지의 일자별 시세를 오름차순 DataFrame으로 반환한다.
 
@@ -273,11 +282,12 @@ def fetch_daily_quotes(
       (3) 절단: 이 API는 오늘(장중 미확정) 행을 포함한다(매매동향 API와 다름!)
           → base_date 이후 행을 잘라내 리포트 기준일과 정합시킨다.
     """
+    if execution_context is not None: execution_context.check('kis_credentials')
     app_key, app_secret, base_url = _load_credentials()
     date_str = base_date.strftime("%Y%m%d") if isinstance(base_date, date) else str(base_date)
 
     with httpx.Client(base_url=base_url, timeout=_TIMEOUT) as client:
-        token = _get_token(client, app_key, app_secret, base_url)
+        token = _get_token(client, app_key, app_secret, base_url, **({} if execution_context is None else {"execution_context":execution_context}))
         body = _get_json(
             client, _DAILY_PRICE_PATH,
             headers=_auth_headers(app_key, app_secret, token, _DAILY_PRICE_TR_ID),
@@ -288,6 +298,7 @@ def fetch_daily_quotes(
                 "FID_ORG_ADJ_PRC": "0",       # 수정주가 반영
             },
             what="일자별 시세",
+            **({} if execution_context is None else {"execution_context":execution_context}),
         )
 
     if body.get("rt_cd") != "0":

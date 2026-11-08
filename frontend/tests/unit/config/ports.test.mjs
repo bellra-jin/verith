@@ -13,6 +13,7 @@ function load(relative,{env={},fetchSpy=()=>{throw new Error('unexpected upstrea
   if(name==='server-only')return {};
   if(name==='next/headers')return {headers:async()=>new Headers(cookie ? {Cookie:cookie} : {})};
   if(name==='./session-backend')return load('src/shared/server/session-backend.ts',{env,fetchSpy,cookie});
+  if(name==='./flow-analysis-config')return load('src/shared/server/flow-analysis-config.ts',{env,fetchSpy,cookie});
   if(name==='./flow-demo-config')return load('src/shared/server/flow-demo-config.ts',{env,fetchSpy,cookie});
   if(name==='node:crypto')return {randomUUID};
   throw new Error('Unexpected import '+name);

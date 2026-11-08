@@ -129,3 +129,7 @@ downgrade는 flow_runs ACCESS EXCLUSIVE → flow_input_snapshots ACCESS EXCLUSIV
 새 `c7001a7e0001`의 parent는 `c6001a7e0001`이다. 새 실행/결과 테이블과 전용 trigger/function만 생성하며 기존 행/backfill·공유 extension 변경은 없다. downgrade 잠금은 flow_runs→flow_input_snapshots→flow_fake_executions 순서다. running/failed/timed_out도 포함한 실행행이 존재하면 고정 거부하고 내용/revision을 보존한다. 실행행이 없으면 기존 입력 snapshot이 있어도 새 객체만 제거한다.
 
 고정 runner의 기존 CF003/006 mode는 caller가 c6001을 선택하고 새 fake mode는 head에서 정확 c7001을 확인한다. CLI 임의 revision은 받지 않는다. 새 DDL 주입은 새 checker의 FLOW_FAKE_EXECUTIONS CREATE 직후 전용 예외이며 기존 checker 훅을 확장하지 않는다. [결과](../../docs/work/CF-007-flow-fake-execution.md)와 [내부 계약](flow_fake_execution.md)을 확인한다.
+
+## CF-012 `c12001a7e0001`
+
+`c7001a7e0001` 다음 revision은 `flow_analysis_runs` 하나와 전이 검증 trigger를 추가한다. 기존 receipt/input/fake/report 자료는 수정하지 않는다. downgrade는 ACCESS EXCLUSIVE 잠금 뒤 빈 테이블만 제거하며 행이 있으면 거부한다. 기존 DB에 적용하거나 자료를 비워 downgrade하지 않는다. 승인된 자기 PG에서 새 DDL 직후 실패 rollback과 이전 자료 보존을 검사한다.

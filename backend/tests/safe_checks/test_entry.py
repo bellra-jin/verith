@@ -490,7 +490,37 @@ class EntryBoundary(unittest.TestCase):
         self.assertIs(dotenv.find_dotenv, blocked_find)
 
 
+
+class CF012Boundary(unittest.TestCase):
+    def test_exact_four_pinned_inputs_and_adjacent_rejected(self):
+        import hashlib
+        from scripts import check_safe as c
+        expected={'ai/src/agents/flow/api/http.py','ai/src/agents/flow/api/schemas.py','ai/src/agents/flow/application/execution_runtime.py','ai/src/shared/runtime/deadline.py'}
+        self.assertEqual(set(c.CF012_INPUTS),expected)
+        root=Path(__file__).resolve().parents[3]
+        for name in expected:
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),c.CF012_INPUTS[name])
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        self.assertEqual(c.CF012_TESTS,('tests/unit/test_cf012_flow_analysis.py','tests/unit/test_flow_contract.py'))
+
+    def test_copy_loader_has_no_searchable_graph_path(self):
+        import sys
+        from scripts.cf012_analysis_check import flow_app,engine_result
+        flow_app(engine_result)
+        self.assertEqual(sys.modules['_cf012_flow'].__path__,[])
+        self.assertNotIn('_cf012_flow.application.agent',sys.modules)
+        self.assertNotIn('_cf012_flow.config',sys.modules)
+
+    def test_existing_guard_and_legacy_pins_remain(self):
+        from scripts import check_safe as c
+        self.assertEqual(len(c.FLOW_INPUTS),2)
+        self.assertEqual(len(c.CF004_INPUTS),1)
+        self.assertEqual(len(c.CF005_INPUTS),1)
+        self.assertFalse(c.source_allowed('ai/src/agents/flow/application/agent.py'))
+
 if __name__ == "__main__":
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(EntryBoundary)
+    import json, sys
+    focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

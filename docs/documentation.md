@@ -1,5 +1,13 @@
 # 문서 목록과 권위
 
+## CF-005 현재 표시·입력 기준
+
+PR #8 병합 `a6f27aa53c376bbfc5c3e8679aa50c9c02869518` 위의 Flow 관측기간 안내 보완이다.
+[관측 정책](../ai/docs/contracts/flow/observation-window.md)·[구현/검증 기록](work/CF-005-flow-observation-window.md)을 따른다.
+기존 숫자·payload·Gate·해석 원문을 보존하며 제공 관측 부족/미확인·안전 표시·인접 경고만 정정한다.
+실제 원천 계산창/시장 coverage나 AI 실행을 검증한 것이 아니다. 아래 이전 단계는 당시 이력이다.
+
+
 ## CF-004 현재 무키 작업
 
 PR #7 병합 `38c0b34a5741198484278767a7ada1c925f71301` 위의 Flow KIS 캐시 보완이다.

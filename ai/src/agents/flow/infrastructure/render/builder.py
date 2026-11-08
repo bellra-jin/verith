@@ -26,6 +26,7 @@ from markupsafe import Markup, escape
 from ... import config
 from ...domain.signals import COL_FORE, COL_INST, INST_DETAIL, SUBJECTS
 from ...domain.models import GateResult
+from ...domain.observation_window import finite_number, observation_window, relation_text, safe_daily
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _TEMPLATE_NAME = "supply_demand.html"
@@ -46,7 +47,8 @@ def _fact_rows(signals: dict) -> list[dict]:
     """
     consecutive = signals.get("consecutive", {})
     strength = signals.get("strength", {})
-    persistence = signals.get("persistence", {})
+    raw_persistence = signals.get("persistence")
+    persistence = raw_persistence if type(raw_persistence) is dict else {}
 
     ratios = {
         s: strength.get(s, {}).get("ratio") for s in SUBJECTS
@@ -66,8 +68,9 @@ def _fact_rows(signals: dict) -> list[dict]:
         # amt: 강도와 같은 창(RECENT_DAYS)의 순매수 합 — persistence.sum_5 의
         # 재표현(게이트2 규칙5 검증분). 백만원→억원은 ratio→% 와 같은 표시용
         # 단위 재표현(값 자체는 signals 에 백만원 그대로). 없으면 None(구버전 방어).
-        v5 = persistence.get(subject, {}).get("sum_5")
-        amt = f"{v5 / 100:+,.1f}억원" if v5 is not None else None
+        claim = persistence.get(subject)
+        v5 = claim.get("sum_5") if type(claim) is dict else None
+        amt = f"{v5 / 100:+,.1f}억원" if finite_number(v5) else None
         rows.append({
             "name": subject,
             "days": c.get("days"),
@@ -115,17 +118,17 @@ def _daily_view(signals: dict) -> list[dict] | None:
     콤마 포맷뿐, 단위는 팩트 그대로 백만원(변환 없음). daily 가 없으면
     None → 템플릿이 placeholder 로 후퇴(구버전 신호 dict 방어).
     """
-    daily = signals.get("daily")
-    if not daily:
+    daily = safe_daily(signals)
+    if daily is None:
         return None
     max_abs = max(
-        (abs(row.get(s) or 0.0) for row in daily for s in SUBJECTS), default=0.0
+        (abs(row[s]) for row in daily for s in SUBJECTS), default=0.0
     )
     view = []
     for row in daily:
         bars = []
         for s in SUBJECTS:
-            v = row.get(s) or 0.0
+            v = row[s]
             bars.append({
                 "subject": s,
                 "cls": "buy" if v > 0 else "sell",
@@ -137,47 +140,32 @@ def _daily_view(signals: dict) -> list[dict] | None:
     return view
 
 
-def _persistence_view(signals: dict) -> dict | None:
-    """지속성 팩트 → 표시용 뷰. 값 변형 없음 — 표시 스케일·포맷·문구 조립만.
-
-    막대 폭은 기간 내 최대 |합| 대비 상대 스케일(표시 스케일). verdict 문구는
-    persistence 의 검증된 부호·consistent 를 단어로 재표현해 조립할 뿐,
-    새 판정을 만들지 않는다(render 는 표시만).
-    """
-    persistence = signals.get("persistence")
-    if not persistence:
-        return None
-    vals = [
-        abs(v) for s in SUBJECTS
-        for v in (persistence.get(s, {}).get("sum_5"),
-                  persistence.get(s, {}).get("sum_20"))
-        if v is not None
-    ]
-    max_abs = max(vals, default=0.0)
+def _persistence_view(signals: dict, window: dict | None = None) -> dict:
+    """Read stored sums only; missing/invalid cells are never replaced by zero."""
+    if window is None:
+        window = observation_window(signals, config.RECENT_DAYS, config.TREND_DAYS)
+    raw = signals.get("persistence")
+    persistence = raw if type(raw) is dict else {}
+    values = [p.get(key) for subject in SUBJECTS
+              if type(p := persistence.get(subject)) is dict
+              for key in ("sum_5", "sum_20") if finite_number(p.get(key))]
+    max_abs = max((abs(value) for value in values), default=0.0)
     rows = []
-    for s in SUBJECTS:
-        p = persistence.get(s, {})
-        row = {"name": s, "consistent": bool(p.get("consistent"))}
+    for subject in SUBJECTS:
+        raw_claim = persistence.get(subject)
+        claim = raw_claim if type(raw_claim) is dict else {}
+        row = {"name": subject, "consistent": (claim.get("consistent")
+               if window["status"] == "sufficient_rows" else None)}
         for key, out in (("sum_5", "d5"), ("sum_20", "d20")):
-            v = p.get(key) or 0.0
-            row[out] = {
-                "val": f"{v:+,.0f}",
-                "cls": "buy" if v > 0 else "sell" if v < 0 else "mut",
-                "w": round(abs(v) / max_abs * 100.0, 1) if max_abs else 0.0,
-            }
+            value = claim.get(key)
+            available = finite_number(value)
+            row[out] = {"val": f"{value:+,.0f}" if available else "자료 없음",
+                        "cls": "buy" if available and value > 0 else "sell" if available and value < 0 else "mut",
+                        "w": round(abs(value) / max_abs * 100.0, 1) if available and max_abs else 0.0,
+                        "available": available}
         rows.append(row)
-    # verdict: 검증된 부호·consistent 의 재표현(문구 조립만).
-    cons_buy = [r["name"] for r in rows if r["consistent"] and r["d20"]["cls"] == "buy"]
-    cons_sell = [r["name"] for r in rows if r["consistent"] and r["d20"]["cls"] == "sell"]
-    inconsistent = [r["name"] for r in rows if not r["consistent"]]
-    parts = []
-    if cons_buy:
-        parts.append(f"{'·'.join(cons_buy)}은 5일·20일 모두 순매수")
-    if cons_sell:
-        parts.append(f"{'·'.join(cons_sell)}은 5일·20일 모두 순매도")
-    if inconsistent:
-        parts.append(f"{'·'.join(inconsistent)}은 5일과 20일 방향이 다름")
-    return {"rows": rows, "verdict": " · ".join(parts)}
+    verdict = " · ".join(f"{subject}은 {relation_text(window['relations'][subject])}" for subject in SUBJECTS) if window["status"] == "sufficient_rows" else ""
+    return {"rows": rows, "verdict": verdict}
 
 
 def _ownership_view(signals: dict) -> dict | None:
@@ -346,7 +334,9 @@ def build_report(
     "게이트3 통과분만 넘긴다"는 판정은 그래프가 하고, 여기선 판단·가공하지 않는다.
     """
     rows = _fact_rows(signals)
+    observation = observation_window(signals, config.RECENT_DAYS, config.TREND_DAYS)
     context = {
+        "observation": observation,
         "meta": meta,
         "market": meta.get("market"),       # KIS 대표 시장명 원본. None → 템플릿이 칩 생략
         "gate1": gate1,                     # None이면 템플릿이 배지 생략
@@ -358,7 +348,7 @@ def build_report(
         "interpretation": interpretation,   # None이면 템플릿이 placeholder로 후퇴
         "interpretation_html": _interpretation_html(interpretation),  # **…** → <b>
         "daily": _daily_view(signals),      # None이면 템플릿이 placeholder로 후퇴
-        "persistence": _persistence_view(signals),  # None이면 placeholder로 후퇴
+        "persistence": _persistence_view(signals, observation),  # None이면 placeholder로 후퇴
         "inst_detail": _inst_detail_view(signals),  # None이면 placeholder로 후퇴
         "ownership": _ownership_view(signals),      # None이면 placeholder로 후퇴
         "price_table": _price_table_view(signals),  # None이면 placeholder로 후퇴

@@ -242,7 +242,7 @@
           <text x="238" y="163" font-size="12.5" fill="#F04452" font-weight="700" text-anchor="middle">매수 우위</text>
         </svg>
         <div class="gauge-verdict" style="color:{{ gauge.color }}"><span class="tip"
-          data-tip="최근 {{ recent_days }}거래일 순매수 강도 기준 — 외국인·기관 강도 합의 부호로 판정합니다">{{ gauge.verdict }}</span></div>
+          data-tip="{{ observation.shortLabel }} · {{ observation.notice }} · 순매수 강도 기준 — 외국인·기관 강도 합의 부호로 판정합니다">{{ gauge.verdict }}</span></div>
       </div>
       <div>
         <div class="headline">{{ headline }}</div>
@@ -257,7 +257,7 @@
             {% endif %}
           </div>
           <span class="val {{ 'buy' if r.direction == '매수' else 'sell' if r.direction == '매도' else 'mut' }}"><span class="tip"
-            data-tip="최근 {{ recent_days }}거래일 순매수 합계 · %는 같은 기간 하루평균 거래대금 대비 비율 · +매수 −매도">{% if r.amt %}{{ r.amt }}<span class="valsub">거래대금의 {{ r.pct }}</span>{% else %}{{ r.pct }}{% endif %}</span></span>
+            data-tip="{{ observation.shortLabel }} · {{ observation.notice }} · 순매수 합계 · %는 같은 기간 하루평균 거래대금 대비 비율 · +매수 −매도">{% if r.amt %}{{ r.amt }}<span class="valsub">거래대금의 {{ r.pct }}</span>{% else %}{{ r.pct }}{% endif %}</span></span>
         </div>
         {% endfor %}
       </div>
@@ -266,7 +266,7 @@
     {# ── [A] 날짜별 시세 — price_daily 팩트(게이트2 규칙8 검증분)를 그리기만 ── #}
     <section class="card" id="price">
       <h2>날짜별 시세</h2>
-      <div class="cap">최근 {{ price_days }}거래일 · 종가·전일비 원 · 거래량·순매매량 주 · 최신이 위</div>
+      <div class="cap">제공된 시세 {{ price_table|length if price_table else 0 }}행 · 종가·전일비 원 · 거래량·순매매량 주 · 최신이 위</div>
       {% if price_table %}
       <div class="ptab-wrap">
         <table class="ptab">
@@ -297,7 +297,7 @@
     {# ── [A] 투자자별 일별 순매수 — daily 팩트(게이트2 규칙4 검증분)를 그리기만 ── #}
     <section class="card" id="daily">
       <h2>투자자별 일별 순매수</h2>
-      <div class="cap">최근 {{ trend_days }}거래일 · 막대 순서 개인·외국인·기관(음영은 개인) · 단위 백만원 · +매수 −매도</div>
+      <div class="cap">{{ observation.dailyLabel }} · 막대 순서 개인·외국인·기관(음영은 개인) · 단위 백만원 · +매수 −매도</div>
       {% if daily %}
       <div class="chart">
         <div class="base"></div>
@@ -321,27 +321,27 @@
         <span><span class="dot" style="background:#F7F8FA;border:1px solid #E5E8EB"></span>개인 트랙 음영</span>
       </div>
       {% else %}
-      <div class="placeholder">데이터 준비 중 — 일별 순매수 시계열이 아직 없습니다.</div>
+      <div class="placeholder">일별자료 표시 미확인 — 안전하게 표시할 행이 없습니다.</div>
       {% endif %}
     </section>
 
     {# ── [A] 지속성 5일 vs 20일 — persistence 팩트(게이트2 규칙5 검증분)를 그리기만 ── #}
     <section class="card" id="persist">
-      <h2>지속성 · 5일 vs 20일</h2>
-      <div class="cap">최근 흐름이 일시적인지, 20일에 걸쳐 지속되는지 · 단위 백만원</div>
+      <h2>단기·장기 수급 비교</h2>
+      <div class="cap">{{ observation.notice }} · 단위 백만원</div>
       {% if persistence %}
       {% for r in persistence.rows %}
       <div class="prow">
         <span class="nm">{{ r.name }}</span>
         <div class="pbars">
-          <div class="pline"><span class="plabel">5일</span>
+          <div class="pline"><span class="plabel">{{ observation.shortLabel }}</span>
             <div class="ptrack"><div class="pbar {{ r.d5.cls }}" style="width:{{ r.d5.w }}%"></div></div>
             <span class="pval {{ r.d5.cls }}">{{ r.d5.val }}</span></div>
-          <div class="pline"><span class="plabel">20일</span>
+          <div class="pline"><span class="plabel">{{ observation.longLabel }}</span>
             <div class="ptrack"><div class="pbar {{ r.d20.cls }} dim" style="width:{{ r.d20.w }}%"></div></div>
             <span class="pval {{ r.d20.cls }}">{{ r.d20.val }}</span></div>
         </div>
-        {% if r.consistent %}<span class="chip on">일관</span>{% else %}<span class="chip off">–</span>{% endif %}
+        {% if observation.status == "sufficient_rows" and r.consistent %}<span class="chip on">일관</span>{% else %}<span class="chip off">–</span>{% endif %}
       </div>
       {% endfor %}
       {% if persistence.verdict %}<div class="pverdict">{{ persistence.verdict }}</div>{% endif %}
@@ -366,7 +366,7 @@
         </div>
         <div class="sig">
           <div class="t"><span class="tip"
-            data-tip="최근 {{ recent_days }}거래일 순매수 합 ÷ 하루평균 거래대금 · {{ strength_threshold }} 이상이면 '강함'으로 표시합니다">순매수 강도</span></div>
+            data-tip="{{ observation.shortLabel }} · {{ observation.notice }} · 순매수 합 ÷ 하루평균 거래대금 · {{ strength_threshold }} 이상이면 '강함'으로 표시합니다">순매수 강도</span></div>
           {% for r in rows %}
           <div class="row"><span class="sub">{{ r.name }}</span>
             <span><b class="{{ 'buy' if r.direction == '매수' else 'sell' if r.direction == '매도' else 'mut' }}">{{ r.pct }}</b>
@@ -376,7 +376,7 @@
         </div>
         <div class="sig">
           <div class="t"><span class="tip"
-            data-tip="외국인·기관의 최근 {{ recent_days }}거래일 순매수 방향이 같은지 다른지를 봅니다">수급 구도 (외국인·기관)</span></div>
+            data-tip="외국인·기관의 제공 관측 기준 방향 · {{ observation.notice }}이 같은지 다른지를 봅니다">수급 구도 (외국인·기관)</span></div>
           <div class="big {{ 'buy' if alignment == '동반매수' else 'sell' if alignment == '동반매도' else 'mut' }}"
                style="margin:8px 0 6px">{{ alignment }}</div>
         </div>
@@ -389,7 +389,7 @@
       <div class="deepgrid">
         <div>
           <div class="deept"><span class="tip"
-            data-tip="최근 {{ recent_days }}거래일 누적 순매수 · 단위 백만원">기관 세부 순매수</span>{% if inst_detail %} · {{ inst_detail.leader }}{% endif %}</div>
+            data-tip="{{ observation.shortLabel }} · {{ observation.notice }} · 누적 순매수 · 단위 백만원">기관 세부 순매수</span>{% if inst_detail %} · {{ inst_detail.leader }}{% endif %}</div>
           {% if inst_detail %}
           {% for r in inst_detail.rows %}
           <div class="drow">
@@ -429,7 +429,7 @@
     {# ── [A] 검증 — 배지만 보이고 체크 전문은 접힘(클릭 시 펼침) ── #}
     <section class="card" id="verify">
       <h2>검증</h2>
-      <div class="cap">이 리포트의 모든 숫자는 표시 전에 코드로 원본과 대조됩니다</div>
+      <div class="cap">저장 당시 수치·해석 대조 결과이며 기간 충족 보증이 아닙니다. {{ observation.notice }}</div>
       {% if gate1 %}
       {% if gate1.passed %}
         <span class="badge pass">✓ 입력 확인</span>
@@ -467,6 +467,7 @@
       {% if interpretation %}
         <div class="cap"><span class="tip"
           data-tip="이 해석 문장은 위 팩트와 모순되지 않는지 코드로 대조(검증)를 마친 것입니다">✓ 팩트 대조를 마친 해석</span></div>
+        <div class="cap"><strong>{{ observation.interpretationNotice }}</strong></div>
         <div class="concl">{{ interpretation_html }}</div>
       {% else %}
         <div class="placeholder">해석 생략 — 검증을 통과한 해석이 없어 팩트만 표시합니다.</div>

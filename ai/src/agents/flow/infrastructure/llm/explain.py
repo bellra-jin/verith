@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 
 from ... import config
 from ...domain.signals import SUBJECTS
+from ...domain.observation_window import observation_window, relation_text
 from ...domain.models import GateResult
 
 _AI_ROOT = Path(__file__).resolve().parents[5]
@@ -39,9 +40,11 @@ def _facts_to_text(signals: dict, meta: dict) -> str:
     consecutive = signals.get("consecutive", {})
     strength = signals.get("strength", {})
     persistence = signals.get("persistence", {})
+    window = observation_window(signals, config.RECENT_DAYS, config.TREND_DAYS)
     lines = [
         f"종목: {meta.get('stock_name')} ({meta.get('ticker')})",
         f"기준일: {meta.get('base_date')}",
+        f"관측 안내: {window['notice']}",
         f"외국인·기관 수급구도: {signals.get('alignment')}",
         "  ('엇갈림/동반매수/동반매도'는 오직 외국인과 기관 두 주체 사이의 관계다."
         " 개인은 이 관계에 포함하지 않는다.)",
@@ -54,14 +57,14 @@ def _facts_to_text(signals: dict, meta: dict) -> str:
         else:
             direction = "순매수" if ratio > 0 else "순매도" if ratio < 0 else "중립"
             ratio_pct = f"{'+' if ratio > 0 else ''}{ratio * 100:.1f}%"
-        # 지속성: 5일·20일 합(억원 병기 — 코드가 환산, LLM은 복사만)과 일관 여부.
-        p = persistence.get(subject, {})
-        s5, s20 = p.get("sum_5"), p.get("sum_20")
+        # 관측 근거가 충족된 제공 자료에 한해서만 저장 합/판정을 전달한다.
         persist = ""
-        if s5 is not None and s20 is not None:
-            word = "일관됨" if p.get("consistent") else "다름"
-            persist = (f", 5일 순매수 합 {s5 / 100:+,.1f}억원 · 20일 합 {s20 / 100:+,.1f}억원"
-                       f" (5일과 20일 방향 {word})")
+        if window["status"] == "sufficient_rows":
+            p = persistence[subject]
+            s5, s20 = p["sum_5"], p["sum_20"]
+            persist = (f", 제공 자료 기준 {window['shortLabel']} 순매수 합 {s5 / 100:+,.1f}억원"
+                       f" · {window['longLabel']} 합 {s20 / 100:+,.1f}억원"
+                       f" ({relation_text(window['relations'][subject])})")
         lines.append(
             f"- {subject}: {direction} 방향(순매수 강도 {ratio_pct}),"
             f" 최근 연속 순매수 {days}일{persist}"

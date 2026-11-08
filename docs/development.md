@@ -1,5 +1,15 @@
 # 공용 환경 참고와 실행 경계
 
+## CF-005 한정 관측 안내 검사
+
+[관측 정책](../ai/docs/contracts/flow/observation-window.md)·[CF-005 기록](work/CF-005-flow-observation-window.md)은
+v1 숫자/저장 원문·Gate 판정을 유지한 표시/LLM facts 보완이다. 기존 Backend self-test/unit과
+Frontend self-test/unit/standalone type/대상 lint 입구만 사용한다. exact stdlib helper1·HTML을 포함한
+source-only4·공통 합성 JSON과 고정 unit만 추가한다. 전체 launcher와 실제 수는 기록을 따른다.
+pandas/Gate2/Jinja/React DOM/브라우저/실제 LLM·키/캐시/API/DB·앱 실행은 포함하지 않는다.
+아래 CF-004/CF-003/ST-001 수치는 각 단계 이력이며 이번 검사 결과로 재사용하지 않는다.
+
+
 ## CF-004 한정 캐시 검사
 
 현재 무키 Flow 캐시 보완은 [캐시 계약](../ai/docs/contracts/flow/kis-token-cache.md)과

@@ -199,7 +199,7 @@ def verify_signals(
                     f"원본 부호 판정 {exp_consistent} 과 불일치"
                 )
             else:
-                checks.append(f"지속성 정합: {subject} 5일·20일 합과 일관 판정이 원본과 일치")
+                checks.append(f"지속성 정합: {subject} 원본 {len(recent)}행/{len(trend)}행 합·부호와 일치(기간 충족 검사 아님)")
 
     # ── 규칙 6: 기관 세부 정합 ────────────────────────────
     # 6a 항등식: 세부 7주체 합 ≈ 기관계 — "우리가 만든 기준"이 아니라 데이터가

@@ -50,7 +50,7 @@
 
 ## version 1 입력과 보존
 
-정본: `ai/src/agents/flow/docs/storage-spec.md`, `export/to_json.build_payload`,
+정본: `ai/docs/contracts/flow/storage-spec.md`, `export/to_json.build_payload`,
 `core/signals.py`, frontend `src/api/flow.ts`. 지원 version은 정수 1만이다.
 version/report_id/meta/signals/verification/interpretation은 필수다.
 meta.ticker는 저장 FK 때문에 필수이며 base_date는 실제 ISO 일자 또는 명시적 null이다.

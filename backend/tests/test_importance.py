@@ -9,11 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from src.api.services.importance import (
-    compute_importance,
-    publisher_weight,
-    sentiment_magnitude,
-)
+from src.modules.news.domain.importance import compute_importance, publisher_weight, sentiment_magnitude
 
 
 @dataclass

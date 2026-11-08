@@ -7,8 +7,8 @@ from pathlib import Path
 from httpx import ASGITransport, AsyncClient
 import pytest
 
-from src.api.auth.google import GoogleConfig, LoginFailed
-from src.api.services.auth_service import Principal
+from src.modules.auth.infrastructure.google_oidc import GoogleConfig, LoginFailed
+from src.modules.auth.application.session_service import Principal
 from tests.unit.test_cf002_google import prepare
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +53,7 @@ def provider(request):
 
 async def test_local_callback_cookies_origin_and_host_injection(monkeypatch, provider):
     from src.api.main import app
-    from src.api.routes import auth
+    from src.modules.auth.api import router as auth
     from db.session import get_session
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -142,7 +142,7 @@ async def test_local_callback_cookies_origin_and_host_injection(monkeypatch, pro
 
 
 def test_scoped_static_defaults_preserve_inference_and_cache_off():
-    assert "http://localhost:3200" in (ROOT / "src/api/config.py").read_text()
+    assert "http://localhost:3200" in (ROOT / "src/shared/config.py").read_text()
     repo = ROOT.parent
     assert (
         '"http://localhost:8200"' in (repo / "ai/src/supervisor/config.py").read_text()

@@ -134,7 +134,7 @@ async def test_principal_revalidated_without_minting_bearer(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_partial_save_tracks_known_id_and_refuses_blind_retry(monkeypatch):
-    from src.api.services.flow_report_service import FlowReportService
+    from src.modules.flow.application.report_service import FlowReportService
 
     a = row()
     controller = controller_with(SimpleNamespace(scalar=AsyncMock(return_value=a)))
@@ -153,7 +153,7 @@ async def test_partial_save_tracks_known_id_and_refuses_blind_retry(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_delete_only_recorded_ids_and_own_active_principal(monkeypatch):
-    from src.api.services.flow_report_service import FlowReportService
+    from src.modules.flow.application.report_service import FlowReportService
 
     a = row()
     controller = controller_with(SimpleNamespace(scalar=AsyncMock(return_value=a)))

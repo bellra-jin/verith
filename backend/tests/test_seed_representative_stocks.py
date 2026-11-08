@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from db.models.common.stock import Stock
 from scripts.seed_representative_stocks import seed as seed_repr
-from src.api.constants.stocks import REPRESENTATIVE_STOCKS
-from src.api.services.stock_resolver_service import StockResolverService
+from src.modules.stocks.domain.constants.stocks import REPRESENTATIVE_STOCKS
+from src.modules.stocks.application.resolver_service import StockResolverService
 
 
 async def test_representative_rows_present_after_seed(db_session):

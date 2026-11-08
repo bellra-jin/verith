@@ -81,7 +81,7 @@ substring 대신 원문 token 경계**로 매칭한다.
 - **동일 정규화 이름이 여러 코드**에 걸리면 자동 선택하지 않고 항상 `ambiguous`(공식명 우선순위는
   동일 stock_code 의 대표 match 선택에만 쓰고, 다른 코드 후보를 제거하지 않는다). 이 상황은 해당
   alias/`ambiguous_group` 데이터가 **존재할 때** 발생한다(없으면 `not_found`).
-- 승인 조사/문맥 상수: `src/api/constants/stock_match.py`. 임의 fuzzy·일반어 사전 추가 금지.
+- 승인 조사/문맥 상수: `src/modules/stocks/domain/constants/stock_match.py`. 임의 fuzzy·일반어 사전 추가 금지.
   전체 마스터 corpus 기준 오탐/미탐 측정 후 상수·임계를 보고·조정한다.
 
 ## 5. 데이터 상태와 후속 (전체 종목 마스터)

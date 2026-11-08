@@ -31,8 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from db.models.common.stock import Stock  # noqa: E402
 from db.models.common.stock_alias import StockAlias  # noqa: E402
-from src.api.constants.stock_aliases import ALIAS_SEED  # noqa: E402
-from src.api.text_normalize import normalize_stock_text  # noqa: E402
+from src.modules.stocks.domain.constants.stock_aliases import ALIAS_SEED  # noqa: E402
+from src.modules.stocks.domain.text_normalize import normalize_stock_text  # noqa: E402
 
 
 class AliasSeedError(RuntimeError):

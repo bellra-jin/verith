@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db.models.common.stock import Stock
-from src.api.constants.kis_master import MARKET_KOSDAQ, MARKET_KOSPI
-from src.api.services.stock_sync_service import StockSyncError, sync_stocks
+from src.modules.stocks.domain.constants.kis_master import MARKET_KOSDAQ, MARKET_KOSPI
+from src.modules.stocks.application.stock_sync_service import StockSyncError, sync_stocks
 from tests.fixtures.kis_master import (
     EXPECTED_KOSDAQ,
     EXPECTED_KOSPI,

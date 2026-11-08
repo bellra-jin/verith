@@ -10,7 +10,7 @@
 `context_snapshot` 등 raw/internal 저장 구조는 **계약이 아니다**(§내부 저장 구조와의 차이). 모든 값은 저장/계산된
 값의 projection 이며 backend 는 LLM 내용을 재생성/재해석하지 않는다.
 
-기준 코드: `routes/technical_reports.py` · `schemas/technical_report.py` · `services/technical_report_service.py`.
+현재 구현 경로: `src/modules/technical/api/router.py` · `src/modules/technical/api/schemas.py` · `src/modules/technical/application/report_service.py` (ST-001 재배치, API/응답 계약 변경 없음).
 
 ---
 
@@ -325,6 +325,6 @@ directional_bias?·final_regime?·as_of? — 스레드 헤더 연결감)·`follo
 ## 11. 비대상 / 내부 저장 구조와의 차이
 - **내부(계약 아님)**: `technical_reports.output_payload`(AI 원본 raw), `technical_report_followups.context_snapshot`
   (raw JSONB), 정규화 자식 테이블 — 디버깅/백오피스용. 프론트는 위 read model 만 본다.
-- **AI 계약**(문장 생성 규칙·검증)은 `ai/src/agents/technical/docs/contracts.md` 소관. 이 문서는 **backend→frontend
+- **AI 계약**(문장 생성 규칙·검증)은 `ai/docs/contracts/technical/contracts.md` 소관. 이 문서는 **backend→frontend
   응답 계약**만 다룬다.
 - follow-up **answer 생성 주체는 backend 아님**(caller-provided). backend 는 저장/조회 계층.

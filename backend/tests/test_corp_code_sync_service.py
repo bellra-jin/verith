@@ -6,10 +6,7 @@ import pytest
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db.models.common.stock_corp_code import StockCorpCode
-from src.api.services.corp_code_sync_service import (
-    CorpCodeSyncError,
-    sync_corp_codes,
-)
+from src.modules.stocks.application.corp_code_sync_service import CorpCodeSyncError, sync_corp_codes
 from tests.fixtures.dart_corp_code import CORP_XML, EXPECTED, corp_xml
 
 

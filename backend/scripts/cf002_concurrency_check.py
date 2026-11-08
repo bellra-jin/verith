@@ -15,15 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from tests.db_safety import preflight_database, attest_engine_connection
 from db.models.auth.models import AuthIdentity, AuthSession, AuthUser
 from db.models.common.stock import Stock
-from src.api.services.auth_service import (
-    link_verified_identity,
-    issue_session,
-    validate_principal,
-    revoke_session,
-    AuthenticationRequired,
-)
-from src.api.services.flow_report_service import FlowReportService
-from src.api.schemas.flow_report import FlowReportSaveRequest
+from src.modules.auth.application.session_service import link_verified_identity, issue_session, validate_principal, revoke_session, AuthenticationRequired
+from src.modules.flow.application.report_service import FlowReportService
+from src.modules.flow.api.schemas import FlowReportSaveRequest
 from tests.fixtures.flow_payload import make_flow_payload
 
 
@@ -122,9 +116,9 @@ async def main():
         from unittest.mock import patch
         from types import SimpleNamespace
         from src.api.main import app
-        from src.api.routes import auth
-        from src.api.auth.google import GoogleConfig
-        from src.api.services.auth_service import csrf_token
+        from src.modules.auth.api import router as auth
+        from src.modules.auth.infrastructure.google_oidc import GoogleConfig
+        from src.modules.auth.application.session_service import csrf_token
         from db.session import get_session
 
         async with verified_session() as setup:

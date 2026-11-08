@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.constants.kis_master import (
-    FLAG_VALUE_SEMANTICS_VERIFIED,
-    MARKET_KOSDAQ,
-    MARKET_KOSPI,
-)
-from src.api.services.stock_master_parser import inspect_rows, parse_master
+from src.modules.stocks.domain.constants.kis_master import FLAG_VALUE_SEMANTICS_VERIFIED, MARKET_KOSDAQ, MARKET_KOSPI
+from src.modules.stocks.domain.stock_master_parser import inspect_rows, parse_master
 from tests.fixtures.kis_master import (
     EXPECTED_KOSDAQ,
     EXPECTED_KOSPI,

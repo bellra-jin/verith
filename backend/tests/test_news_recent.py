@@ -16,7 +16,7 @@ from db.graph.driver import get_graph_session
 from db.models.news.news import News
 from db.session import get_session
 from src.api.main import app
-from src.api.repositories import news_graph_repository as graph_repo
+from src.modules.news.infrastructure import news_graph_repository as graph_repo
 
 EVENT_A = uuid.UUID("a1a1a1a1-0000-0000-0000-000000000000")  # 임베딩 2건 → centroid
 EVENT_B = uuid.UUID("b2b2b2b2-0000-0000-0000-000000000000")  # 임베딩 없음 → 제외

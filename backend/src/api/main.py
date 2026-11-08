@@ -5,12 +5,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from db.graph import close_driver, ensure_constraints
-from src.api.config import settings
-from src.api.access_boundary import AccessBoundary
-from src.api.routes import industry_reports, news, reports, stocks, technical_reports
-from src.api.routes import flow_reports, fundamental_reports, auth
-from src.api.services.auth_service import AuthenticationRequired
-from src.api.auth.google import LoginFailed
+from src.shared.config import settings
+from src.shared.http.access_boundary import AccessBoundary
+from src.modules.industry.api import router as industry_reports
+from src.modules.news.api import router as news
+from src.modules.reports.api import router as reports
+from src.modules.stocks.api import router as stocks
+from src.modules.technical.api import router as technical_reports
+from src.modules.fundamental.api import router as fundamental_reports
+from src.modules.auth.api import router as auth
+from src.modules.flow.api import router as flow_reports
+from src.modules.auth.application.session_service import AuthenticationRequired
+from src.modules.auth.infrastructure.google_oidc import LoginFailed
 from starlette.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 

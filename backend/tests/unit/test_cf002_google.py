@@ -10,15 +10,7 @@ import pytest
 from authlib.jose import JsonWebKey, JsonWebToken
 from starlette.datastructures import QueryParams
 
-from src.api.auth.google import (
-    GoogleConfig,
-    GoogleOIDC,
-    Attempts,
-    LoginFailed,
-    ISSUER,
-    DISCOVERY,
-    ENDPOINTS,
-)
+from src.modules.auth.infrastructure.google_oidc import GoogleConfig, GoogleOIDC, Attempts, LoginFailed, ISSUER, DISCOVERY, ENDPOINTS
 
 
 @pytest.fixture(scope="module")

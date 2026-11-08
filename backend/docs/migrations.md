@@ -10,7 +10,7 @@
 
 - `backend/alembic.ini`와 `backend/db/migrations/env.py`를 사용한다.
 - Alembic 환경은 `asyncpg` 기반이며 `create_async_engine`과 `connection.run_sync`로 실행한다.
-- DSN은 `src.api.config.settings.DATABASE_URL`에서 읽는다.
+- DSN은 `src.shared.config.settings.DATABASE_URL`에서 읽는다.
 - 모델을 추가하면 `backend/db/models/registry.py`의 import와 `__all__`에 반드시 등록한다.
 - DB 컬럼·테이블을 바꾸기 전에 `docs/schema.md`를 먼저 갱신한다.
 

@@ -120,9 +120,9 @@ async def test_actual_engine_mismatch_rejected_in_readonly_transaction():
 
 async def test_cors_public_preflight_and_protected_actual_requests(monkeypatch):
     from src.api.main import app
-    from src.api.config import settings
+    from src.shared.config import settings
     from src.api.deps import get_stock_resolver_service
-    from src.api.schemas.stock_resolve import StockResolveResponse
+    from src.modules.stocks.api.schemas import StockResolveResponse
 
     origin = settings.cors_origin_list[0]
     service = SimpleNamespace(

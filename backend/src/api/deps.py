@@ -14,15 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.graph.driver import get_graph_session
 from db.session import get_session
-from src.api.clients.ai_client import AIClient
-from src.api.config import settings
-from src.api.services.news_cleanup_service import NewsCleanupService
-from src.api.services.news_graph_query_service import NewsGraphQueryService
-from src.api.services.news_query_service import NewsQueryService
-from src.api.services.news_report_service import NewsReportService
-from src.api.services.news_service import NewsService
-from src.api.services.stock_resolver_service import StockResolverService
-from src.api.services.technical_report_service import TechnicalReportService
+from src.shared.infrastructure.clients.ai_client import AIClient
+from src.shared.config import settings
+from src.modules.news.application.cleanup_service import NewsCleanupService
+from src.modules.news.application.graph_query_service import NewsGraphQueryService
+from src.modules.news.application.query_service import NewsQueryService
+from src.modules.news.application.report_service import NewsReportService
+from src.modules.news.application.ingest_service import NewsService
+from src.modules.stocks.application.resolver_service import StockResolverService
+from src.modules.technical.application.report_service import TechnicalReportService
 
 
 def get_ai_client() -> AIClient:

@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.api.access_boundary import AccessBoundary, PUBLIC_ROUTES
+from src.shared.http.access_boundary import AccessBoundary, PUBLIC_ROUTES
 from tests.db_safety import UnsafeTestDatabase, preflight_database
 
 

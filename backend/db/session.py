@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from src.api.config import settings
+from src.shared.config import settings
 
 
 @lru_cache(maxsize=1)

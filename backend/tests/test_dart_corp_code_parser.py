@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.services.dart_corp_code_parser import (
-    CorpCodeParseError,
-    parse_corp_code,
-)
+from src.modules.stocks.domain.dart_corp_code_parser import CorpCodeParseError, parse_corp_code
 from tests.fixtures.dart_corp_code import CORP_XML, EXPECTED, corp_xml
 
 

@@ -13,19 +13,10 @@ from db.models.common.agent_report import AgentReport
 from db.models.common.stock import Stock
 from db.models.flow.flow_report import FlowReport
 from db.models.flow.report_verification import FlowReportVerification
-from src.api.repositories.flow_report_repository import list_owned_indexes
-from src.api.schemas.flow_report import FlowReportSaveRequest
-from src.api.services.auth_service import (
-    AuthenticationRequired,
-    authenticate,
-    issue_session,
-    link_verified_identity,
-    revoke_session,
-    validate_principal,
-    csrf_token,
-    verify_csrf,
-)
-from src.api.services.flow_report_service import FlowReportService
+from src.modules.flow.infrastructure.report_repository import list_owned_indexes
+from src.modules.flow.api.schemas import FlowReportSaveRequest
+from src.modules.auth.application.session_service import AuthenticationRequired, authenticate, issue_session, link_verified_identity, revoke_session, validate_principal, csrf_token, verify_csrf
+from src.modules.flow.application.report_service import FlowReportService
 from tests.fixtures.flow_payload import make_flow_payload
 
 
@@ -281,8 +272,8 @@ async def test_actual_backend_http_internal_a_b_session_and_csrf(flow_db, monkey
     from types import SimpleNamespace
     from httpx import AsyncClient, ASGITransport
     from src.api.main import app
-    from src.api.routes import auth
-    from src.api.auth.google import GoogleConfig
+    from src.modules.auth.api import router as auth
+    from src.modules.auth.infrastructure.google_oidc import GoogleConfig
     from db.session import get_session
 
     saved = await save(flow_db)
@@ -379,7 +370,7 @@ async def test_signed_synthetic_google_callback_commits_revocable_session(
     """Synthetic signed Google-shaped protocol over MockTransport + real PG; no Google login."""
     from httpx import AsyncClient, ASGITransport
     from src.api.main import app
-    from src.api.routes import auth
+    from src.modules.auth.api import router as auth
     from db.session import get_session
     from tests.unit.test_cf002_google import (
         provider as provider_fixture,
@@ -474,7 +465,7 @@ async def test_signed_synthetic_google_callback_commits_revocable_session(
 
 
 async def test_delete_failure_rolls_back_index_and_root(flow_db, monkeypatch):
-    from src.api.services import flow_report_service as module
+    from src.modules.flow.application import report_service as module
 
     saved = await save(flow_db)
 
@@ -497,7 +488,7 @@ async def test_delete_failure_rolls_back_index_and_root(flow_db, monkeypatch):
 
 
 async def test_internal_save_does_not_adopt_legacy_or_overwrite_existing_id(flow_db):
-    from src.api.services.flow_report_service import FlowStoredPayloadError
+    from src.modules.flow.application.report_service import FlowStoredPayloadError
 
     saved = await save(flow_db)
     session = flow_db.session

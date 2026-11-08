@@ -23,10 +23,10 @@ _BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from src.api.clients.kis_master_client import KisMasterClient  # noqa: E402
-from src.api.constants.kis_master import MARKET_KOSDAQ, MARKET_KOSPI  # noqa: E402
-from src.api.services.stock_master_parser import inspect_rows  # noqa: E402
-from src.api.services.stock_sync_service import sync_stocks  # noqa: E402
+from src.modules.stocks.infrastructure.kis_master_client import KisMasterClient  # noqa: E402
+from src.modules.stocks.domain.constants.kis_master import MARKET_KOSDAQ, MARKET_KOSPI  # noqa: E402
+from src.modules.stocks.domain.stock_master_parser import inspect_rows  # noqa: E402
+from src.modules.stocks.application.stock_sync_service import sync_stocks  # noqa: E402
 
 # 검산용 앵커(시장별): 포함(주권) 예시. 제외 예시는 --inspect 가 실데이터에서 자동 스캔한다.
 _ANCHORS: dict[str, dict[str, str]] = {

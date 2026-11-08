@@ -13,7 +13,7 @@ from functools import lru_cache
 
 from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncSession
 
-from src.api.config import settings
+from src.shared.config import settings
 
 
 # 모듈 레벨 단일 드라이버(커넥션 풀 포함). PostgreSQL `engine` 과 동형.

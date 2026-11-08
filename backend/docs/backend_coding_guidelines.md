@@ -18,10 +18,10 @@
 - Backend Technical 응답은 [technical_frontend_api_contract](technical_frontend_api_contract.md),
   공통 보관함 shape는 [report_archive_api_contract](report_archive_api_contract.md)에서 관리한다.
 - Technical AI 내부 요청/JSON/enum/화면은 각각
-  [api_spec](../../ai/src/agents/technical/docs/api_spec.md),
-  [contracts](../../ai/src/agents/technical/docs/contracts.md),
-  [enums](../../ai/src/agents/technical/docs/enums.md),
-  [frontend_mapping](../../ai/src/agents/technical/docs/frontend_mapping.md)의 **Technical 범위**다.
+  [api_spec](../../ai/docs/contracts/technical/api_spec.md),
+  [contracts](../../ai/docs/contracts/technical/contracts.md),
+  [enums](../../ai/docs/contracts/technical/enums.md),
+  [frontend_mapping](../../ai/docs/agents/technical/frontend_mapping.md)의 **Technical 범위**다.
 - Flow 저장·검증은 [CF-001 공유 계약](../../docs/contracts/CF-001-v1.1.shared-v1.md),
   실제 세션/owner·공개 차단은 [CF-002 공유 계약](../../docs/contracts/CF-002-v0.6.shared-v1.md)을 함께 적용한다.
   종목 식별 API는 [stock_resolver](stock_resolver.md)와 구분한다.
@@ -71,7 +71,7 @@ AI_SERVICE_URL = "http://localhost:8001"
 좋은 예:
 
 ```python
-from src.api.config import settings
+from src.shared.config import settings
 
 ai_service_url = settings.AI_SERVICE_URL
 ```
@@ -136,9 +136,11 @@ validated_report = TechnicalReportResponse.model_validate(ai_response)
 ### 4.1 계층별 책임을 분리한다
 
 아래는 **권장 책임 예시**이며 현재 경로/새 재배치안이 아니다. 실제 entry는
-[src/api/main.py](../src/api/main.py), config는 [src/api/config.py](../src/api/config.py),
-service/repository/schema는 src/api 아래, 모델은 [db/models](../db/models),
-테스트는 [tests](../tests)에 있다. 큰 파일/목표 폴더 구조는 후속 비교 전 확정하지 않는다.
+[src/api/main.py](../src/api/main.py), config는 [src/shared/config.py](../src/shared/config.py),
+현재 기능 정본은 [src/modules](../src/modules)의 api/application/domain/infrastructure, 공통은
+[src/shared](../src/shared)다. 옛 src/api 기능 export 파일은 제거됐고 main/deps만
+composition entry로 유지한다. 모델은 [db/models](../db/models), 테스트는 [tests](../tests)에 유지한다.
+실제 이동/검증 상태는 [전체 진행 기록](../../docs/work/ST-001-layout-progress.md)을 따른다.
 
 ```text
 backend/src/

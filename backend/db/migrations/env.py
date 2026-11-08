@@ -30,7 +30,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     """offline 모드: DSN 문자열만으로 SQL 스크립트 생성."""
-    from src.api.config import settings
+    from src.shared.config import settings
 
     context.configure(
         url=settings.DATABASE_URL,
@@ -55,7 +55,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 async def run_migrations_online() -> None:
     """online 모드: async 엔진으로 접속 후 run_sync 로 마이그레이션 실행."""
-    from src.api.config import settings
+    from src.shared.config import settings
 
     connectable = create_async_engine(settings.DATABASE_URL, poolclass=pool.NullPool)
     async with connectable.connect() as connection:

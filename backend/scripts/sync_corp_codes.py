@@ -24,9 +24,9 @@ _BACKEND_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from src.api.clients.dart_corp_code_client import DartCorpCodeClient  # noqa: E402
-from src.api.services.corp_code_sync_service import sync_corp_codes  # noqa: E402
-from src.api.services.dart_corp_code_parser import parse_corp_code  # noqa: E402
+from src.modules.stocks.infrastructure.dart_corp_code_client import DartCorpCodeClient  # noqa: E402
+from src.modules.stocks.application.corp_code_sync_service import sync_corp_codes  # noqa: E402
+from src.modules.stocks.domain.dart_corp_code_parser import parse_corp_code  # noqa: E402
 
 _INSPECT_SAMPLE = 5
 

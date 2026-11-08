@@ -9,12 +9,7 @@ import pytest
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.requests import Request
 
-from src.api.services.auth_service import (
-    Principal,
-    AuthenticationRequired,
-    csrf_token,
-    verify_csrf,
-)
+from src.modules.auth.application.session_service import Principal, AuthenticationRequired, csrf_token, verify_csrf
 
 
 def principal():
@@ -31,7 +26,7 @@ def test_csrf_non_ascii_is_a_safe_rejection():
 
 
 def test_duplicate_same_name_cookies_are_rejected():
-    from src.api.routes.auth import unique_cookie
+    from src.modules.auth.api.router import unique_cookie
 
     request = Request(
         {
@@ -44,7 +39,7 @@ def test_duplicate_same_name_cookies_are_rejected():
 
 async def test_logout_db_failure_does_not_report_success_or_remove_cookie(monkeypatch):
     from src.api.main import app
-    from src.api.routes import auth
+    from src.modules.auth.api import router as auth
     from db.session import get_session
 
     previous = dict(app.dependency_overrides)
@@ -74,7 +69,7 @@ async def test_logout_db_failure_does_not_report_success_or_remove_cookie(monkey
 
 
 async def test_logout_acquires_exclusive_session_lock_before_revocation(monkeypatch):
-    from src.api.routes import auth
+    from src.modules.auth.api import router as auth
 
     user = principal()
     authenticate_request = AsyncMock(return_value=user)
@@ -94,7 +89,7 @@ async def test_logout_acquires_exclusive_session_lock_before_revocation(monkeypa
 async def test_exclusive_authentication_uses_for_update_not_for_share():
     from types import SimpleNamespace
     from sqlalchemy.dialects import postgresql
-    from src.api.services.auth_service import authenticate
+    from src.modules.auth.application.session_service import authenticate
 
     user = principal()
     row = SimpleNamespace(

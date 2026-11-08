@@ -18,7 +18,7 @@ from db.graph.driver import get_graph_session
 from db.models.news.news import News
 from db.session import get_session
 from src.api.main import app
-from src.api.repositories import news_graph_repository as graph_repo
+from src.modules.news.infrastructure import news_graph_repository as graph_repo
 
 EVENT_X = uuid.UUID("aaaa1111-0000-0000-0000-000000000000")  # old 1 + recent 1 → 재계산
 EVENT_Y = uuid.UUID("bbbb2222-0000-0000-0000-000000000000")  # old 2 → 빈 이벤트(삭제)

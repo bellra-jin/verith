@@ -1,5 +1,14 @@
 # veriθ Backend — PostgreSQL 마이그레이션 가이드
 
+## CF-003 추가 revision과 비파괴 경계
+
+새 revision `c3001a7e0001` (`20261108_c3001a7e0001_flow_run_admission.py`)은 `c2001a7e0001` 뒤에
+flow_runs 하나만 추가한다. 기존 revision/자료 backfill은 없다. downgrade는 같은 transaction에서
+ACCESS EXCLUSIVE를 먼저 획득한 뒤 nonempty이면 DROP 전에 거부한다.
+운영 DB 삭제/초기화 안내가 아니며, 빈 새 테이블의 downgrade/reupgrade·동시 insert 순서는
+승인된 새 소유 DB와 동일 attested 연결의 verified_test_mode에서만 검사한다.
+[이번 계약](flow_run_admission.md)·[실행 상태](../../docs/work/CF-003-flow-run-admission.md)를 확인한다.
+
 `docs/migrations.md`
 
 이 문서는 PostgreSQL 스키마를 변경하고 Alembic 마이그레이션을 검증하는 절차를 다룬다.

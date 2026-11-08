@@ -83,6 +83,9 @@ class ErrorCode(StrEnum):
     UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"
     RESULT_CONTRACT_INVALID = "RESULT_CONTRACT_INVALID"
     DATA_INSUFFICIENT = "DATA_INSUFFICIENT"
+    FEATURE_UNAVAILABLE = "FEATURE_UNAVAILABLE"
+    AUTH_REQUEST_INVALID = "AUTH_REQUEST_INVALID"
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
 
 
 ERRORS: dict[ErrorCode, tuple[int, str]] = {
@@ -94,6 +97,9 @@ ERRORS: dict[ErrorCode, tuple[int, str]] = {
     ErrorCode.UNSUPPORTED_VERSION: (422, "지원하지 않는 payload version입니다."),
     ErrorCode.RESULT_CONTRACT_INVALID: (502, "분석 결과를 확인할 수 없습니다."),
     ErrorCode.DATA_INSUFFICIENT: (422, "분석에 필요한 자료가 부족합니다."),
+    ErrorCode.FEATURE_UNAVAILABLE: (403, "현재 사용할 수 없는 기능입니다."),
+    ErrorCode.AUTH_REQUEST_INVALID: (403, "잘못된 인증 요청입니다."),
+    ErrorCode.SERVICE_UNAVAILABLE: (503, "요청을 처리할 수 없습니다."),
 }
 
 

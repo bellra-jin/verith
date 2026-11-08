@@ -32,6 +32,7 @@ AUDITED_TECHNICAL_TESTS = ("tests/test_technical_read_model.py",)
 AUDITED_CLIENT_TESTS = ("tests/test_ai_client.py",)
 AUDITED_NEWS_TESTS = ("tests/test_importance.py",)
 UNIT += AUDITED_STOCK_TESTS + AUDITED_TECHNICAL_TESTS + AUDITED_CLIENT_TESTS + AUDITED_NEWS_TESTS
+UNIT += ("tests/unit/test_cf003_flow_runs.py",)
 NEW = {"backend/scripts/check_safe.py", "backend/scripts/safe_checks_bootstrap.py",
        "backend/tests/safe_checks/test_entry.py",
        "backend/src/modules/flow/domain/payload.py",
@@ -97,6 +98,18 @@ NEW = {"backend/scripts/check_safe.py", "backend/scripts/safe_checks_bootstrap.p
        "ai/src/agents/flow/api/payload.py"}
 FLOW_POLICY_SOURCES = frozenset(['ai/src/agents/flow/infrastructure/kis_client.py', 'ai/src/agents/flow/infrastructure/llm/explain.py', 'ai/devtools/flow/streamlit_flow_lab.py'])
 NEW.update(FLOW_POLICY_SOURCES)  # Source-copy/AST policy inspection only; never import these modules.
+CF003_SOURCES = frozenset({
+    "backend/src/modules/flow/api/run_schemas.py",
+    "backend/src/modules/flow/api/run_router.py",
+    "backend/src/modules/flow/application/run_service.py",
+    "backend/src/modules/flow/infrastructure/run_repository.py",
+    "backend/db/models/flow/flow_run.py",
+    "backend/db/migrations/versions/20261108_c3001a7e0001_flow_run_admission.py",
+    "backend/tests/unit/test_cf003_flow_runs.py",
+    "backend/scripts/cf002_interactive_login.py",
+    "backend/scripts/cf003_admission_check.py",
+})
+NEW.update(CF003_SOURCES)
 FLOW_INPUTS = {'ai/src/agents/flow/api/payload.py': 'e3076a97d9c4c5cc6159f0488f351b07613353dbe67371a001ff6ee995479fc2', 'ai/src/agents/flow/domain/models.py': '5d3e2c5a243a0faed6f638f2af802a138d338e5bc324ebab3b2573810162fd12'}
 REMOVED_SOURCES = frozenset(['backend/src/api/access_boundary.py', 'backend/src/api/auth/google.py', 'backend/src/api/clients/ai_client.py', 'backend/src/api/clients/dart_corp_code_client.py', 'backend/src/api/clients/kis_master_client.py', 'backend/src/api/config.py', 'backend/src/api/constants/importance.py', 'backend/src/api/constants/kis_master.py', 'backend/src/api/constants/stock_aliases.py', 'backend/src/api/constants/stock_match.py', 'backend/src/api/constants/stocks.py', 'backend/src/api/repositories/agent_report_repository.py', 'backend/src/api/repositories/corp_code_repository.py', 'backend/src/api/repositories/flow_report_repository.py', 'backend/src/api/repositories/fundamental_report_repository.py', 'backend/src/api/repositories/industry_report_repository.py', 'backend/src/api/repositories/news_graph_repository.py', 'backend/src/api/repositories/news_report_repository.py', 'backend/src/api/repositories/news_repository.py', 'backend/src/api/repositories/stock_repository.py', 'backend/src/api/repositories/technical_report_repository.py', 'backend/src/api/routes/auth.py', 'backend/src/api/routes/flow_reports.py', 'backend/src/api/routes/fundamental_reports.py', 'backend/src/api/routes/industry_reports.py', 'backend/src/api/routes/news.py', 'backend/src/api/routes/reports.py', 'backend/src/api/routes/stocks.py', 'backend/src/api/routes/technical_reports.py', 'backend/src/api/schemas/agent_report.py', 'backend/src/api/schemas/ai_fundamental_output.py', 'backend/src/api/schemas/ai_technical_output.py', 'backend/src/api/schemas/flow_execution.py', 'backend/src/api/schemas/flow_payload.py', 'backend/src/api/schemas/flow_report.py', 'backend/src/api/schemas/fundamental_report.py', 'backend/src/api/schemas/industry_report.py', 'backend/src/api/schemas/news.py', 'backend/src/api/schemas/news_report.py', 'backend/src/api/schemas/report_archive.py', 'backend/src/api/schemas/stock_resolve.py', 'backend/src/api/schemas/technical_report.py', 'backend/src/api/services/auth_service.py', 'backend/src/api/services/corp_code_sync_service.py', 'backend/src/api/services/dart_corp_code_parser.py', 'backend/src/api/services/flow_report_service.py', 'backend/src/api/services/fundamental_report_service.py', 'backend/src/api/services/importance.py', 'backend/src/api/services/industry_report_service.py', 'backend/src/api/services/news_cleanup_service.py', 'backend/src/api/services/news_graph_query_service.py', 'backend/src/api/services/news_query_service.py', 'backend/src/api/services/news_report_service.py', 'backend/src/api/services/news_service.py', 'backend/src/api/services/stock_master_parser.py', 'backend/src/api/services/stock_resolver_service.py', 'backend/src/api/services/stock_sync_service.py', 'backend/src/api/services/technical_report_service.py', 'backend/src/api/text_normalize.py', 'ai/src/agents/flow/schemas.py', 'ai/src/agents/flow/export/to_json.py'])
 EXTRA = {"backend/tests/fixtures/kis_master.py", "backend/tests/fixtures/dart_corp_code.py","backend/tests/db_safety.py", "backend/tests/fixtures/flow_payload.py",

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # legacy 설정 호환용. 테스트는 명시적 환경변수와 승인된 일회용 자원 preflight가 필수다.
     TEST_DATABASE_URL: str = ""
     ENABLE_NEWS_GRAPH: bool = False
+    FLOW_RUN_ADMISSION_ENABLED: bool = False
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = Field(default="", repr=False)
     AUTH_REDIRECT_URI: str = ""

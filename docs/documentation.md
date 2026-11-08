@@ -151,3 +151,8 @@ ST-001 3-A의 16파일 정적 검사/독립 수용은 병합 이력이다. 현�
 v1.6 당시 self-test 17개·unit 32개는 통과했다. build는 3회 모두 추가 파일 요청의 guard 거부로 exit 78·자기 root 정리였다. 최초 거절·실패·후속 거절과 승인된 재개를 이력으로 구분한다. worker fs 관측/부분 journal과 native 합성 canary·부모 공개 source 검증을 분리하며 native 전체 0을 주장하지 않는다.
 
 v1.7 진단 한정 실행은 self-test 20개·unit 35개 통과, build는 거부 22회/정규화 target ID 10개로 exit 78이다. 이 중 cgroup 1개·4회, unknown hash 9개·18회이며 hash 대상의 known-copy membership은 모두 false다. HMAC 식별을 읽기 허용에 쓰지 않으며 추가 build/HTTP/type/lint는 새 정책 판단 전 진행하지 않는다. 앞선 v1.6 수치·실패는 당시 이력이다.
+
+### CF-012 Flow 인증 분석
+
+- [요청·실행·본인 저장 계약](contracts/flow-analysis-v1.md)
+- [CF-012 구현·검증 기록](work/CF-012-flow-analysis.md)

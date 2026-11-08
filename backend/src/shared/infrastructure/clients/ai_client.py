@@ -10,6 +10,7 @@ secret 미로깅: 예외 메시지에 요청 payload(원 질의 등)·응답 본
 from __future__ import annotations
 
 import httpx
+import asyncio
 
 _ANALYZE_PATH = "/internal/technical/analyze"
 _FUNDAMENTAL_ANALYZE_PATH = "/internal/fundamental/analyze"
@@ -51,10 +52,48 @@ class AIClient:
         base_url: str,
         timeout_seconds: float,
         transport: httpx.AsyncBaseTransport | None = None,
+        *, service_token: str = "",
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
         self._transport = transport  # 테스트에서 MockTransport 주입용
+        self._flow_token = service_token
+
+    async def analyze_flow(self, payload: dict) -> dict:
+        """One bounded internal Flow request. No redirect, environment proxy or retry."""
+        from urllib.parse import urlsplit
+        from src.modules.flow.domain.analysis import canonical, decode
+        target=urlsplit(self._base_url)
+        try:token=self._flow_token.encode('utf8')
+        except UnicodeError:raise AIValidationError('Flow service is unavailable') from None
+        if (target.scheme not in {'http','https'} or not target.hostname or target.username or target.password
+                or target.path not in {'','/'} or target.query or target.fragment
+                or len(token)<32 or any(value<32 or value==127 for value in token)):
+            raise AIValidationError('Flow service is unavailable')
+        try:
+            data=canonical(payload).encode('utf8')
+            if len(data)>8192:raise AIValidationError('Flow request is invalid')
+            async def exchange():
+                async with httpx.AsyncClient(timeout=125,transport=self._transport,follow_redirects=False,trust_env=False) as client:
+                    async with client.stream('POST',self._base_url+'/internal/flow/analyze',content=data,
+                        headers=[(b'Content-Type',b'application/json'),(b'X-Flow-Service-Token',token)]) as response:
+                        raw=bytearray()
+                        async for part in response.aiter_bytes():
+                            if len(raw)+len(part)>2097152:raise AIContractError('Flow result is invalid')
+                            raw.extend(part)
+                        if response.status_code==200:
+                            try:
+                                value=decode(bytes(raw).decode('utf8'))
+                                if not isinstance(value,dict):raise ValueError()
+                                return value
+                            except Exception:raise AIContractError('Flow result is invalid') from None
+                        if response.status_code in {400,401,403,409,422}:raise AIValidationError('Flow engine declined the request')
+                        if response.status_code==504:raise AITimeoutError('Flow engine timeout')
+                        raise AIUnavailableError('Flow engine unavailable')
+            async with asyncio.timeout(125):
+                return await exchange()
+        except (httpx.TimeoutException,TimeoutError):raise AITimeoutError('Flow engine timeout') from None
+        except httpx.HTTPError:raise AIUnavailableError('Flow engine unavailable') from None
 
     async def analyze_technical(self, payload: dict) -> dict:
         """`/internal/technical/analyze` 호출 → 응답 JSON(dict) 반환.

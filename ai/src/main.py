@@ -7,9 +7,12 @@ from src.agents.industry.api.routes import router as industry_router
 from src.supervisor.api.routes import router as supervisor_router
 from src.agents.technical.api.routes import router as technical_router
 
+from src.agents.flow.api.http import router as flow_router
+
 app = FastAPI(title="verith-ai")
 
 # 내부 AI endpoint 라우터와 §9 error envelope 핸들러 등록.
+app.include_router(flow_router)
 app.include_router(technical_router)
 app.include_router(supervisor_router)
 app.include_router(fundamental_router)

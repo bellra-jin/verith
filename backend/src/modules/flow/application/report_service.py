@@ -52,6 +52,10 @@ class FlowStoredPayloadError(ValueError):
     """Stored/internal result is invalid and must not be returned as a normal result."""
 
 
+class FlowReportIdConflict(FlowStoredPayloadError):
+    """An existing root/index has conclusively claimed the requested report ID."""
+
+
 class FlowReportService:
     def __init__(
         self, session: AsyncSession, *, principal: Principal | None = None
@@ -74,6 +78,12 @@ class FlowReportService:
             raise
 
     async def _save_report(self, req: FlowReportSaveRequest) -> FlowReportEnvelope:
+        result = await self.stage_report(req)
+        await self._session.commit()
+        return result
+
+    async def stage_report(self, req: FlowReportSaveRequest) -> FlowReportEnvelope:
+        """Internal validated writer. Caller owns the transaction and rollback."""
         # Revalidate even if a model was constructed unsafely or its nested dict mutated.
         # Nothing, including ensure_stock, can write before this boundary succeeds.
         try:
@@ -181,9 +191,9 @@ class FlowReportService:
             select(FlowReport).where(FlowReport.id == report_id).with_for_update()
         )
         if existing is not None:
-            raise FlowStoredPayloadError("결과 ID가 이미 존재합니다.")
+            raise FlowReportIdConflict("결과 ID가 이미 존재합니다.")
         if await flow_repo.get_agent_indexes(self._session, report_id):
-            raise FlowStoredPayloadError("결과 ID를 사용할 수 없습니다.")
+            raise FlowReportIdConflict("결과 ID를 사용할 수 없습니다.")
 
         await flow_repo.ensure_stock(
             self._session, stock_code=ticker, stock_name=stock_name, market=market
@@ -195,7 +205,7 @@ class FlowReportService:
             verification=verification_row,
         )
         await agent_repo.add(self._session, agent_report)
-        await self._session.commit()
+        await self._session.flush()
 
         return FlowReportEnvelope(report_id=report_id, report=payload)
 
@@ -335,11 +345,43 @@ class FlowReportService:
 
     async def _delete_report(self, report_id: UUID) -> bool:
         principal = await self._authorize(lock=True)
+        # Discover root + live-analysis association in ONE SQL snapshot. Never
+        # adopt a root which appeared after an earlier "no connection" observation.
+        from db.models.flow.analysis_run import FlowAnalysisRun
+        from sqlalchemy import literal_column
+        discovered = (await self._session.execute(
+            select(FlowReport.id, literal_column('flow_reports.xmin::text'), FlowAnalysisRun.id)
+            .outerjoin(FlowAnalysisRun, (FlowAnalysisRun.adopted_report_id == FlowReport.id) & (FlowAnalysisRun.state == 'stored'))
+            .where(FlowReport.id == report_id, FlowReport.id.in_(flow_repo.eligible_flow_ids(principal.user_id)))
+        )).one_or_none()
+        if discovered is None:
+            return False
+        analysis = None
+        if discovered[2] is not None:
+            analysis = await self._session.scalar(select(FlowAnalysisRun).where(
+                FlowAnalysisRun.id == discovered[2], FlowAnalysisRun.owner_user_id == principal.user_id
+            ).with_for_update().execution_options(populate_existing=True))
+            if analysis is None or analysis.state != 'stored' or analysis.adopted_report_id != report_id:
+                raise FlowStoredPayloadError('저장 연결을 확인할 수 없습니다.')
+        # Lock order: session -> analysis (when present) -> original report root.
+        version = await self._session.scalar(select(literal_column('flow_reports.xmin::text'))
+            .select_from(FlowReport).where(FlowReport.id == report_id)
+            .with_for_update(of=FlowReport))
+        if version != discovered[1]:
+            return False
         root = await flow_repo.get_owned_report(
             self._session, report_id, owner_user_id=principal.user_id, lock=True
         )
         if root is None:
             return False
+        current_analysis = await self._session.scalar(select(FlowAnalysisRun.id).where(
+            FlowAnalysisRun.adopted_report_id == report_id, FlowAnalysisRun.state == 'stored'))
+        if current_analysis != discovered[2]:
+            raise FlowStoredPayloadError('저장 연결이 변경됐습니다.')
+        if analysis is not None:
+            analysis.state = 'deleted'
+            analysis.request_json = analysis.stock_name = analysis.input_json = analysis.result_json = None
+            await self._session.flush()
         await flow_repo.delete_agent_index(self._session, report_id)
         deleted = await flow_repo.delete_root(self._session, report_id)
         await self._session.commit()

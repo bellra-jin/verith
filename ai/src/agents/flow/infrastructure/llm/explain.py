@@ -88,18 +88,21 @@ def _facts_to_text(signals: dict, meta: dict) -> str:
     return "\n".join(lines)
 
 
-def explain(signals: dict, gate2: GateResult, meta: dict) -> str:
+def explain(signals: dict, gate2: GateResult, meta: dict, *, execution_context=None) -> str:
     """검증된 팩트로 해석 문장을 생성한다. 팩트만 입력, 원문·원본 데이터 차단."""
     # 검증 안 된 팩트는 해석 대상이 아니다(게이트2 통과가 전제).
     if not gate2.passed:
         raise ValueError("게이트2 미통과 팩트로는 해석하지 않는다.")
 
+    if execution_context is not None: execution_context.check('explain')
     load_dotenv(dotenv_path=_ENV_FILE, override=False)       # OPENAI_API_KEY 확보(값 미출력)
 
     # 프롬프트 = 고정 지시문 + 결정론적 팩트 텍스트. 사용자 원문이 낄 자리가 없다.
     template = _PROMPT_PATH.read_text(encoding="utf-8")
     prompt = template.replace("{{facts}}", _facts_to_text(signals, meta))
 
-    llm = ChatOpenAI(model=_MODEL, temperature=_TEMPERATURE)
+    kwargs = {} if execution_context is None else {'timeout':execution_context.timeout('openai'), 'max_retries':0, 'max_completion_tokens':1000}
+    llm = ChatOpenAI(model=_MODEL, temperature=_TEMPERATURE, **kwargs)
     response = llm.invoke(prompt)
+    if execution_context is not None: execution_context.check('openai_result')
     return response.content.strip()

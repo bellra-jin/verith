@@ -59,7 +59,7 @@ def validate_node(state: SupplyDemandState) -> dict:
     return {"gate1": gate1, "base_date": base_date, "input": updated}
 
 
-def collect_node(state: SupplyDemandState) -> dict:
+def collect_node(state: SupplyDemandState, execution_context=None) -> dict:
     """수집 + 계산 + 게이트2. df·quotes·ownership 은 이 함수 지역변수로만 존재.
 
     KIS/네트워크 예외는 삼키지 않고 그대로 전파한다(규약: 연쇄 시도 없이 멈춤).
@@ -72,14 +72,17 @@ def collect_node(state: SupplyDemandState) -> dict:
         # 조용한 기본값 대체 금지(조각2) — 엉뚱한 종목 데이터에 다른 제목이
         # 붙는 사고를 구조로 차단. 종목명→티커 해석은 게이트1(조각3) 소관.
         raise ValueError("ticker 가 없습니다 — 호출부가 6자리 종목코드를 지정해야 합니다.")
-    df, market = fetch_supply_demand(state.base_date, ticker)  # 원재료 — 지역 한정
+    if execution_context is not None: execution_context.check('collect')
+    kwargs = {} if execution_context is None else {'execution_context':execution_context}
+    df, market = fetch_supply_demand(state.base_date, ticker, **kwargs)  # 원재료 — 지역 한정
     # 확정 base_date 는 응답에서 나온다: 후보일이 휴장일이어도 KIS 가 마지막
     # 거래일로 클램프해 주므로(실측), 마지막 행 날짜가 실제 확정 거래일이다.
     confirmed = df.index[-1].date()
-    quotes = fetch_daily_quotes(confirmed, ticker)   # 절단 기준도 확정일
+    quotes = fetch_daily_quotes(confirmed, ticker, **kwargs)   # 절단 기준도 확정일
     ownership = (
         quotes[COL_OWNERSHIP] if (config.ENABLE_ADVANCED and quotes is not None) else None
     )
+    if execution_context is not None: execution_context.capture(df,quotes,ownership,confirmed)
     signals = compute_signals(df, ownership, quotes)
     gate2 = verify_signals(df, signals, ownership, quotes)
     # market 은 표시 전용 원본 문자열(숫자 아님) — 게이트2 대상이 아니다.
@@ -87,12 +90,13 @@ def collect_node(state: SupplyDemandState) -> dict:
             "base_date": confirmed}
 
 
-def explain_node(state: SupplyDemandState) -> dict:
+def explain_node(state: SupplyDemandState, execution_context=None) -> dict:
     """해석 생성. 재진입(이미 해석이 있던 경우)이면 재시도이므로 카운터 +1."""
     retries = state.explain_retries
     if state.interpretation is not None:                 # 앞선 시도가 있었다 → 재시도
         retries += 1
-    interpretation = explain(state.signals, state.gate2, _meta(state))
+    kwargs = {} if execution_context is None else {'execution_context':execution_context}
+    interpretation = explain(state.signals, state.gate2, _meta(state), **kwargs)
     return {"interpretation": interpretation, "explain_retries": retries}
 
 
@@ -131,12 +135,12 @@ def route_after_gate3(state: SupplyDemandState) -> str:
 
 
 # ── 그래프 조립 ────────────────────────────────────────────
-def build_graph():
+def build_graph(execution_context=None):
     """노드·엣지를 엮어 컴파일된 그래프를 반환한다."""
     g = StateGraph(SupplyDemandState)
     g.add_node("validate", validate_node)
-    g.add_node("collect", collect_node)
-    g.add_node("explain", explain_node)
+    g.add_node("collect", collect_node if execution_context is None else lambda state: collect_node(state,execution_context))
+    g.add_node("explain", explain_node if execution_context is None else lambda state: explain_node(state,execution_context))
     g.add_node("verify_explanation", gate3_node)
     g.add_node("render", render_node)
 

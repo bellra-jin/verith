@@ -32,6 +32,58 @@ class AccessBoundary:
                 await send({"type": "websocket.close", "code": 1008})
             return
         method, path = scope["method"], scope["path"]
+        if path == '/api/flow/analyses' or path.startswith('/api/flow/analyses/'):
+            from uuid import UUID
+            from src.shared.config import settings
+            from src.modules.auth.api.router import configured
+            from src.modules.flow.api.run_schemas import error_response,http_request_id
+            from src.modules.flow.api.analysis_schemas import AnalysisRequest
+            from src.modules.flow.domain.analysis import decode
+            from src.modules.flow.domain.execution import ErrorCode
+            from src.modules.flow.api.synthetic_demo_schemas import json_media
+            from datetime import UTC,datetime
+            http_request_id(scope)
+            if not settings.FLOW_ANALYSIS_ENABLED:
+                await error_response(scope,ErrorCode.FEATURE_UNAVAILABLE)(scope,receive,send);return
+            if not configured():
+                await error_response(scope,ErrorCode.AUTH_REQUIRED)(scope,receive,send);return
+            try:
+                if scope.get('query_string'):raise ValueError()
+                if method=='POST' and path=='/api/flow/analyses':pass
+                elif method=='GET' and path.startswith('/api/flow/analyses/'):
+                    segment=path[len('/api/flow/analyses/'):]
+                    if str(UUID(segment))!=segment.lower():raise ValueError()
+                else:raise ValueError()
+                raw=None
+                if method=='POST':
+                    headers={k.lower():v for k,v in scope.get('headers',[])}
+                    if headers.get(b'content-encoding') is not None:raise ValueError()
+                    if not json_media({'content-type':headers.get(b'content-type',b'').decode('latin1')}):raise ValueError()
+                    length=headers.get(b'content-length')
+                    if length is not None and (not length.isdigit() or int(length)>4096):raise ValueError()
+                    raw=bytearray()
+                    while True:
+                        message=await receive()
+                        if message['type']!='http.request':raise ValueError()
+                        raw.extend(message.get('body',b''))
+                        if len(raw)>4096:raise ValueError()
+                        if not message.get('more_body',False):break
+                    parsed=AnalysisRequest.model_validate(decode(bytes(raw).decode('utf8')))
+                    if parsed.as_of>datetime.now(UTC):raise ValueError()
+            except (ValueError,TypeError,UnicodeError,RecursionError):
+                await error_response(scope,ErrorCode.INPUT_INVALID)(scope,receive,send);return
+            delivered=False
+            async def analysis_receive():
+                nonlocal delivered
+                if raw is not None and not delivered:
+                    delivered=True;return {'type':'http.request','body':bytes(raw),'more_body':False}
+                return await receive()
+            async def analysis_send(message):
+                if message['type']=='http.response.start':
+                    headers=[(k,v) for k,v in message.get('headers',[]) if k.lower() not in {b'cache-control',b'vary'}]
+                    message={**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
+                await send(message)
+            await self.app(scope,analysis_receive,analysis_send);return
         from src.modules.flow.api.run_schemas import (
             PRIVATE, error_response, http_request_id, is_run_endpoint,
         )

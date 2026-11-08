@@ -47,7 +47,8 @@ def cf003_failure_diagnostic(error, stage):
     }
     functions = {"create", "verify_metadata", "call", "inspect", "verify", "sql",
                  "preflight", "attest_connection", "main", "migrate_owned",
-                 "owned_session", "verify_admission", "check", "cleanup"}
+                 "owned_session", "verify_admission", "check", "cleanup",
+                 "_create", "_verify_post_start", "_cleanup"}
     frames = []
     trace = error.__traceback__
     while trace is not None:
@@ -483,6 +484,7 @@ def main():
     mode.add_argument("--verify-flow-input-snapshot-db", action="store_true")
     mode.add_argument("--verify-flow-fake-execution-db", action="store_true")
     mode.add_argument("--verify-flow-synthetic-demo-db", action="store_true")
+    mode.add_argument("--verify-flow-analysis-db", action="store_true")
     mode.add_argument("--verify-fake-environment", action="store_true")
     mode.add_argument("--google-input", choices=["approved-file"])
     parser.add_argument("--lifetime-seconds", type=int, default=3600)
@@ -512,7 +514,7 @@ def main():
     for signum in (signal.SIGINT, signal.SIGTERM):
         old_handlers[signum] = signal.signal(signum, stop)
     try:
-        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db):
+        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db or args.verify_flow_analysis_db):
             ensure_local_ports_free()
         docker = LocalDocker()
         if args.verify_flow_admission_db:
@@ -527,7 +529,7 @@ def main():
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
-        elif args.verify_flow_synthetic_demo_db:
+        elif args.verify_flow_synthetic_demo_db or args.verify_flow_analysis_db:
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
@@ -535,7 +537,12 @@ def main():
         cf006_failure_owner = owner
         cf003_stage = "owned_creation"
         proof = owner.create()
-        safe_print({"phase": "owned_resource_created", **proof.safe_receipt()})
+        receipt_output = proof.safe_receipt()
+        if args.verify_flow_analysis_db:
+            # The original nonce belongs only to private cleanup evidence.
+            receipt_output = {key: receipt_output[key] for key in (
+                "resource_id", "container_id", "created_at", "host", "port", "persistent_mounts", "cleanup_owner")}
+        safe_print({"phase": "owned_resource_created", **receipt_output})
         cf003_stage = "migration"
         asyncio.run(asyncio.wait_for(migrate_owned(proof, target="c6001a7e0001" if (args.verify_flow_admission_db or args.verify_flow_input_snapshot_db) else "head"), timeout=90))
         safe_print(
@@ -610,6 +617,12 @@ def main():
             cf003_stage = "admission_check"
             result = asyncio.run(asyncio.wait_for(verify_synthetic_demo(proof), timeout=180))
             safe_print({"phase": "flow_synthetic_demo_db_check", **result})
+            return
+        if args.verify_flow_analysis_db:
+            from scripts.cf012_analysis_check import verify_analysis
+            cf003_stage = "admission_check"
+            result = asyncio.run(asyncio.wait_for(verify_analysis(proof), timeout=240))
+            safe_print({"phase":"flow_analysis_db_check", **result})
             return
         project = prepare_projects(_BACKEND.parent)
         # Secret-free recovery receipt; no DSN/password/Google inputs/tokens/subs.
@@ -740,7 +753,15 @@ def main():
         interrupted = True
         safe_print({"phase": "interrupted", "status": "cleaning_owned_resources"})
     except Exception as error:
-        if args.verify_flow_synthetic_demo_db:
+        if args.verify_flow_analysis_db:
+            detail = cf003_failure_diagnostic(error, cf003_stage)
+            detail["phase"] = "cf012_failure_diagnostic"
+            if owner is not None:
+                detail["metadata_failures"] = list(owner.metadata_failures)
+            if owner is not None and owner.cleanup_receipt_path is not None:
+                detail["cleanup_receipt_file"] = str(owner.cleanup_receipt_path)
+            safe_print(detail)
+        elif args.verify_flow_synthetic_demo_db:
             detail = cf003_failure_diagnostic(error, cf003_stage)
             detail["phase"] = "cf008_failure_diagnostic"
             safe_print(detail)
@@ -799,7 +820,14 @@ def main():
                 )
             except BaseException as error:
                 cleanup_failed = True
-                if args.verify_flow_synthetic_demo_db:
+                if args.verify_flow_analysis_db:
+                    detail = cf003_failure_diagnostic(error, "cleanup")
+                    detail["phase"] = "cf012_failure_diagnostic"
+                    detail["metadata_failures"] = list(owner.metadata_failures)
+                    if owner.cleanup_receipt_path is not None:
+                        detail["cleanup_receipt_file"] = str(owner.cleanup_receipt_path)
+                    safe_print(detail)
+                elif args.verify_flow_synthetic_demo_db:
                     detail = cf003_failure_diagnostic(error, "cleanup")
                     detail["phase"] = "cf008_failure_diagnostic"
                     safe_print(detail)

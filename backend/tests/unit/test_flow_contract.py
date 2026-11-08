@@ -93,6 +93,34 @@ def project_cf008_exact_additions(api):
     del api['paths'][DEMO_PATH];del api['paths'][DEMO_PATH+'/{run_id}']
 
 
+def project_cf012_exact_additions(api):
+    """Validate approved paths/fields before projecting only their exact pointers."""
+    from src.modules.flow.api.analysis_schemas import PATH,AnalysisRequest,AnalysisView,AnalysisResponse
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.openapi.models import Schema
+    components=api['components']['schemas']
+    assert set(components['AnalysisRequest']['properties'])==set(components['AnalysisRequest']['required'])=={'ticker','question','as_of','idempotency_key','allow_analysis'}
+    assert components['AnalysisRequest']['additionalProperties'] is False
+    assert components['AnalysisRequest']['properties']['allow_analysis']['const'] is True
+    fields={'analysis_id','admission_request_id','attempt_id','state','deadline_at','report_id','report_url','error'}
+    assert set(components['AnalysisView']['properties'])==fields
+    assert components['AnalysisView']['properties']['state']['enum']==['running','result_ready','stored','failed','unknown']
+    for path,method in ((PATH,'post'),(PATH+'/{analysis_id}','get')):
+        assert set(api['paths'][path])=={method}
+        for status in ('200','202'):
+            assert api['paths'][path][method]['responses'][status]['content']['application/json']['schema']=={'$ref':'#/components/schemas/CommonResponse_AnalysisView_'}
+    assert api['paths'][PATH]['post']['requestBody']['content']['application/json']['schema']=={'$ref':'#/components/schemas/AnalysisRequest'}
+    assert api['paths'][PATH+'/{analysis_id}']['get']['parameters']==[{'name':'analysis_id','in':'path','required':True,'schema':{'type':'string','format':'uuid','title':'Analysis Id'}}]
+    expected={}
+    for model,name in ((AnalysisRequest,'AnalysisRequest'),(AnalysisView,'AnalysisView'),(AnalysisResponse,'CommonResponse_AnalysisView_')):
+        value=model.model_json_schema(ref_template='#/components/schemas/{model}',mode='validation' if model is AnalysisRequest else 'serialization')
+        expected.update(value.pop('$defs',{}));expected[name]=value
+    for name in ('AnalysisRequest','AnalysisView','CommonResponse_AnalysisView_'):
+        assert components[name]==jsonable_encoder(Schema.model_validate(expected[name]),by_alias=True,exclude_none=True)
+        del components[name]
+    del api['paths'][PATH];del api['paths'][PATH+'/{analysis_id}']
+
+
 def assert_public_contract_compatibility(values):
     """Validate exact additions first, then remove only reviewed JSON pointers from a copy."""
     import hashlib
@@ -102,6 +130,11 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf012_exact_additions(api)
+    from src.modules.flow.api.analysis_schemas import AnalysisResponse
+    if "CommonResponse[AnalysisView]" in projected["schemas"]:
+        assert projected["schemas"]["CommonResponse[AnalysisView]"]==AnalysisResponse.model_json_schema()
+        del projected["schemas"]["CommonResponse[AnalysisView]"]
     project_cf008_exact_additions(api)
     from src.modules.flow.api.synthetic_demo_schemas import DemoResponse
     if 'CommonResponse[DemoRunView]' in projected['schemas']:
@@ -325,7 +358,7 @@ def memory(monkeypatch):
         service_module.agent_repo.list_reports,
     )
     session = SimpleNamespace(
-        commit=AsyncMock(), scalar=AsyncMock(return_value=None), rollback=AsyncMock()
+        commit=AsyncMock(), flush=AsyncMock(), scalar=AsyncMock(return_value=None), rollback=AsyncMock()
     )
     return SimpleNamespace(
         service=FlowReportService(session, principal=principal),
@@ -1350,3 +1383,12 @@ def test_current_copied_python_consumers_have_no_removed_module_imports():
                 base = ".".join(package[:len(package)-node.level+1] + (node.module.split(".") if node.module else [])) if node.level else node.module
                 assert base not in removed, source
                 assert all((base + "." + alias.name) not in removed for alias in node.names), source
+
+@pytest.mark.parametrize('mutation',['path','schema','existing','enum'])
+def test_cf012_projection_rejects_unapproved_delta(monkeypatch,mutation):
+    values=public_contract_capture(monkeypatch)
+    if mutation=='path':values['openapi']['paths']['/api/flow/unapproved']={}
+    elif mutation=='schema':values['openapi']['components']['schemas']['Unapproved']={'type':'object'}
+    elif mutation=='existing':values['openapi']['components']['schemas']['FlowAdmissionRequest']['properties']['question']['maxLength']=2001
+    else:values['openapi']['components']['schemas']['ErrorCode']['enum'].append('UNAPPROVED')
+    with pytest.raises(AssertionError):assert_public_contract_compatibility(values)

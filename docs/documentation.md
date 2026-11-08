@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-006 현재 입력 준비 기준
+
+PR #9 병합 `5c980528c01991cd3e71fb8d4eab448c56c90f0c` 위에서 합성 입력 snapshot 봉인·실제 principal/owner 재조회만 추가한다. [내부 계약](../backend/docs/flow_input_snapshot.md)·[구현/검증/실패 이력](work/CF-006-flow-input-snapshot.md)을 따른다. 공개 API·receipt_only 상태·AI 실행·원 payload는 불변이며, 아래 이전 단계 수치는 각 당시 이력이다.
+
 ## CF-005 현재 표시·입력 기준
 
 PR #8 병합 `a6f27aa53c376bbfc5c3e8679aa50c9c02869518` 위의 Flow 관측기간 안내 보완이다.

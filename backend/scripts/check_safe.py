@@ -35,6 +35,7 @@ UNIT += AUDITED_STOCK_TESTS + AUDITED_TECHNICAL_TESTS + AUDITED_CLIENT_TESTS + A
 UNIT += ("tests/unit/test_cf003_flow_runs.py",)
 UNIT += ("tests/unit/test_cf004_kis_token_cache.py",)
 UNIT += ("tests/unit/test_cf005_flow_observation.py",)
+UNIT += ("tests/unit/test_cf006_flow_input_snapshot.py",)
 NEW = {"backend/scripts/check_safe.py", "backend/scripts/safe_checks_bootstrap.py",
        "backend/tests/safe_checks/test_entry.py",
        "backend/src/modules/flow/domain/payload.py",
@@ -112,6 +113,8 @@ CF003_SOURCES = frozenset({
     "backend/scripts/cf003_admission_check.py",
 })
 NEW.update(CF003_SOURCES)
+CF006_SOURCES = frozenset({'backend/src/modules/flow/infrastructure/input_snapshot_repository.py', 'backend/src/modules/flow/application/input_preparation_service.py', 'backend/scripts/cf006_input_snapshot_check.py', 'backend/src/modules/flow/domain/input_snapshot.py', 'backend/tests/unit/test_cf006_flow_input_snapshot.py', 'backend/db/models/flow/input_snapshot.py', 'backend/db/migrations/versions/20261108_c6001a7e0001_flow_input_snapshots.py'})
+NEW.update(CF006_SOURCES)
 CF005_INPUTS = {"ai/src/agents/flow/domain/observation_window.py": "acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27"}
 CF005_SOURCE_ONLY = frozenset({
     "ai/src/agents/flow/domain/verification/signals.py",

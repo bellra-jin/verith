@@ -1,4 +1,4 @@
-# 재무 adapter 연결 예제와 인수 조건
+# CF-013 당시 재무 합성 adapter 예제와 인수 조건
 
 [예제 코드](../../backend/examples/analysis/fundamental_adapter.py)와 [합성 응답](../../backend/examples/analysis/fundamental-response.v1.json)은 production registry/router에 등록되지 않는다. 실제 재무 agent·service·DB·공급자는 호출하지 않는다. 기존 mirror로 shape를 검증하지만 mirror의 extra-ignore/coercion 출력을 원본으로 저장하지 않고, 검증에 사용한 JSON 전체를 canonical 본문/hash로 고정한다.
 
@@ -15,7 +15,9 @@
 
 예제는 `FundamentalExampleAdapter(context, ticker, question, writer=...)`로 만든다. writer가 없으면 stage는 fail-closed다. 명시 writer가 있어도 기존 Principal·실제 세션 검증과 context owner 일치를 유지한다. writer는 `(동일 session, principal, frozen)`을 받고 동일 원 report/owner의 StagedReportReference를 반환하며 adapter는 flush한다. unit은 합성 Principal/메모리 session과 mock된 auth 검증을 쓰므로 실제 재무 로그인/게시 통과가 아니다.
 
-실제 writer 인수 전에는 다음을 별도 구현·검증해야 한다.
+아래 목록은 CF-013 당시 production writer 연결 전의 인수 조건이다. CF-015에서 생산용 엔진 HTTP 경계·owner-aware stage-only writer·원자 저장·본인 조회/삭제가 연결됐으며 합성 주입/자기 PG 검증을 마쳤다. 현재 연결 지도와 남은 도메인/운영 책임은 [production 인수 안내](fundamental-owned-analysis.md)를 따른다. 아래를 writer 신규 구현 요청이나 실제 공급자 품질 수용 완료로 읽지 않는다.
+
+CF-013 당시 인수 조건:
 
 - context owner를 root와 정확히 한 index에 동일하게 적용하고 legacy owner NULL을 채택하지 않는다.
 - 동일 caller transaction에서 원 report/자식/index를 stage/flush만 한다. 기존 재무 service의 owner=None·자체 commit을 그대로 호출하지 않는다.

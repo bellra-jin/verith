@@ -168,3 +168,7 @@ v1.7 진단 한정 실행은 self-test 20개·unit 35개 통과, build는 거부
 ## CF-015 · Fundamental owned analyses
 
 [Contract](contracts/fundamental-analysis-v1.md), [adapter handoff](examples/fundamental-owned-analysis.md), [execution record](work/CF-015-fundamental-owned-analysis.md). This adds current-time request context and owned storage, not verified financial source snapshots or historical analysis.
+
+## CF-016 · Flow 상태 재조회와 인수 안내
+
+[Flow 실제 연동 준비 항목](flow-live-readiness.md)·[현재 재무 production 인수 안내](examples/fundamental-owned-analysis.md)·[변경/검증 기록](work/CF-016-flow-observation-handoff.md). Flow는 최초 기한/단조 시간으로 bounded 자동 관측하고, 명시 GET-only 상태 복구와 same-key POST snapshot 게시 복구를 구분한다. 재무 as_of는 엔진 기록 시각이며 자료 기준일은 미확인이다. 실제 설정/키/서비스/공급자·브라우저 수용을 뜻하지 않는다.

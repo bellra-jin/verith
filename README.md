@@ -1,6 +1,10 @@
 # veriθ — 멀티 에이전트 주식 분석 서비스
 
-## 현재 개발 안내 · CF-002 이후
+> **최종 구조 우선 계약:** ST-001 v1.15(명시 Flow 설정·최종 marker 정리)에 따라 불필요한 old shim을 제거하며 canonical 구현 하나로 정리한다. Flow 마지막3도 AI 루트 .env 명시 정책으로 이동했다. 실제 설정 값/AI 실행은 미검증이다. [진행 기록](docs/work/ST-001-layout-progress.md)을 따른다.
+
+> **현재 작업 — ST-001 v1.10:** Backend 구현 59개를 실제 재배치했고 AI/Frontend 잔여 이동은 진행 중입니다. [전체 진행 기록](docs/work/ST-001-layout-progress.md)이 현재 상태입니다. 아래 v1.7/3-B의 수치·보류·실패는 당시 이력이며 비교 대기는 해소됐습니다. FE-01은 self 21/unit 36·standalone core/image tsc·대상 lint가 통과했지만 generated-route/typegen·build/HTTP 전체 검증은 미완료입니다.
+
+## 3-B 당시 개발 안내 · CF-002 이후 (이력)
 
 기준: develop의 CF-002 병합 `a5b60f2` (2026-11-07). 현재 사용자 경로는 **Google 앱 세션으로
 보호된 본인 Flow 보관함·상세·개별 삭제**다. 새 분석/공개 payload 저장·전체 삭제·다른 관점의
@@ -9,7 +13,8 @@
 - 먼저 [문서 목록과 권위](docs/documentation.md)를 읽고 [현재 책임/DB 경계](docs/architecture/current-boundaries.md)를 확인한다.
 - 작업 안내는 [root AGENTS](AGENTS.md) → 해당 서비스 AGENTS로 읽는다. ST-001 2단계 PR #4 병합 후
   [3-A 공용 환경 참고](docs/development.md)와 [구현·정적 검증 기록](docs/work/ST-001-stage-3-A.md)을 추가했다.
-  예제는 실제 설정/실행 승인이 아니며 3-B/3-C 안전 entry는 아직 미구현 후속이다.
+  예제는 실제 설정/실행 승인이 아니다. [3-B 검사 입구](docs/work/ST-001-stage-3-B.md)는 구현 중이며
+  Backend self-test 9개·선택 unit 244개와 최신 Frontend self-test 20개·unit 35개는 통과했다. Frontend build는 추가 파일 소비의 guard 거부로 실패했고 HTTP/type/lint는 미실행이므로 수용 미완료다. 3-C AI 안전 entry는 미구현 후속이다.
 - 공유 가능한 [CF-001 저장 계약](docs/contracts/CF-001-v1.1.shared-v1.md) 위에
   [CF-002 인증/owner 계약](docs/contracts/CF-002-v0.6.shared-v1.md)을 적용한다.
   둘은 외부 지시서의 파생 스냅샷이며 원본/실행 승인이 아니다. [출처·hash manifest](docs/contracts/manifest.json)를 함께 관리한다.
@@ -20,8 +25,11 @@
   전체 ESLint 기존 오류 2건을 구분한다. 실제 인증의 자연 만료·옛 cookie 재전송 등은 미검증이다.
   CF-002 병합은 전체 Flow MVP·서비스 공개 완료가 아니다.
 - 기존 검사 경계/사본 도우미는 서비스 README에서 찾는다. [공용 환경 예제](docs/development.md)는 참고 자료이며
-  새 수집 전 안전 검사 entry는 후속 단계다. 앱 import/전체 pytest·migration/seed·Google/AI 호출을 문서 확인 중 실행하지 않는다.
+  3-B의 clean launch·OS 보호·미실행 항목은 [실행표](docs/development.md#3-b-검사-입구와-현재-차단)를 따른다.
+  앱 import/전체 pytest·migration/seed·Google/AI 호출을 문서 확인 중 실행하지 않는다.
   실제 .env·ignored Compose·기존 DB/volume는 보존하며 개인 설정이 clone에 있다고 가정하지 않는다.
+
+v1.7의 진단 한정 self-test 20개·unit 35개는 통과했다. 진단 build는 거부 22회를 대상 ID 10개로 식별하고 exit 78을 유지했다. 새 접근/동작 정책과 후속 검사는 미완료이며 과거 실패/거절 이력은 보고서에 보존했다.
 
 ## 과거 포트폴리오·구현/시연 기록
 

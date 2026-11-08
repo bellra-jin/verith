@@ -10,18 +10,18 @@ from __future__ import annotations
 from typing import Callable
 
 from src.agents.technical.config import TECHNICAL_TRACE_ENABLED, TECHNICAL_TRACE_PATH
-from src.agents.technical.nodes._llm_utils import LlmClient
-from src.agents.technical.observability.trace_logger import JsonlTraceSink, TraceSink
-from src.agents.technical.runtime.deadline import Deadline
-from src.agents.technical.services.cache_service import OhlcvCache, default_cache
-from src.agents.technical.services.openai_llm_client import default_openai_client
-from src.agents.technical.supervisor.technical_supervisor import OhlcvFetcher
-from src.api.errors import ai_unavailable
-from src.supervisor.execution.adapters import AgentAdapter, default_adapters
-from src.supervisor.planning.fallback_lookup import FallbackLookupProtocol
-from src.supervisor.planning.fallback_observer import FallbackObserver, LoggingFallbackObserver
-from src.supervisor.planning.fallback_source import default_fallback_lookup
-from src.supervisor.planning.resolve_client import ResolverProtocol, StockResolverClient
+from src.agents.technical.infrastructure.llm.utils import LlmClient
+from src.agents.technical.infrastructure.observability.trace_logger import JsonlTraceSink, TraceSink
+from src.shared.runtime.deadline import Deadline
+from src.agents.technical.infrastructure.cache_service import OhlcvCache, default_cache
+from src.agents.technical.infrastructure.openai_llm_client import default_openai_client
+from src.agents.technical.application.orchestration.technical_supervisor import OhlcvFetcher
+from src.shared.api.errors import ai_unavailable
+from src.supervisor.application.execution.adapters import AgentAdapter, default_adapters
+from src.supervisor.domain.planning.fallback_lookup import FallbackLookupProtocol
+from src.supervisor.infrastructure.observability.fallback_observer import FallbackObserver, LoggingFallbackObserver
+from src.supervisor.application.planning.fallback_source import default_fallback_lookup
+from src.supervisor.infrastructure.backend.resolve_client import ResolverProtocol, StockResolverClient
 
 # endpoint가 deadline을 만든 뒤 client를 생성해야 하므로(요청 timeout을 client에 주입) client를 바로
 # 반환하지 않고 **팩토리**를 반환한다. 테스트는 이 팩토리를 override해 fake LLM을 주입한다.

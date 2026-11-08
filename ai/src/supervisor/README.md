@@ -7,30 +7,31 @@
 검증/점수는 하지 않는다. backend DB 를 직접 만지지 않고, 종목 식별은 backend HTTP 경계로만 한다.
 
 ## 폴더 구조
-```
+```text
 supervisor/
-├── schemas.py            # 공통 typed 계약(planning 산출 + enums)
-├── config.py             # 공통 설정(resolver 접속)
-├── runtime.py            # planning+execution 조립 + JSON 직렬화
-├── planning/             # 질문 해석 · 조건부 resolve · 5 task 생성
-│   ├── planner.py        #   run_supervisor (planning 진입)
-│   ├── interpret.py · policy.py · rewrite.py · resolve_client.py
-├── execution/            # 5 agent fan-out 실행
-│   ├── executor.py       #   run_tasks (execution 진입)
-│   ├── adapters.py       #   agent 별 thin adapter + ExecutionDeps
-│   └── schemas.py        #   AgentResult / ExecutionResult (result envelope)
-├── scripts/smoke_supervisor.py   # 수동 real smoke(opt-in)
-└── tests/
+├── config.py                       # 유지: resolver/실행 설정 anchor
+├── api/routes.py                   # 외부 HTTP 입구
+├── application/
+│   ├── runtime.py                  # planning+execution 조립/직렬화
+│   ├── planning/                   # planner, fallback source, LLM rewrite
+│   └── execution/                  # executor/adapters
+├── domain/
+│   ├── models.py · execution.py    # typed 계약/envelope
+│   └── planning/                   # 해석/정책/순수 rewrite/fallback 규칙
+├── infrastructure/                 # Backend resolve, DART, 관측 adapter
+└── planning/data/                  # 유지: 기존 snapshot resource anchor
 ```
-endpoint(외부 HTTP 입구)는 `../api/supervisor.py`.
+
+수동 도구는 `ai/scripts/supervisor`, `ai/devtools/supervisor`, 테스트는 `ai/tests/supervisor`에 있다.
+endpoint(외부 HTTP 입구)는 `api/routes.py`.
 
 ## 계층 (책임 분리 — 흐리지 말 것)
 | 계층 | 모듈 | 책임 |
 |---|---|---|
-| planning | `planning/planner.py` (+`planning/interpret`·`policy`·`rewrite`·`resolve_client`, `schemas.py`) | 질문 해석 · 조건부 resolve · 5 task envelope 생성 |
-| execution | `execution/executor.py` (+`execution/adapters`·`schemas`) | 5 agent fan-out 실행 · skipped/failed/success 정리 |
-| runtime | `runtime.py` | planning+execution 조립(`run_analysis`) · JSON 직렬화(`to_response_dict`) |
-| endpoint | `../api/supervisor.py` | 외부 HTTP 입구 + dependency wiring (얇게) |
+| planning | `application/planning/planner.py` (+`domain/planning`·`infrastructure/backend/resolve_client`, `domain/models.py`) | 질문 해석 · 조건부 resolve · 5 task envelope 생성 |
+| execution | `application/execution/executor.py` (+`adapters`, `domain/execution.py`) | 5 agent fan-out 실행 · skipped/failed/success 정리 |
+| runtime | `application/runtime.py` | planning+execution 조립(`run_analysis`) · JSON 직렬화(`to_response_dict`) |
+| endpoint | `api/routes.py` | 외부 HTTP 입구 + dependency wiring (얇게) |
 
 흐름: `POST /internal/supervisor/analyze` → `run_supervisor()` → `SupervisorDecision(tasks[5])`
 → `run_tasks()` → `results[5]` → JSON.
@@ -120,13 +121,13 @@ endpoint(외부 HTTP 입구)는 `../api/supervisor.py`.
 **직교성:** supervisor result status(`success`/`skipped`/`failed`)와 technical `data_status`
 (`normal`/`data_limited`/`regime_unavailable`/`stale_cache`)는 **다른 축**이다. resolved 종목이 degrade
 데이터로 분석돼도 supervisor 결과는 `success`(output.data_status로 세분), KIS/LLM 예외는 `failed`(격리).
-세부: [contracts.md §5](../agents/technical/docs/contracts.md)(technical 상태별 출력) · stock_resolver.md(not_found) · api_spec.md(오류코드).
+세부: [contracts.md §5](../../docs/contracts/technical/contracts.md)(technical 상태별 출력) · stock_resolver.md(not_found) · api_spec.md(오류코드).
 
 ## 실행/후속 (이번 단계 범위)
 - **순차 실행**으로 계약·구조를 먼저 안정화. 병렬화·상위 전체 deadline·per-call timeout orchestration은
   **후속**(구조는 병렬 확장 가능하게 유지). technical 내부 `deadline` 전달 경계만 `ExecutionDeps`에 마련.
-- 실 KIS/OpenAI/backend 결합은 **수동 smoke** 로만: `scripts/smoke_supervisor.py`
-  (`uv run python -m src.supervisor.scripts.smoke_supervisor "삼성전자 차트 어때?"`). 실효 universe 는
+- 실 KIS/OpenAI/backend 결합은 **수동 smoke** 로만: `ai/scripts/supervisor/smoke_supervisor.py`
+  (`uv run python -m scripts.supervisor.smoke_supervisor "삼성전자 차트 어때?"`). 실효 universe 는
   backend `stocks` 에 seed 된 종목(battery 10 + representative: 삼성전자·삼성전자우·카카오). pytest 미포함.
 
 ## 테스트 (실 네트워크 0)

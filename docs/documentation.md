@@ -1,9 +1,16 @@
 # 문서 목록과 권위
 
-문서 목록 버전 3 / 확인일 2026-11-07, Asia/Seoul (+09:00).
-현재 작업 기준 `6308d8c9517d8d8d4f1c7b69e845fb5fe33836ef` (ST-001 2단계 PR #4 병합).
+> **최종 구조 우선 계약:** ST-001 v1.15(명시 Flow 설정·최종 marker 정리)에 따라 불필요한 old shim을 제거하며 canonical 구현 하나로 정리한다. Flow 마지막3도 AI 루트 .env 명시 정책으로 이동했다. 실제 설정 값/AI 실행은 미검증이다. [진행 기록](work/ST-001-layout-progress.md)을 따른다.
+
+> **실제 이동 결정 당시 — ST-001 v1.10:** 전체 기능의 실제 이동 승인이 적용되며 [전체 진행 기록](work/ST-001-layout-progress.md)을 현재 상태로 봅니다. 아래 v1.7 작업 지시·source SHA·비교 보류 문장은 3-B 당시 이력입니다. Backend 59개 이동/보호 회귀와 FE-01 선택 type/lint 결과를 이력과 구분하며, 전체 AI/Frontend 이동 및 build/HTTP 수용 완료는 아닙니다.
+
+문서 목록 버전 4 / 확인일 2026-11-08, Asia/Seoul (+09:00).
+현재 작업 기준 `7df12403848e480f223767232540d4c2c055ba5e` (ST-001 3-A PR #5 병합).
 CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작업 기준 갱신을 이유로 바꾸지 않는다.
 문서가 있다는 사실은 해당 기능의 공개 허용·검증 완료·실제 환경 설정을 뜻하지 않는다.
+
+현재 실제 폴더 이동은 [ST-001 전체 재배치 진행 기록](work/ST-001-layout-progress.md)을 따른다.
+이전 3-B 검사 이력과 이동 batch별 직접 검증·미검증을 구분한다.
 
 ## 현재 개발 시작점
 
@@ -28,14 +35,14 @@ CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작�
 | 공유 지시 파생본 | [CF-001](contracts/CF-001-v1.1.shared-v1.md), [CF-002](contracts/CF-002-v0.6.shared-v1.md) | 현재 사용 publication **shared-v1** 각각. 원본 아님. source/snapshot hash와 절 대응은 [manifest](contracts/manifest.json) |
 | DB 물리 구조 | [schema](../backend/docs/schema.md), [모델](../backend/db/models), [revision](../backend/db/migrations/versions) | a5b60f2 tree, auth 확장 head c2001a7e0001. 문서·ORM·Alembic 대조; 실제 DB 적용 여부는 별도 |
 | DB 변경 절차 | [migrations](../backend/docs/migrations.md), [DB 경계](../backend/docs/db_boundaries.md) | 현재 안전 경로와 과거 canonical 운영 기록을 구분 |
-| Flow payload/검증 | [v1 storage-spec](../ai/src/agents/flow/docs/storage-spec.md), [exporter](../ai/src/agents/flow/export/to_json.py), [validator](../backend/src/api/schemas/flow_payload.py) | payload version 1, CF-001+후속 CF-002 적용. storage-spec의 초기 미구현 설명은 이력 |
+| Flow payload/검증 | [v1 storage-spec](../ai/docs/contracts/flow/storage-spec.md), [exporter](../ai/src/agents/flow/api/payload.py), [validator](../backend/src/modules/flow/domain/payload.py) | payload version 1, CF-001+후속 CF-002 적용. storage-spec의 초기 미구현 설명은 이력 |
 | Flow 인증/owner | [CF-002 공유 계약](contracts/CF-002-v0.6.shared-v1.md), [현재 경계](architecture/current-boundaries.md#현재-공개-경로와-데이터-책임) | Backend가 최종 principal/root-index 검증. 공개 save 허용 아님 |
-| Technical JSON/enum/화면 | [contracts](../ai/src/agents/technical/docs/contracts.md), [api_spec](../ai/src/agents/technical/docs/api_spec.md), [frontend_mapping](../ai/src/agents/technical/docs/frontend_mapping.md), [enums](../ai/src/agents/technical/docs/enums.md) | a5b60f2의 **Technical 도메인 문서**. 전체 서비스/Flow/auth 계약 아님. 현재 사용자 Technical 경로는 비활성 |
+| Technical JSON/enum/화면 | [contracts](../ai/docs/contracts/technical/contracts.md), [api_spec](../ai/docs/contracts/technical/api_spec.md), [frontend_mapping](../ai/docs/agents/technical/frontend_mapping.md), [enums](../ai/docs/contracts/technical/enums.md) | a5b60f2의 **Technical 도메인 문서**. 전체 서비스/Flow/auth 계약 아님. 현재 사용자 Technical 경로는 비활성 |
 | Backend Technical API | [technical_frontend_api_contract](../backend/docs/technical_frontend_api_contract.md) | 저장/read model의 Technical 응답 계약. 현재 경로 공개/분석 실행 허가와 별개 |
 | 공통 보관함 카드 | [report_archive_api_contract](../backend/docs/report_archive_api_contract.md) | 카드 shape/projection. CF-002의 현재 접근 허용은 본인 Flow만; 모든 agent 필터가 실행 가능하다는 뜻 아님 |
 | 종목 식별/마스터 | [stock_resolver](../backend/docs/stock_resolver.md), [KIS master](../backend/docs/stock_master_sync.md), [DART corp code](../backend/docs/dart_corp_code_sync.md) | 종목 resolver·종목 마스터·법인 식별 레이어를 구분. 관리 sync는 수동 별도 작업 |
 | Fundamental 직접 DB | [현재 관찰·호환·미확인 경계](architecture/current-boundaries.md#fundamental-직접-db-호환-경로) | SELECT로 필드 3개를 읽는 경로가 존재. 실제 최소 권한은 미확인. 새 API/자격/권한 변경 없음 |
-| 개발 작성 가이드 | [Frontend](../frontend/docs/frontend_coding_guidelines.md), [Backend](../backend/docs/backend_coding_guidelines.md) | 현재 도메인 링크/실제 entry 참조. 예시 구조를 실제 재배치 지시로 쓰지 않음 |
+| 개발 작성 가이드 | [Frontend](../frontend/docs/coding-guidelines.md), [Backend](../backend/docs/backend_coding_guidelines.md) | 현재 도메인 링크/실제 entry 참조. 예시 구조를 실제 재배치 지시로 쓰지 않음 |
 | 공용 환경 참고 | [개발 안내](development.md), [Frontend](examples/frontend.env.example), [Backend](examples/backend.env.example), [AI](examples/ai.env.example), [명시 Compose](examples/compose.local.example.yaml) | ST-001 v1.3 / 3-A. 비밀 없는 참고, 실제 설정/기동 검증/안전 bootstrap 아님 |
 | 구현/실행 이력 | [CF-001](../backend/docs/flow_contract.md), [CF-002](../backend/docs/flow_auth_ownership.md), [Google 검증 기록](../backend/docs/google_login_check.md) | 각 보고 시점·합성/실제·실패/미검증을 보존. 상단 현재 상태 주석과 본문 이력 분리 |
 | 과거 PR 초안 | [CF-002 실행 명령](../backend/docs/cf002_commit_pr.md), [CF-002 PR 본문](../backend/docs/cf002_pr_body.md), [News 초안](../PR_DESCRIPTION.md) | **현재 실행 안내 아님**. 고정 HEAD stage/실제 자원 명령을 재사용하지 않음 |
@@ -47,24 +54,26 @@ CF 공유 계약과 기존 도메인 표의 검토 기준은 a5b60f2이며 작�
 논리 문서명·버전·source hash는 manifest의 reference_documents에 기록한다.
 상세설계의 전체 실행/복구·다중 관점 목표를 현재 구현 완료로 읽지 않는다.
 
-현재 문서 작업 지시는 **ST-001_문서_정본과_안전한_개발_기반_정리.md v1.3 / 3-A**,
-source SHA-256 `73f4c0b6d98fa3e33fc6d1d8f9fc0892f94608175eff3024d47a85300fbf1099`다.
+3-B 당시 작업 지시는 **ST-001_문서_정본과_안전한_개발_기반_정리.md v1.7 / 3-B**,
+source SHA-256 `23e79f20066664ba8e32fb3c1a040e5bb33fdbfc08e44518c354ccee0e8b2601`다.
 1단계 PR #3과 2단계 commit `9bf536e53ca7dab75d35b43200198c298a54ec0e`/PR #4가 병합됐고,
-이번 작업 기준은 위 `6308d8c`이며 새 미커밋은 3-A 환경 참고와 최소 상태 갱신이다.
-manifest의 기존 v1.0·v1.1 work_item은 work_item_history에 원형 보존하고 CF snapshot bytes/출처/버전/
+3-A commit `5eecd0b8c62ad56041e0b2a1bf888b9b053fd430`/PR #5도 병합됐다.
+이번 작업 기준은 위 `7df1240`이며 새 미커밋은 3-B 검사 입구/보호/문서의 부분 구현이다.
+manifest의 기존 v1.0·v1.1·v1.3 work_item은 work_item_history에 원형 보존하고 CF snapshot bytes/출처/버전/
 hash/reviewed SHA와 reference_documents는 유지한다.
 
 root·서비스 AGENTS는 2단계 병합 이력이며 Frontend 기존 Next 블록은 계속 보존한다. 3-A 공용 환경
-예제를 작성했으며 정적 검사·독립 검토 수용·실제 기동 검증은 구분한다. **3-B Backend/Frontend 공통 안전
-entry·3-C AI 안전 entry는 아직 미구현 후속**이며 3-A 검토/사용자 병합 후 최신 develop의 별도 branch에서
-3-B→3-C 순서로 진행한다. 없는 script를 현재 실행 가능한 것처럼 안내하지 않는다.
+예제는 병합됐으며 정적 검사·독립 수용·실제 기동 검증은 구분한다. **3-B는 Backend self-test 9개·unit 244개 통과, 최신 Frontend self-test 20개·unit 35개 통과, build 추가 소비 거부/최종 수용 대기**이며
+3-C AI 안전 entry는 미구현 후속이다. [3-B 기록](work/ST-001-stage-3-B.md)과
+[실행표](development.md#3-b-검사-입구와-현재-차단)를 따른다. 3-B 수용/사용자 병합 후 3-C로 진행한다.
 큰 파일/폴더 재배치 구조는 비교 검토 전 **후보**이며 미확정이다.
 
 ## 검증 상태와 이력
 
-ST-001 3-A는 허용된 16파일의 source 대조·예제 비확장 파싱·링크/anchor·작업 이력/source hash·
-기존 Next 블록/CF bytes 보존·개인/비밀 제외·허용범위 밖/runtime diff 0을 정적으로 검사한다.
-기능 테스트·서비스 실행·DB/Google/AI 검사를 재실행하지 않는다. 아래 기능 수치는 병합된
+ST-001 3-A의 16파일 정적 검사/독립 수용은 병합 이력이다. 현재 3-B의 23경로 구현에서는
+수집 전 OS/언어 guard·자기 사본·선택 검사의 실제 검증이 필요하다. 현재 help/list/오류 인자·구문은 확인됐고,
+이전 OS 실패·최소 probe와 별도 공식 실행한 Backend/Frontend self-test 9개/14개 통과를 구분한다. Frontend 기존 unit+safety 29개는 이전 source의 실제 통과다. 최신 v1.6 self-test 17개·unit 32개도 별도 공식 실행에서 통과했다. Backend는 v1.5의 정확한 입력 2개·origin 검증과 시스템 metadata literal 읽기 보완 뒤 고정 6파일 244개 통과·guard 0이다. Frontend build는 단일 package snapshot 응답 후 추가 파일 요청의 guard 거부로 실패했으며 HTTP/type/대상 lint는 미실행이다.
+보호를 해제해 실행하지 않는다. 실DB/Google/AI 검사는 제외다. 아래 기능 수치는 병합된
 **과거 CF 보고서 확인**이며 이번 문서 단계의 실행 결과가 아니다.
 
 - CF-001 보고: unit 148·실제 격리 PostgreSQL 29·카드 4 통과 기록.
@@ -77,7 +86,7 @@ ST-001 3-A는 허용된 16파일의 source 대조·예제 비확장 파싱·링�
   B 상세 본문 명시 확인은 **미검증**이다. PR 병합은 이 검증의 추가 통과가 아니다.
 - 기존 [Backend unit 경계](../backend/tests/unit/conftest.py)와
   [Frontend 사본 검사 도우미](../frontend/scripts/check-local-ports.mjs)는 존재한다.
-  모듈 수집 전 dotenv/외부 자원 차단까지 보장하는 새 공통 entry는 후속이며, AI 전체 pytest를
+  3-B 보강 입구는 OS/native/자손 보호와 선택 실행이 아직 검증되지 않았다. AI 전체 pytest를
   parent env만 지워 실행해도 안전하다고 가정하지 않는다.
 - ignored Compose는 공유되지 않았고 실제 private override/현재 DB 자격·포트 상태는 미확인이다.
   원본 비밀 파일을 읽거나 기존 컨테이너/자료를 재현 검사 대상으로 쓰지 않는다.
@@ -85,7 +94,8 @@ ST-001 3-A는 허용된 16파일의 source 대조·예제 비확장 파싱·링�
 1단계의 210개 독립 검토와 병합 전 작성/검사는 [1단계 기록](work/ST-001-stage-1.md)의 이력이다.
 작성 채팅의 병합 tree 확인은 local path 190개 존재 검사이며 anchor/전체 재검사는 아니었다는
 전달 기록과 구분한다. [2단계 기록](work/ST-001-stage-2.md)의 148개 검사/독립 재검토는 과거 이력이다.
-이번 예제의 직접 검사는 [3-A 기록](work/ST-001-stage-3-A.md)에 있다.
+3-A 예제의 직접 검사는 [3-A 기록](work/ST-001-stage-3-A.md)에 있다.
+현재 직접 검사/미실행·차단은 [3-B 기록](work/ST-001-stage-3-B.md)에 구분한다.
 
 ## 공유본 갱신 절차
 
@@ -94,3 +104,7 @@ ST-001 3-A는 허용된 16파일의 source 대조·예제 비확장 파싱·링�
 이전 snapshot을 보존하고 **현재 사용 버전은 이 목록에서만 지정**한다.
 개인 이름/계정/프로젝트 정보·전체 로컬 경로·대화·원시 영수증·일회성 credential 승인은 공유하지 않는다.
 오타/링크만 고쳐도 출판된 snapshot의 새 버전과 hash를 기록한다.
+
+v1.6 당시 self-test 17개·unit 32개는 통과했다. build는 3회 모두 추가 파일 요청의 guard 거부로 exit 78·자기 root 정리였다. 최초 거절·실패·후속 거절과 승인된 재개를 이력으로 구분한다. worker fs 관측/부분 journal과 native 합성 canary·부모 공개 source 검증을 분리하며 native 전체 0을 주장하지 않는다.
+
+v1.7 진단 한정 실행은 self-test 20개·unit 35개 통과, build는 거부 22회/정규화 target ID 10개로 exit 78이다. 이 중 cgroup 1개·4회, unknown hash 9개·18회이며 hash 대상의 known-copy membership은 모두 false다. HMAC 식별을 읽기 허용에 쓰지 않으며 추가 build/HTTP/type/lint는 새 정책 판단 전 진행하지 않는다. 앞선 v1.6 수치·실패는 당시 이력이다.

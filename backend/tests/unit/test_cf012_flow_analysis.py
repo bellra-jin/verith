@@ -142,9 +142,10 @@ async def test_sync_slot_held_after_response_timeout(monkeypatch):
 async def test_confirmed_collision_stays_terminal_after_winner_deleted(monkeypatch):
     value=row();response=envelope(value);ref,input_text,result_text=domain.validate_response(value,response,uuid4())
     value.input_json=input_text;value.result_json=result_text;value.input_sha256=domain.sha(input_text);value.result_sha256=domain.sha(result_text);value.adopted_report_id=ref.report_id
+    value.owner_user_id=uuid4();value.operation=domain.OPERATION
     session=SimpleNamespace(rollback=AsyncMock(),scalar=AsyncMock(return_value=None),commit=AsyncMock())
-    instance=AnalysisService(session,principal=SimpleNamespace(user_id=uuid4()),client=None);instance._locked=AsyncMock(return_value=value)
-    monkeypatch.setattr(service.FlowReportService,'stage_report',AsyncMock(side_effect=FlowReportIdConflict('safe fixed conflict')))
+    instance=AnalysisService(session,principal=SimpleNamespace(user_id=value.owner_user_id),client=None);instance._locked=AsyncMock(return_value=value)
+    monkeypatch.setattr(service.FlowAnalysisAdapter,'stage',AsyncMock(side_effect=FlowReportIdConflict('safe fixed conflict')))
     monkeypatch.setattr(service.report_repository,'get_agent_indexes',AsyncMock(return_value=[]))
     with pytest.raises(AnalysisError) as caught:await instance._publish(value)
     assert caught.value.code==ErrorCode.RESULT_CONFLICT and value.state=='failed'
@@ -156,9 +157,10 @@ async def test_other_integrity_failure_is_not_confirmed_report_collision(monkeyp
     from sqlalchemy.exc import IntegrityError
     value=row();response=envelope(value);ref,a,b=domain.validate_response(value,response,uuid4())
     value.input_json=a;value.result_json=b;value.input_sha256=domain.sha(a);value.result_sha256=domain.sha(b);value.adopted_report_id=ref.report_id
+    value.owner_user_id=uuid4();value.operation=domain.OPERATION
     session=SimpleNamespace(rollback=AsyncMock(),scalar=AsyncMock(return_value=None),commit=AsyncMock())
-    instance=AnalysisService(session,principal=SimpleNamespace(user_id=uuid4()),client=None);instance._locked=AsyncMock(return_value=value)
-    monkeypatch.setattr(service.FlowReportService,'stage_report',AsyncMock(side_effect=IntegrityError(None,None,ValueError('fixed synthetic'))))
+    instance=AnalysisService(session,principal=SimpleNamespace(user_id=value.owner_user_id),client=None);instance._locked=AsyncMock(return_value=value)
+    monkeypatch.setattr(service.FlowAnalysisAdapter,'stage',AsyncMock(side_effect=IntegrityError(None,None,ValueError('fixed synthetic'))))
     monkeypatch.setattr(service.report_repository,'get_agent_indexes',AsyncMock(return_value=[]))
     with pytest.raises(AnalysisError) as caught:await instance._publish(value)
     assert caught.value.code==ErrorCode.SERVICE_UNAVAILABLE and value.state=='result_ready'

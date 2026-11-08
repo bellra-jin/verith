@@ -518,9 +518,33 @@ class CF012Boundary(unittest.TestCase):
         self.assertEqual(len(c.CF005_INPUTS),1)
         self.assertFalse(c.source_allowed('ai/src/agents/flow/application/agent.py'))
 
+class CF013Boundary(unittest.TestCase):
+    def test_exact_sources_and_single_file_selection(self):
+        import ast
+        from scripts import check_safe as c
+        self.assertEqual(c.CF013_TESTS,("tests/unit/test_cf013_analysis_contracts.py",))
+        expected={"backend/src/modules/analysis/domain/contracts.py","backend/src/modules/analysis/application/ports.py","backend/src/modules/flow/application/analysis_adapter.py","backend/examples/analysis/fundamental_adapter.py","backend/examples/analysis/fundamental-response.v1.json","backend/tests/unit/test_cf013_analysis_contracts.py","backend/scripts/cf013_contract_check.py"}
+        self.assertEqual(c.CF013_SOURCES,expected)
+        root=Path(__file__).resolve().parents[3]
+        for name in expected:
+            self.assertTrue(c.regular_bytes(root,name));self.assertFalse(c.source_allowed(name+'.adjacent'))
+        tree=ast.parse((root/'backend/tests/unit/test_cf013_analysis_contracts.py').read_text())
+        imports=[n for n in tree.body if isinstance(n,ast.ImportFrom) and n.module in {'tests.unit.test_flow_contract','tests.unit.test_cf012_flow_analysis'}]
+        self.assertEqual({a.name for n in imports for a in n.names},{'test_relocation_public_contract_baseline','test_confirmed_collision_stays_terminal_after_winner_deleted','test_other_integrity_failure_is_not_confirmed_report_collision'})
+        self.assertTrue(all(a.asname.startswith('_') for n in imports for a in n.names))
+
+    def test_neutral_contracts_have_only_stdlib_dependencies(self):
+        import ast
+        root=Path(__file__).resolve().parents[2]
+        tree=ast.parse((root/'src/modules/analysis/domain/contracts.py').read_text())
+        names={n.module.split('.')[0] for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)}|{a.name.split('.')[0] for n in ast.walk(tree) if isinstance(n,ast.Import) for a in n.names}
+        self.assertLessEqual(names,{'dataclasses','datetime','hashlib','json','math','re','typing','uuid'})
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF012Boundary if focused else EntryBoundary)
+    adapter_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf013_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

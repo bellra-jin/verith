@@ -156,3 +156,9 @@ v1.7 진단 한정 실행은 self-test 20개·unit 35개 통과, build는 거부
 
 - [요청·실행·본인 저장 계약](contracts/flow-analysis-v1.md)
 - [CF-012 구현·검증 기록](work/CF-012-flow-analysis.md)
+
+### CF-013 실제사용 adapter와 재무 합성 예제
+
+- [분석 adapter 공통 계약](contracts/analysis-adapter-v1.md)
+- [재무 adapter 필드맵·stage 인수 조건](examples/fundamental-analysis-adapter.md)
+- [CF-013 구현·집중 검증](work/CF-013-analysis-contracts.md)

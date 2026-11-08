@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { finiteNumber, observationWindow, persistenceCells, record, relationText, safeDaily } from "@/features/flow/lib/observation-window";
 
 import type { FlowPayload, FlowGate, FlowPriceRow } from "@/features/flow/api/reports";
 
@@ -60,7 +61,8 @@ function factRows(s: NonNullable<FlowPayload["signals"]>): FactRow[] {
   return SUBJECTS.map((name, i) => {
     const r = ratios[i];
     const direction = r == null || r === 0 ? "중립" : r > 0 ? "매수" : "매도";
-    const v5 = s.persistence?.[name]?.sum_5;
+    const stored5 = s.persistence?.[name]?.sum_5;
+    const v5 = finiteNumber(stored5) ? stored5 : null;
     return {
       name,
       days: s.consecutive?.[name]?.days ?? null,
@@ -222,6 +224,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
   const v = payload.verification ?? {};
   const dataLimited = payload.data_status === "data_limited";
 
+  const window = observationWindow(s, RECENT_DAYS, TREND_DAYS);
   const rows = factRows(s);
   const gauge = gaugeView(s);
 
@@ -230,24 +233,15 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
   const lastPrice: FlowPriceRow | null = priceDaily?.length ? priceDaily[priceDaily.length - 1] : null;
 
   // 일별 순매수 차트(builder._daily_view): 최대 |값| 기준 48% 스케일.
-  const daily = s.daily ?? null;
-  const dailyMax = daily?.length
-    ? Math.max(0, ...daily.flatMap((row) => SUBJECTS.map((n) => Math.abs(Number(row[n] ?? 0)))))
-    : 0;
+  const daily = safeDaily(s);
+  const dailyMax = daily ? Math.max(0, ...daily.flatMap((row) => SUBJECTS.map((name) => Math.abs(row[name])))) : 0;
 
-  // 지속성(builder._persistence_view): 최대 |합| 기준 100% 스케일 + verdict 문구 조립.
-  const persistence = s.persistence ?? null;
-  const persistMax = persistence
-    ? Math.max(0, ...SUBJECTS.flatMap((n) => [Math.abs(persistence[n]?.sum_5 ?? 0), Math.abs(persistence[n]?.sum_20 ?? 0)]))
-    : 0;
-  const consBuy = SUBJECTS.filter((n) => persistence?.[n]?.consistent && (persistence[n]?.sum_20 ?? 0) > 0);
-  const consSell = SUBJECTS.filter((n) => persistence?.[n]?.consistent && (persistence[n]?.sum_20 ?? 0) < 0);
-  const inconsistent = SUBJECTS.filter((n) => persistence && !persistence[n]?.consistent);
-  const persistVerdict = [
-    consBuy.length ? `${consBuy.join("·")}은 5일·20일 모두 순매수` : null,
-    consSell.length ? `${consSell.join("·")}은 5일·20일 모두 순매도` : null,
-    inconsistent.length ? `${inconsistent.join("·")}은 5일과 20일 방향이 다름` : null,
-  ].filter(Boolean).join(" · ");
+  // Safe stored cells remain independent of the observation evidence verdict.
+  const persistence = record(s.persistence) ? persistenceCells(s) : null;
+  const persistValues = persistence ? SUBJECTS.flatMap((name) => [persistence[name].short, persistence[name].long]).filter(finiteNumber) : [];
+  const persistMax = Math.max(0, ...persistValues.map(Math.abs));
+  const persistVerdict = window.status === "sufficient_rows"
+    ? SUBJECTS.map((name) => `${name}은 ${relationText(window.relations[name])}`).join(" · ") : "";
 
   // 기관 세부(builder._inst_detail_view): 표시 5개·내림차순·주도 문구.
   const instDetail = s.inst_detail ?? null;
@@ -332,7 +326,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 <div
                   className="mt-1.5 cursor-help text-center text-[30px] font-extrabold leading-none tracking-tight"
                   style={{ color: gauge.color }}
-                  title={`최근 ${RECENT_DAYS}거래일 순매수 강도 기준 — 외국인·기관 강도 합의 부호로 판정합니다`}
+                  title={`${window.shortLabel} · ${window.notice} — 외국인·기관 강도 합의 부호입니다`}
                 >
                   {gauge.verdict}
                 </div>
@@ -342,7 +336,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 {rows.map((r) => (
                   <div key={r.name} className="group relative mb-3 flex items-center gap-3.5">
                     <HoverTip>
-                      <div className="font-bold">{r.name} · 최근 {RECENT_DAYS}거래일</div>
+                      <div className="font-bold">{r.name} · {window.shortLabel}</div>
                       <div>순매수 합 {r.raw5 == null ? "N/A" : `${fmtSigned(r.raw5)}백만원 (${r.amt})`}</div>
                       <div>하루평균 거래대금 대비 {r.pct} · +매수 −매도</div>
                     </HoverTip>
@@ -369,7 +363,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
           </Card>
 
           {/* 날짜별 시세 — 최신이 위(시세표 관행) */}
-          <Card id="price" title="날짜별 시세" cap={`최근 ${priceDaily?.length ?? 0}거래일 · 종가·전일비 원 · 거래량·순매매량 주 · 최신이 위`}>
+          <Card id="price" title="날짜별 시세" cap={`제공된 시세 ${priceDaily?.length ?? 0}행 · 종가·전일비 원 · 거래량·순매매량 주 · 최신이 위`}>
             {priceDaily?.length ? (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[600px] border-collapse text-[13px]">
@@ -413,13 +407,13 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
           </Card>
 
           {/* 투자자별 일별 순매수 차트 */}
-          <Card id="daily" title="투자자별 일별 순매수" cap={`최근 ${TREND_DAYS}거래일 · 막대 순서 개인·외국인·기관(음영은 개인) · 단위 백만원 · +매수 −매도`}>
+          <Card id="daily" title="투자자별 일별 순매수" cap={`${window.dailyLabel} · 막대 순서 개인·외국인·기관(음영은 개인) · 단위 백만원 · +매수 −매도`}>
             {daily?.length ? (
               <>
                 <div className="relative mt-1 flex h-[230px] gap-1.5">
                   <div className="absolute left-0 right-0 top-1/2 h-[2px] bg-[#D1D6DB]" />
                   {daily.map((row, di) => {
-                    const iso = String(row.date ?? "");
+                    const iso = row.date;
                     // 가장자리 열은 툴팁이 카드 밖으로 넘치지 않게 정렬을 바꾼다.
                     const align = di < 3 ? "left" : di >= daily.length - 3 ? "right" : "center";
                     return (
@@ -427,7 +421,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                         <HoverTip align={align}>
                           <div className="mb-0.5 font-bold">{iso}</div>
                           {SUBJECTS.map((name) => {
-                            const val = Number(row[name] ?? 0);
+                            const val = row[name];
                             return (
                               <div key={name} className="flex items-center gap-1.5">
                                 <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: val > 0 ? BUY : val < 0 ? SELL : MUT }} />
@@ -438,7 +432,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                         </HoverTip>
                         <div className="flex flex-1 justify-center gap-[2px]">
                           {SUBJECTS.map((name, i) => {
-                            const val = Number(row[name] ?? 0);
+                            const val = row[name];
                             const h = dailyMax && val ? Math.round((Math.abs(val) / dailyMax) * 480) / 10 : 0;
                             return (
                               <div key={name} className={`relative w-[9px] ${i === 0 ? "rounded-[3px] bg-[#F7F8FA]" : ""}`}>
@@ -465,46 +459,46 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 </div>
               </>
             ) : (
-              <Placeholder>데이터 준비 중 — 일별 순매수 시계열이 아직 없습니다.</Placeholder>
+              <Placeholder>일별자료 표시 미확인 — 안전하게 표시할 행이 없습니다.</Placeholder>
             )}
           </Card>
 
           {/* 지속성 5일 vs 20일 */}
-          <Card id="persist" title="지속성 · 5일 vs 20일" cap="최근 흐름이 일시적인지, 20일에 걸쳐 지속되는지 · 단위 백만원">
+          <Card id="persist" title="단기·장기 수급 비교" cap={`${window.notice} · 단위 백만원`}>
             {persistence ? (
               <>
                 {SUBJECTS.map((name) => {
-                  const p = persistence[name] ?? { sum_5: 0, sum_20: 0, consistent: false };
+                  const p = persistence[name];
                   return (
                     <div key={name} className="group relative flex items-center gap-3.5 border-b border-[#F2F4F6] py-2.5 last:border-b-0">
                       <HoverTip>
                         <div className="font-bold">{name}</div>
-                        <div>5일 합 {fmtSigned(p.sum_5 ?? 0)}백만원 ({fmtEok(p.sum_5 ?? 0)})</div>
-                        <div>20일 합 {fmtSigned(p.sum_20 ?? 0)}백만원 ({fmtEok(p.sum_20 ?? 0)})</div>
-                        <div>방향 {p.consistent ? "일관(5일·20일 같은 방향)" : "상이(5일과 20일 방향 다름)"}</div>
+                        <div>{window.shortLabel}: {p.short === null ? "자료 없음" : `${fmtSigned(p.short)}백만원 (${fmtEok(p.short)})`}</div>
+                        <div>{window.longLabel}: {p.long === null ? "자료 없음" : `${fmtSigned(p.long)}백만원 (${fmtEok(p.long)})`}</div>
+                        <div>{relationText(window.relations[name])}</div>
                       </HoverTip>
                       <span className="w-[52px] flex-shrink-0 text-right text-sm font-bold text-[#4E5968]">{name}</span>
                       <div className="flex min-w-0 flex-1 flex-col gap-[5px]">
-                        {([["5일", p.sum_5, false], ["20일", p.sum_20, true]] as const).map(([label, val, dim]) => (
+                        {([[window.shortLabel, p.short, false], [window.longLabel, p.long, true]] as const).map(([label, val, dim]) => (
                           <div key={label} className="flex items-center gap-2">
-                            <span className="w-[34px] text-right text-[11px] font-bold text-[#B0B8C1]">{label}</span>
+                            <span className="w-[112px] flex-shrink-0 text-right text-[11px] font-bold text-[#B0B8C1]">{label}</span>
                             <div className="h-3.5 flex-1 overflow-hidden rounded-[5px] bg-[#F2F4F6]">
                               <div
                                 className="h-full rounded-[5px]"
                                 style={{
-                                  width: `${persistMax ? Math.round((Math.abs(val) / persistMax) * 1000) / 10 : 0}%`,
-                                  background: color(val),
+                                  width: `${finiteNumber(val) && persistMax ? Math.round((Math.abs(val) / persistMax) * 1000) / 10 : 0}%`,
+                                  background: finiteNumber(val) ? color(val) : MUT,
                                   opacity: dim ? 0.55 : 1,
                                 }}
                               />
                             </div>
-                            <span className="w-[92px] flex-shrink-0 text-right text-[12.5px] font-extrabold" style={{ color: color(val) }}>
-                              {fmtSigned(val)}
+                            <span className="w-[92px] flex-shrink-0 text-right text-[12.5px] font-extrabold" style={{ color: finiteNumber(val) ? color(val) : MUT }}>
+                              {finiteNumber(val) ? fmtSigned(val) : "자료 없음"}
                             </span>
                           </div>
                         ))}
                       </div>
-                      <Chip on={Boolean(p.consistent)} label="일관" />
+                      <Chip on={window.status === "sufficient_rows" && p.consistent === true} label="일관" />
                     </div>
                   );
                 })}
@@ -533,7 +527,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 ))}
               </div>
               <div className="rounded-2xl bg-[#F9FAFB] px-5 py-4">
-                <div className="mb-2.5 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title={`최근 ${RECENT_DAYS}거래일 순매수 합 ÷ 하루평균 거래대금 · ${STRENGTH_THRESHOLD_PCT} 이상이면 '강함'으로 표시합니다`}>
+                <div className="mb-2.5 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title={`${window.shortLabel} 순매수 합 ÷ 하루평균 거래대금 · ${window.notice} · ${STRENGTH_THRESHOLD_PCT} 이상이면 '강함'으로 표시합니다`}>
                   순매수 강도
                 </div>
                 {rows.map((r) => (
@@ -547,7 +541,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 ))}
               </div>
               <div className="rounded-2xl bg-[#F9FAFB] px-5 py-4">
-                <div className="mb-1 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title={`외국인·기관의 최근 ${RECENT_DAYS}거래일 순매수 방향이 같은지 다른지를 봅니다`}>
+                <div className="mb-1 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title={`외국인·기관의 제공 관측 기준 방향 · ${window.notice}`}>
                   수급 구도 (외국인·기관)
                 </div>
                 <div
@@ -565,7 +559,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
             <div className="grid gap-5 md:grid-cols-2">
               <div>
                 <div className="mb-2.5 text-[12.5px] font-bold text-[#8B95A1]">
-                  <span className="cursor-help" title={`최근 ${RECENT_DAYS}거래일 누적 순매수 · 단위 백만원`}>기관 세부 순매수</span>
+                  <span className="cursor-help" title={`${window.shortLabel} 누적 순매수 · ${window.notice} · 단위 백만원`}>기관 세부 순매수</span>
                   {instLeader ? ` · ${instLeader}` : ""}
                 </div>
                 {instShown.length ? (
@@ -573,7 +567,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                     <div key={name} className="group relative flex items-center gap-2.5 py-[5px]">
                       <HoverTip align="left">
                         <div className="font-bold">{DETAIL_LABELS[name] ?? name}</div>
-                        <div>최근 {RECENT_DAYS}거래일 누적 {fmtSigned(val)}백만원 ({fmtEok(val)})</div>
+                        <div>{window.shortLabel} 누적 {fmtSigned(val)}백만원 ({fmtEok(val)})</div>
                       </HoverTip>
                       <span className="w-[96px] flex-shrink-0 text-[12.5px] font-bold text-[#4E5968]">{DETAIL_LABELS[name] ?? name}</span>
                       <div className="h-3.5 flex-1 overflow-hidden rounded-[5px] bg-[#F2F4F6]">
@@ -638,7 +632,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
           </Card>
 
           {/* 검증 */}
-          <Card id="verify" title="검증" cap="이 리포트의 모든 숫자는 표시 전에 코드로 원본과 대조됩니다">
+          <Card id="verify" title="검증" cap={`저장 당시 수치·해석 대조 결과이며 기간 충족 보증이 아닙니다. ${window.notice}`}>
             <div className="flex flex-wrap gap-2">
               {gates.map(([label, g]) =>
                 g == null ? null : g.passed ? (
@@ -682,6 +676,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 <div className="mb-4 cursor-help text-[12.5px] text-[#8B95A1]" title="이 해석 문장은 위 팩트와 모순되지 않는지 코드로 대조(검증)를 마친 것입니다">
                   <span className="border-b border-dotted border-[#B0B8C1]">✓ 팩트 대조를 마친 해석</span>
                 </div>
+                <p className="mb-4 text-sm font-semibold text-[#9a6c10]">{window.interpretationNotice}</p>
                 <Interpretation text={payload.interpretation} />
                 {payload.interpretation_meta?.model ? (
                   <div className="mt-4 text-[11px] font-medium text-[#B0B8C1]">

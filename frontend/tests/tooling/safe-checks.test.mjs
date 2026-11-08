@@ -9,6 +9,20 @@ import {createRequire} from 'node:module';
 import {independentCleanup,expiryCleanup} from '../helpers/safe-http.mjs';
 import {readSource,sourceAllowed} from '../../scripts/check-local-ports.mjs';
 const require=createRequire(import.meta.url);
+test('CF005 exact helper, fixture and unit are copied without adjacent JSON grants',()=>{
+ for(const name of ['src/features/flow/lib/observation-window.ts','tests/fixtures/cf005-observation-cases.json','tests/unit/flow/observation.test.mjs']){
+  assert.equal(sourceAllowed(name),true);
+  assert.ok(readSource(process.cwd(),name).length>0);
+ }
+ assert.equal(sourceAllowed('tests/fixtures/adjacent.json'),false);
+ const source=fs.readFileSync(path.join(process.cwd(),'src/features/flow/components/flow-report-view.tsx'),'utf8');
+ assert.match(source,/const daily = safeDaily\(s\)/);
+ assert.match(source,/observationWindow\(s, RECENT_DAYS, TREND_DAYS\)/);
+ assert.match(source,/window\.status === "sufficient_rows"/);
+ assert.match(source,/window\.interpretationNotice/);
+ assert.ok(source.indexOf('const daily = safeDaily(s)')<source.indexOf('daily.flatMap'));
+ assert.doesNotMatch(source,/Number\(row\[name\] \?\? 0\)/);
+});
 test('Technical unknown metadata preserves nullish defaults and valid values without inventing numbers',()=>{
  const source=fs.readFileSync(path.join(process.cwd(),'src/features/technical/components/indicator-card.tsx'),'utf8');
  const parsed=ts.createSourceFile('indicator-card.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);

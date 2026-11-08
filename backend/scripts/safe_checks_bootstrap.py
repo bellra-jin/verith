@@ -109,6 +109,7 @@ def valid_flow_origins(source, modules):
             return False
     for name, relative in (("agents.flow.api.payload", "agents/flow/api/payload.py"),
                            ("agents.flow.domain.models", "agents/flow/domain/models.py"),
+                           ("agents.flow.domain.observation_window", "agents/flow/domain/observation_window.py"),
                            ("agents.flow.infrastructure.token_cache", "agents/flow/infrastructure/token_cache.py")):
         spec = getattr(modules.get(name), "__spec__", None)
         origin = getattr(spec, "origin", None)

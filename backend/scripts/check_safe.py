@@ -34,6 +34,7 @@ AUDITED_NEWS_TESTS = ("tests/test_importance.py",)
 UNIT += AUDITED_STOCK_TESTS + AUDITED_TECHNICAL_TESTS + AUDITED_CLIENT_TESTS + AUDITED_NEWS_TESTS
 UNIT += ("tests/unit/test_cf003_flow_runs.py",)
 UNIT += ("tests/unit/test_cf004_kis_token_cache.py",)
+UNIT += ("tests/unit/test_cf005_flow_observation.py",)
 NEW = {"backend/scripts/check_safe.py", "backend/scripts/safe_checks_bootstrap.py",
        "backend/tests/safe_checks/test_entry.py",
        "backend/src/modules/flow/domain/payload.py",
@@ -111,6 +112,17 @@ CF003_SOURCES = frozenset({
     "backend/scripts/cf003_admission_check.py",
 })
 NEW.update(CF003_SOURCES)
+CF005_INPUTS = {"ai/src/agents/flow/domain/observation_window.py": "acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27"}
+CF005_SOURCE_ONLY = frozenset({
+    "ai/src/agents/flow/domain/verification/signals.py",
+    "ai/src/agents/flow/infrastructure/render/builder.py",
+    "ai/src/agents/flow/prompts/explain.txt",
+    "ai/src/agents/flow/infrastructure/render/templates/supply_demand.html",
+    "frontend/tests/fixtures/cf005-observation-cases.json",
+})
+NEW.update(CF005_INPUTS)
+NEW.update(CF005_SOURCE_ONLY)
+NEW.add("backend/tests/unit/test_cf005_flow_observation.py")
 CF004_INPUTS = {"ai/src/agents/flow/infrastructure/token_cache.py": "3e090e2992aa9a0c7f78f644132765e616c002b35b5994ebc71a3f2fd26bad7f"}
 NEW.update(CF004_INPUTS)
 NEW.add("backend/tests/unit/test_cf004_kis_token_cache.py")
@@ -307,7 +319,7 @@ def prove_os_boundary(owned, executable, profile, registry):
 
 
 def source_allowed(p):
-    return p not in REMOVED_SOURCES and not private_path(p) and (p in EXTRA or p in FLOW_INPUTS or p in CF004_INPUTS or p in NEW
+    return p not in REMOVED_SOURCES and not private_path(p) and (p in EXTRA or p in FLOW_INPUTS or p in CF004_INPUTS or p in CF005_INPUTS or p in NEW
         or p in {"backend/"+u for u in UNIT}
         or p.startswith(("backend/src/", "backend/db/")) and p.endswith(".py")
         or p.startswith("backend/tests/") and p.endswith("/__init__.py"))
@@ -324,7 +336,7 @@ def selected_sources(repo):
         if source_allowed(p):
             if mode != "100644" or stage != "0": raise UnsafeCheck("unsupported source index metadata")
             selected.add(p)
-    required = EXTRA | FLOW_INPUTS.keys() | CF004_INPUTS.keys() | {"backend/"+u for u in UNIT}
+    required = EXTRA | FLOW_INPUTS.keys() | CF004_INPUTS.keys() | CF005_INPUTS.keys() | {"backend/"+u for u in UNIT}
     if not required <= selected | NEW: raise UnsafeCheck("required selected source missing from index or exact new inputs")
     return sorted(selected | NEW)
 
@@ -354,7 +366,7 @@ def execute(repo, modes):
         fingerprints = {}
         for p in selected_sources(repo):
             data = regular_bytes(repo, p)
-            if p in (FLOW_INPUTS | CF004_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS)[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             target = checkout / p
             target.parent.mkdir(parents=True, exist_ok=True)

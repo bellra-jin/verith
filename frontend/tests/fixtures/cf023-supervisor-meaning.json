@@ -1,0 +1,788 @@
+{
+  "version": "supervisor.meaning.v1",
+  "cases": [
+    {
+      "query": "삼성전자 수급",
+      "model_zero": true
+    },
+    {
+      "query": "삼성전자 외국인 말고 기관 수급",
+      "model_zero": true,
+      "exclude": "외국인"
+    },
+    {
+      "query": "삼성전자 최근 3주 수급",
+      "model_zero": true,
+      "period": "최근 3주"
+    },
+    {
+      "query": "삼성전자 2023년 수급",
+      "model_zero": true
+    },
+    {
+      "query": "삼성전자 수급과 RSI",
+      "model_zero": true
+    },
+    {
+      "query": "삼성전자 수급 내년 목표가/매집",
+      "model_zero": false
+    },
+    {
+      "query": "현대건설 수급",
+      "model_zero": false
+    },
+    {
+      "query": "삼성전자 말고 삼성전자 수급",
+      "model_zero": true,
+      "barrier": "scope"
+    },
+    {
+      "query": "삼성전자와 SK하이닉스 수급",
+      "model_zero": true,
+      "barrier": "multi_stock"
+    },
+    {
+      "query": "시장 수급",
+      "model_zero": true,
+      "barrier": "scope"
+    }
+  ],
+  "browser": {
+    "stock": {
+      "stock_code": "005930",
+      "stock_name": "합성 삼성전자",
+      "market": "KOSPI"
+    },
+    "statuses": [
+      "pending",
+      "unknown",
+      "result_ready",
+      "stored",
+      "failed",
+      "deleted"
+    ],
+    "widths": [
+      1440,
+      390
+    ]
+  },
+  "validated_plans": [
+    {
+      "draft": {
+        "answers": [],
+        "candidate_ref": null,
+        "original_query": "삼성전자 수급",
+        "revision": 0,
+        "selected_ticker": null
+      },
+      "meaning_status": "deterministic",
+      "plan": {
+        "candidate_ref": "bf33598c46c7e5d306f202240b612fd0bef5c7a5fbfe808421a1e7febc09dfd9",
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [],
+          "conditions": [],
+          "interpretation_source": "deterministic",
+          "mentions": [
+            {
+              "evidence": {
+                "answer_id": null,
+                "end": 4,
+                "source_kind": "original_query",
+                "start": 0,
+                "text": "삼성전자"
+              },
+              "negated": false,
+              "text": "삼성전자"
+            }
+          ],
+          "negated_views": [],
+          "original_query": "삼성전자 수급",
+          "query_sha256": "d7e940e7cdd5837a3bc9d104ff189c48c364a81f50594d4e7f194dec8a8d490b",
+          "requested_views": [
+            "flow"
+          ],
+          "revision": 0,
+          "unresolved_slots": []
+        },
+        "partial": false,
+        "plan_hash": "12ebc9efaa9dcb0d27cf7aa356c2d242e3a5f0a4611e55ee527e399ea54aee37",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow"
+        ],
+        "required_waivers": [],
+        "resolution": {
+          "candidates": [],
+          "reason": "exact_match",
+          "status": "resolved",
+          "stock": {
+            "market": "KOSPI",
+            "stock_code": "005930",
+            "stock_name": "삼성전자"
+          }
+        },
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [
+          "flow"
+        ],
+        "status": "ready"
+      }
+    },
+    {
+      "draft": {
+        "answers": [],
+        "candidate_ref": null,
+        "original_query": "수급",
+        "revision": 0,
+        "selected_ticker": null
+      },
+      "meaning_status": "incomplete",
+      "plan": {
+        "candidate_ref": null,
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [],
+          "conditions": [],
+          "interpretation_source": "deterministic",
+          "mentions": [],
+          "negated_views": [],
+          "original_query": "수급",
+          "query_sha256": "84b8ccb86b780d00ec30d523ec58fc283fef0a0f5d238c295d697a51589136ed",
+          "requested_views": [
+            "flow"
+          ],
+          "revision": 0,
+          "unresolved_slots": [
+            "stock"
+          ]
+        },
+        "partial": false,
+        "plan_hash": "a8ef3fbee2b28f8ff705a6102552d5f810dc644cf2f6b38ab0d334d5884e742e",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow"
+        ],
+        "required_waivers": [],
+        "resolution": null,
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [],
+        "status": "needs_clarification"
+      }
+    },
+    {
+      "draft": {
+        "answers": [
+          {
+            "answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "slot": "stock",
+            "value": "삼성전자"
+          }
+        ],
+        "candidate_ref": null,
+        "original_query": "수급",
+        "revision": 1,
+        "selected_ticker": null
+      },
+      "meaning_status": "deterministic",
+      "plan": {
+        "candidate_ref": "906e3d382c0e9cfa7ac4cff3d0517c774e502556d5d83b0e2af17cdc1356639e",
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [
+            {
+              "answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "slot": "stock",
+              "value": "삼성전자"
+            }
+          ],
+          "conditions": [],
+          "interpretation_source": "deterministic",
+          "mentions": [
+            {
+              "evidence": {
+                "answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "end": 4,
+                "source_kind": "clarification_answer",
+                "start": 0,
+                "text": "삼성전자"
+              },
+              "negated": false,
+              "text": "삼성전자"
+            }
+          ],
+          "negated_views": [],
+          "original_query": "수급",
+          "query_sha256": "84b8ccb86b780d00ec30d523ec58fc283fef0a0f5d238c295d697a51589136ed",
+          "requested_views": [
+            "flow"
+          ],
+          "revision": 1,
+          "unresolved_slots": []
+        },
+        "partial": false,
+        "plan_hash": "9ea67c2f4387534d6c7a8697d4d17aaae407c2012510b1e498226e7990fd34d6",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow"
+        ],
+        "required_waivers": [],
+        "resolution": {
+          "candidates": [],
+          "reason": "exact_match",
+          "status": "resolved",
+          "stock": {
+            "market": "KOSPI",
+            "stock_code": "005930",
+            "stock_name": "삼성전자"
+          }
+        },
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [
+          "flow"
+        ],
+        "status": "ready"
+      }
+    },
+    {
+      "draft": {
+        "answers": [
+          {
+            "answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "slot": "views",
+            "value": "수급"
+          }
+        ],
+        "candidate_ref": null,
+        "original_query": "삼성전자 주식 정보",
+        "revision": 1,
+        "selected_ticker": null
+      },
+      "meaning_status": "deterministic",
+      "plan": {
+        "candidate_ref": "b1f8a2b80a180055686a335db0db23f09de4720aa86beb6e6a832259841d7c62",
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [
+            {
+              "answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "slot": "views",
+              "value": "수급"
+            }
+          ],
+          "conditions": [],
+          "interpretation_source": "deterministic",
+          "mentions": [
+            {
+              "evidence": {
+                "answer_id": null,
+                "end": 4,
+                "source_kind": "original_query",
+                "start": 0,
+                "text": "삼성전자"
+              },
+              "negated": false,
+              "text": "삼성전자"
+            }
+          ],
+          "negated_views": [],
+          "original_query": "삼성전자 주식 정보",
+          "query_sha256": "e68d7297e78645e4fea4828788fff623082d381ac1cda01ecfb927a469c3d82b",
+          "requested_views": [
+            "flow"
+          ],
+          "revision": 1,
+          "unresolved_slots": []
+        },
+        "partial": false,
+        "plan_hash": "48da04b3c5bd5ea951ed98a9f34023f83fa275f1324a99eb5694ae2fd21c8563",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow"
+        ],
+        "required_waivers": [],
+        "resolution": {
+          "candidates": [],
+          "reason": "exact_match",
+          "status": "resolved",
+          "stock": {
+            "market": "KOSPI",
+            "stock_code": "005930",
+            "stock_name": "삼성전자"
+          }
+        },
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [
+          "flow"
+        ],
+        "status": "ready"
+      }
+    },
+    {
+      "draft": {
+        "answers": [],
+        "candidate_ref": null,
+        "original_query": "삼성전자 외국인 수급과 차트",
+        "revision": 0,
+        "selected_ticker": null
+      },
+      "meaning_status": "deterministic",
+      "plan": {
+        "candidate_ref": "1aa46958303f6331f23c3521529f7b1878194f33aa174d9489059912378b5e72",
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [],
+          "conditions": [
+            {
+              "condition_id": "c8c4f35e76aaa5c5e6fb609ea",
+              "disposition": "unsupported",
+              "domain": "flow",
+              "evidence": [
+                {
+                  "answer_id": null,
+                  "end": 8,
+                  "source_kind": "original_query",
+                  "start": 5,
+                  "text": "외국인"
+                }
+              ],
+              "kind": "focus",
+              "value": "외국인"
+            }
+          ],
+          "interpretation_source": "deterministic",
+          "mentions": [
+            {
+              "evidence": {
+                "answer_id": null,
+                "end": 4,
+                "source_kind": "original_query",
+                "start": 0,
+                "text": "삼성전자"
+              },
+              "negated": false,
+              "text": "삼성전자"
+            }
+          ],
+          "negated_views": [],
+          "original_query": "삼성전자 외국인 수급과 차트",
+          "query_sha256": "46b7ddb4f594b55c2a6df6b419da044fe141a736f7c67c47f46136bbbc9e2e88",
+          "requested_views": [
+            "flow",
+            "technical"
+          ],
+          "revision": 0,
+          "unresolved_slots": []
+        },
+        "partial": true,
+        "plan_hash": "a65a0752ce36090dae9cd11979f29ce6b850f3161fe636b801b009bf76240231",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow",
+          "technical"
+        ],
+        "required_waivers": [
+          "c8c4f35e76aaa5c5e6fb609ea"
+        ],
+        "resolution": {
+          "candidates": [],
+          "reason": "exact_match",
+          "status": "resolved",
+          "stock": {
+            "market": "KOSPI",
+            "stock_code": "005930",
+            "stock_name": "삼성전자"
+          }
+        },
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [
+          "flow"
+        ],
+        "status": "scope_confirmation"
+      }
+    },
+    {
+      "draft": {
+        "answers": [],
+        "candidate_ref": "67d5e5dae1e51fdf82fa8bb02db4a38aed1e2e49527e75c6687775cdc4640f0e",
+        "original_query": "005930 수급",
+        "revision": 0,
+        "selected_ticker": "005930"
+      },
+      "meaning_status": "deterministic",
+      "plan": {
+        "candidate_ref": "67d5e5dae1e51fdf82fa8bb02db4a38aed1e2e49527e75c6687775cdc4640f0e",
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [],
+          "conditions": [],
+          "interpretation_source": "deterministic",
+          "mentions": [
+            {
+              "evidence": {
+                "answer_id": null,
+                "end": 6,
+                "source_kind": "original_query",
+                "start": 0,
+                "text": "005930"
+              },
+              "negated": false,
+              "text": "005930"
+            }
+          ],
+          "negated_views": [],
+          "original_query": "005930 수급",
+          "query_sha256": "2beddbb110eb9d93baa4ae81a77eaf522548aa23d77a3c9677146889ba54a70d",
+          "requested_views": [
+            "flow"
+          ],
+          "revision": 0,
+          "unresolved_slots": []
+        },
+        "partial": false,
+        "plan_hash": "e63f0c1a76d0f9f04e7c65130ebece91b0786ae992a60b259216579739368afb",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow"
+        ],
+        "required_waivers": [],
+        "resolution": {
+          "candidates": [],
+          "reason": "exact_match",
+          "status": "resolved",
+          "stock": {
+            "market": "KOSPI",
+            "stock_code": "005930",
+            "stock_name": "합성 삼성전자"
+          }
+        },
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [
+          "flow"
+        ],
+        "status": "ready"
+      }
+    },
+    {
+      "draft": {
+        "answers": [],
+        "candidate_ref": null,
+        "original_query": "005930 수급",
+        "revision": 0,
+        "selected_ticker": null
+      },
+      "meaning_status": "deterministic",
+      "plan": {
+        "candidate_ref": "67d5e5dae1e51fdf82fa8bb02db4a38aed1e2e49527e75c6687775cdc4640f0e",
+        "capabilities": [
+          {
+            "connected": true,
+            "reason": "connected_flow",
+            "view": "flow"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "technical"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "fundamental"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "macro"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "industry"
+          },
+          {
+            "connected": false,
+            "reason": "news_excluded",
+            "view": "news"
+          },
+          {
+            "connected": false,
+            "reason": "not_connected",
+            "view": "overview"
+          }
+        ],
+        "frame": {
+          "answers": [],
+          "conditions": [],
+          "interpretation_source": "deterministic",
+          "mentions": [
+            {
+              "evidence": {
+                "answer_id": null,
+                "end": 6,
+                "source_kind": "original_query",
+                "start": 0,
+                "text": "005930"
+              },
+              "negated": false,
+              "text": "005930"
+            }
+          ],
+          "negated_views": [],
+          "original_query": "005930 수급",
+          "query_sha256": "2beddbb110eb9d93baa4ae81a77eaf522548aa23d77a3c9677146889ba54a70d",
+          "requested_views": [
+            "flow"
+          ],
+          "revision": 0,
+          "unresolved_slots": []
+        },
+        "partial": false,
+        "plan_hash": "4acfac961024c8759250ca32c026cfbb4400b4ae0b6e12d0fc537eb015bdcc28",
+        "policy_version": "supervisor.flow-core.2",
+        "requested_views": [
+          "flow"
+        ],
+        "required_waivers": [],
+        "resolution": {
+          "candidates": [
+            {
+              "market": "KOSPI",
+              "match_type": "ambiguous_group",
+              "stock_code": "005930",
+              "stock_name": "합성 삼성전자"
+            },
+            {
+              "market": "KOSPI",
+              "match_type": "ambiguous_group",
+              "stock_code": "000660",
+              "stock_name": "합성 하이닉스"
+            }
+          ],
+          "reason": "ambiguous_alias",
+          "status": "ambiguous",
+          "stock": null
+        },
+        "schema_version": "supervisor.core.v1",
+        "selected_views": [],
+        "status": "needs_stock_selection"
+      }
+    }
+  ]
+}

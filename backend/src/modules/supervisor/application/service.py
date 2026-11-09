@@ -123,7 +123,7 @@ class SupervisorService:
         return binding
 
     async def post(self, body, request_id):
-        digest = sha(body.model_dump(mode='json'))
+        digest = sha(body.model_dump(mode='json', exclude={'preparation_id'} if body.preparation_id is None else set()))
         key = hashlib.sha256(body.client_key.encode()).digest()
         try:
             await self.session.rollback()
@@ -131,6 +131,15 @@ class SupervisorService:
             row = await repo.by_key(self.session, self.principal.user_id, key)
             binding = repo.snapshot(row) if row is not None else None
             await self.session.commit()
+            if binding is None and body.preparation_id is not None:
+                from src.modules.supervisor.application.preparation_service import PreparationService
+                from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+                try:
+                    binding = await PreparationService(self.session, principal=self.principal, client=self.client, resolver_factory=self.resolver_factory).adopt(body, digest, key)
+                except PreparationConflict as error:
+                    raise CoreError(error.code, error.status) from None
+                self.checked(binding, digest)
+                await self.session.commit()
             if binding is None:
                 plan = await self.prepare(body.draft, request_id)
                 if plan.plan_hash != body.expected_plan_hash:

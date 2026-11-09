@@ -171,3 +171,8 @@ jobs:
       - name: Protected Supervisor core unit
         run: |
           env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" core-unit
+
+      - name: Meaning protected self
+        run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" meaning-self
+      - name: Meaning protected unit
+        run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" meaning-unit

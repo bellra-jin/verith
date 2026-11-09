@@ -595,3 +595,15 @@ test('CF022 split metadata retains pinned code provenance and strict worker snap
  const observation=diagnostics.describe({lexical:path.join(cap.packageSnapshot.sourceRoot,'src/core.ts'),canonical:path.join(cap.packageSnapshot.sourceRoot,'src/core.ts')});
  assert.equal(observation.knownCopy,false);
 });
+
+test('CF023 controller/resource selection adds no adjacent input and leaves the worker guard unchanged',async()=>{
+ const c=await import('../../scripts/check-local-ports.mjs');
+ for(const source of ['src/features/supervisor/components/supervisor-session.tsx','tests/fixtures/cf023-supervisor-meaning.json']){
+  assert.ok(c.coreExact.includes(source));assert.equal(c.sourceAllowed(source),true);assert.equal(c.sourceAllowed(source+'.adjacent'),false);assert.ok(c.readSource(process.cwd(),source).length);
+ }
+ const {createHash}=await import('node:crypto');
+ assert.equal(createHash('sha256').update(fs.readFileSync('scripts/safe-checks-guard.cjs')).digest('hex'),'3a9cb45bc865d560612ccd5876f060c69aa0abe5ff635576888781d9efe7d3ee');
+ const fixture=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8');
+ assert.match(fixture,/SupervisorSession/);assert.match(fixture,/cf019-ready.json/);assert.match(fixture,/server.closeAllConnections/);assert.match(fixture,/590000/);assert.doesNotMatch(fixture,/function FakeApp|verified:true|next\/navigation/);
+ assert.equal(c.reactProductionFiles.length,5);
+});

@@ -13,3 +13,12 @@ class UnavailableMeaningGateway:
 
     async def extract(self, draft):
         raise MeaningUnavailable('Meaning extraction unavailable')
+
+
+class UnavailableCandidateGateway:
+    async def propose(self, draft, *, attempt_id=None):
+        raise MeaningUnavailable()
+
+
+class CounterUnavailable(MeaningUnavailable):
+    """No proved full-input mapping or counting-fee bound; sending is closed."""

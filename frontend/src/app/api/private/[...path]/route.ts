@@ -7,7 +7,7 @@ async function handle(request: Request, context:{params:Promise<{path:string[]}>
   const route=path.join('/');
   if(route==='supervisor/core'||route.startsWith('supervisor/core/')){
     if(!flowAnalysisEnabled())return coreProxyError('FEATURE_UNAVAILABLE',403);
-    const exact=request.method==='POST'&&['supervisor/core/prepare','supervisor/core/requests'].includes(route)||request.method==='GET'&&/^supervisor\/core\/requests\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(route);
+    const exact=request.method==='POST'&&['supervisor/core/prepare','supervisor/core/requests','supervisor/core/preparations'].includes(route)||request.method==='GET'&&/^supervisor\/core\/requests\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(route)||['GET','DELETE'].includes(request.method)&&/^supervisor\/core\/preparations\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(route);
     if(!exact||new URL(request.url).search)return coreProxyError('INPUT_INVALID',422);
     return sessionProxy(request,'/api/'+route);
   }

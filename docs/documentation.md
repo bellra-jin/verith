@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-023 근거 있는 의미 보완과 고정 준비
+
+[정책/준비 계약](contracts/supervisor-core-v1.md)·[production 채팅 디자인](design/supervisor-core.md)·[직접 검사와 한계](work/CF-023-supervisor-meaning.md)를 따른다. 새 policy2는 원문/답변 span의 닫힌 의미 대응·잔여를 검증하고, 한 번 준비한 계획을 저장해 기존 owned Flow binding에 단일 소비한다. policy1 hash/replay와 기존 Flow 회계는 유지한다. 실제 OpenAI key 전송 및 계수 요금 상한 증거는 pending이며 production gateway는 닫혀 있다. 합성 보호 검사/소유 PG와 실제 모델 품질·1440/390 브라우저 수용·원격 CI를 구분한다.
+
 ## CF-022 Supervisor core와 단일 채팅
 
 [core 계약](contracts/supervisor-core-v1.md)·[단일 채팅 디자인](design/supervisor-core.md)·[직접 검사/차단 기록](work/CF-022-supervisor-core.md)을 따른다. 원질문/조건·명확화·부분 범위 동의와 기존 owned Flow를 연결한다. production 의미 모델은 unavailable이다. Frontend caller의 metadata/source provenance 분리와 기존 strict worker 수용, self3/unit49·Frontend82/type/lint·소유 PG13그룹은 직접 통과했으며 실제 브라우저·모델 미검증과 원격 CI 대기는 구분한다. 후속 Technical·재무·멀티턴/운영 활성화를 이번 범위로 섞지 않는다.

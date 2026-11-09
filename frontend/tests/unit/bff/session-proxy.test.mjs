@@ -175,3 +175,19 @@ test('CF022 exact core BFF keeps16KiB/64KiB bounds and prepare16s versus confirm
  assert.deepEqual(timeouts,[16000,145000]);assert.equal(seen[0][1].headers.get('x-flow-service-token'),null);assert.equal(seen[0][1].headers.get('x-user-id'),null);assert.equal(seen[0][1].headers.get('x-csrf-token'),'fresh');
  const oversized=await proxy.sessionProxy(new Request('https://app.unit/api/supervisor/core/prepare',{method:'POST',body:'x'.repeat(16385),headers:{'Content-Type':'application/json'}}),'/api/supervisor/core/prepare');assert.equal(oversized.status,422);assert.equal(seen.length,2);
 });
+
+test('CF023 exact preparation POST/GET/DELETE preserve CSRF/owner boundary and sixteen-second deadline',async()=>{
+ const seen=[],timeouts=[],id=randomUUID();
+ const handlers=load('src/app/api/private/[...path]/route.ts',async(url,init)=>{seen.push([url,init]);return Response.json({safe:true});},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout:ms=>{timeouts.push(ms);return new AbortController().signal;}}});
+ const base='supervisor/core/preparations',ctx=p=>({params:Promise.resolve({path:p.split('/')})});
+ for(const [method,target] of [['POST',base],['GET',base+'/'+id],['DELETE',base+'/'+id]]){
+  const request=new Request('https://app.unit/api/private/'+target,{method,headers:{'content-type':'application/json',Cookie:'synthetic',Origin:'https://app.unit','x-csrf-token':'fresh','x-user-id':'spoof','x-flow-service-token':'spoof'},...(method==='POST'?{body:'{}'}:{})});
+  const response=await handlers[method](request,ctx(target));assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'private, no-store');
+ }
+ assert.deepEqual(timeouts,[16000,16000,16000]);assert.equal(seen.length,3);
+ for(const [url,init] of seen){assert.match(url,/^http:\/\/backend.unit\/api\/supervisor\/core\/preparations/);assert.equal(init.redirect,'manual');assert.equal(init.headers.get('x-csrf-token'),'fresh');assert.equal(init.headers.get('x-flow-service-token'),null);assert.equal(init.headers.get('x-user-id'),null);}
+ for(const [method,target] of [['GET',base],['DELETE',base],['POST',base+'/'+id],['GET',base+'/'+id+'/extra'],['POST',base+'?x=1']]){
+  assert.equal((await handlers[method](new Request('https://app.unit/api/private/'+target,{method}),ctx(target.split('?')[0]))).status,422);
+ }
+ assert.equal(seen.length,3);
+});

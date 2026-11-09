@@ -1,4 +1,4 @@
-"""Pure bounded semantic input and source evidence; no provider dependencies."""
+"""Backend mirror of strict core contracts; never imports AI production modules."""
 from __future__ import annotations
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
@@ -126,14 +126,13 @@ class CoreMeaningFrame(CoreStrict):
         sources = {a.answer_id: a.value for a in self.answers}
         for e in [m.evidence for m in self.mentions] + [e for c in self.conditions for e in c.evidence]:
             text = self.original_query if e.source_kind == 'original_query' and e.answer_id is None else sources.get(e.answer_id) if e.source_kind == 'clarification_answer' else None
-            if text is None or text[e.start:e.end] != e.text:
+            if text is None or not 0 <= e.start < e.end <= len(text) or text[e.start:e.end] != e.text:
                 raise CoreCoreInvalid()
         if any((m.text != m.evidence.text for m in self.mentions)):
             raise CoreCoreInvalid()
         return self
-'Common MeaningFrame, typed Plan and observation Outcome.'
 from typing import Literal, Generic, TypeVar
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 class CoreStock(CoreStrict):
     stock_code: str = Field(pattern='^[0-9]{6}$')
@@ -176,7 +175,7 @@ class CoreCapability(CoreStrict):
 
 class CorePlan(CoreStrict):
     schema_version: Literal['supervisor.core.v1']
-    policy_version: Literal['supervisor.flow-core.1']
+    policy_version: Literal['supervisor.flow-core.1', 'supervisor.flow-core.2']
     frame: CoreMeaningFrame
     resolution: CoreResolution | None
     candidate_ref: str | None = Field(pattern='^[0-9a-f]{64}$')
@@ -198,6 +197,7 @@ class CoreConfirm(CoreStrict):
     draft: CoreDraft
     expected_plan_hash: str = Field(pattern='^[0-9a-f]{64}$')
     consent: CoreConsent
+    preparation_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
 class CoreViewOutcome(CoreStrict):
     view: View
@@ -231,7 +231,7 @@ class CoreOutcome(CoreStrict):
     flow: CoreFlowReference | None
 
 class CoreSafeError(CoreStrict):
-    code: Literal['INPUT_INVALID', 'AUTH_REQUIRED', 'AUTH_REQUEST_INVALID', 'FEATURE_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESULT_CONTRACT_INVALID', 'PLAN_STALE', 'IDEMPOTENCY_CONFLICT', 'RESOURCE_NOT_FOUND', 'HANDOFF_EXPIRED', 'USAGE_LIMIT_EXCEEDED']
+    code: Literal['INPUT_INVALID', 'AUTH_REQUIRED', 'AUTH_REQUEST_INVALID', 'FEATURE_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESULT_CONTRACT_INVALID', 'PLAN_STALE', 'IDEMPOTENCY_CONFLICT', 'RESOURCE_NOT_FOUND', 'HANDOFF_EXPIRED', 'USAGE_LIMIT_EXCEEDED', 'PREPARATION_EXPIRED', 'PREPARATION_DELETED', 'PREPARATION_CONSUMED', 'MEANING_LIMIT_EXCEEDED']
     message: Literal['Supervisor request unavailable'] = 'Supervisor request unavailable'
 T = TypeVar('T')
 
@@ -263,36 +263,83 @@ class CoreInternalOutput(CoreStrict):
 def semantic_plan_hash(value):
     return sha({k: v for (k, v) in value.items() if k != 'plan_hash'})
 
-def candidate_ref(draft, resolution):
+def candidate_ref(draft, resolution, *, policy_version=POLICY):
     value = resolution.model_dump(mode='json') if isinstance(resolution, CoreResolution) else resolution
     value = {**value, 'candidates': sorted(value['candidates'], key=lambda c: c['stock_code'])}
-    return sha(dict(policy=POLICY, draft=draft.model_dump(mode='json', exclude={'selected_ticker', 'candidate_ref'}), resolution=value))
+    return sha(dict(policy=policy_version, draft=draft.model_dump(mode='json', exclude={'selected_ticker', 'candidate_ref'}), resolution=value))
 
 def validate_plan(value, draft):
     plan = CorePlan.model_validate(value)
     if plan.frame.original_query != draft.original_query or plan.frame.answers != draft.answers or plan.frame.revision != draft.revision or (semantic_plan_hash(value) != plan.plan_hash) or (plan.requested_views != plan.frame.requested_views):
         raise CoreCoreInvalid()
     return plan
-CoreInvalid = CoreCoreInvalid
-Strict = CoreStrict
-Answer = CoreAnswer
-Draft = CoreDraft
-Evidence = CoreEvidence
-Mention = CoreMention
-Condition = CoreCondition
-MeaningFrame = CoreMeaningFrame
-Stock = CoreStock
-Candidate = CoreCandidate
-Resolution = CoreResolution
-Capability = CoreCapability
-Plan = CorePlan
-Consent = CoreConsent
-Confirm = CoreConfirm
-ViewOutcome = CoreViewOutcome
-FlowReference = CoreFlowReference
-EffectiveScope = CoreEffectiveScope
-Outcome = CoreOutcome
-SafeError = CoreSafeError
-Envelope = CoreEnvelope
-InternalInput = CoreInternalInput
-InternalOutput = CoreInternalOutput
+
+class CoreMeaningRunInput(CoreInternalInput):
+    policy_version: Literal['supervisor.flow-core.2']
+    attempt_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+
+class CoreMeaningRunOutput(CoreInternalOutput):
+    meaning_status: Literal['deterministic', 'supplemented', 'unavailable', 'rejected', 'incomplete', 'unsupported', 'counter_unavailable']
+    semantic_spec_sha256: str = Field(pattern='^[0-9a-f]{64}$')
+CoreInvalid=CoreCoreInvalid
+Strict=CoreStrict
+Answer=CoreAnswer
+Draft=CoreDraft
+Evidence=CoreEvidence
+Mention=CoreMention
+Condition=CoreCondition
+MeaningFrame=CoreMeaningFrame
+Stock=CoreStock
+Candidate=CoreCandidate
+Resolution=CoreResolution
+Capability=CoreCapability
+Plan=CorePlan
+Consent=CoreConsent
+Confirm=CoreConfirm
+ViewOutcome=CoreViewOutcome
+FlowReference=CoreFlowReference
+EffectiveScope=CoreEffectiveScope
+Outcome=CoreOutcome
+SafeError=CoreSafeError
+Envelope=CoreEnvelope
+InternalInput=CoreInternalInput
+InternalOutput=CoreInternalOutput
+MeaningRunInput=CoreMeaningRunInput
+MeaningRunOutput=CoreMeaningRunOutput
+
+MEANING_SPEC={'version': 'supervisor.meaning.v1', 'policy': 'supervisor.flow-core.2', 'model': 'gpt-5.4-mini-2026-03-17', 'price': {'id': 'openai.gpt-5.4-mini.standard.2026-11-10.v1', 'currency': 'USD', 'input_nano_per_token': 750, 'cached_nano_per_token': 75, 'output_nano_per_token': 4500}, 'caps': {'input_tokens': 16384, 'output_tokens': 2048, 'attempts': 2, 'count_requests': 2, 'generation_requests': 2, 'attempt_reserve_nano': 50000000, 'unit_budget_nano': 100000000, 'request_bytes': 65536, 'count_response_bytes': 8192, 'response_bytes': 65536, 'candidate_bytes': 16384, 'provider_seconds': 5, 'verifier_seconds': 60}, 'service_tier': 'default', 'store': False, 'prompt_sha256': '519c74093fd260c424e68feb877c963c318815237d5177522054ce2b1d728f39', 'schema_sha256': '1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'}
+MEANING_SPEC_SHA256='25b89563288cd120ba25dcbfe02b97f615b2115b5268df1a0f24fbd63f77c57a'
+
+
+class CorePreparationRequest(CoreStrict):
+    prepare_key: str = Field(pattern=UUID_PATTERN)
+    draft: CoreDraft
+    parent_preparation_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+
+    @model_validator(mode='after')
+    def selection(self):
+        if (self.parent_preparation_id is None) != (self.draft.selected_ticker is None):
+            raise CoreInvalid()
+        return self
+
+
+class CorePreparationView(CoreStrict):
+    preparation_id: str = Field(pattern=UUID_PATTERN)
+    state: Literal['pending','ready','clarification','unsupported','failed','unknown','expired','deleted','consumed']
+    plan: CorePlan | None
+    created_at: str
+    expires_at: str
+    meaning_status: Literal['pending','deterministic','supplemented','unavailable','rejected','incomplete','unsupported','counter_unavailable','failed','unknown','expired','deleted','consumed']
+    consumed_binding_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+
+    @model_validator(mode='after')
+    def sensitive(self):
+        if (self.state in {'ready','clarification','unsupported'}) != (self.plan is not None):
+            raise CoreInvalid()
+        if self.state != 'consumed' and self.consumed_binding_id is not None:
+            raise CoreInvalid()
+        return self
+
+
+PreparationRequest = CorePreparationRequest
+PreparationView = CorePreparationView

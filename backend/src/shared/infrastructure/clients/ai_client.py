@@ -61,6 +61,7 @@ class AIClient:
         self._fundamental_token = service_token
 
     async def plan_supervisor_core(self,payload:dict)->dict:
+        # Policy2/attempt fields travel only inside the authenticated typed core envelope.
         from urllib.parse import urlsplit
         from src.modules.supervisor.domain.contracts import canonical,decode
         try:

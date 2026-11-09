@@ -15,10 +15,12 @@ from src.modules.auth.application.session_service import AuthenticationRequired
 from src.modules.flow.application.analysis_service import AnalysisError
 from src.modules.flow.api.run_schemas import PRIVATE, http_request_id
 from src.modules.supervisor.application.service import SupervisorService, CoreError
-from src.modules.supervisor.api.schemas import Confirm, Draft, PATH, PrepareResponse, RequestResponse
+from src.modules.supervisor.application.preparation_service import PreparationService
+from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+from src.modules.supervisor.api.schemas import Confirm, Draft, PATH, PrepareResponse, RequestResponse, PreparationRequest, PreparationResponse
 
 def failure(scope, code, status):
-    known = {'INPUT_INVALID', 'AUTH_REQUIRED', 'AUTH_REQUEST_INVALID', 'FEATURE_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESULT_CONTRACT_INVALID', 'PLAN_STALE', 'IDEMPOTENCY_CONFLICT', 'RESOURCE_NOT_FOUND', 'HANDOFF_EXPIRED', 'USAGE_LIMIT_EXCEEDED'}
+    known = {'INPUT_INVALID', 'AUTH_REQUIRED', 'AUTH_REQUEST_INVALID', 'FEATURE_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESULT_CONTRACT_INVALID', 'PLAN_STALE', 'IDEMPOTENCY_CONFLICT', 'RESOURCE_NOT_FOUND', 'HANDOFF_EXPIRED', 'USAGE_LIMIT_EXCEEDED', 'PREPARATION_EXPIRED', 'PREPARATION_DELETED', 'PREPARATION_CONSUMED', 'MEANING_LIMIT_EXCEEDED'}
     if code not in known:
         code = 'SERVICE_UNAVAILABLE'
         status = 503
@@ -44,6 +46,8 @@ class CoreRoute(APIRoute):
                     return failure(request.scope, 'RESULT_CONTRACT_INVALID', 502)
                 response.headers.update(PRIVATE)
                 return response
+            except PreparationConflict as e:
+                return failure(request.scope, e.code, e.status)
             except CoreError as e:
                 return failure(request.scope, e.code, e.status)
             except AnalysisError as e:
@@ -63,7 +67,7 @@ class CoreRoute(APIRoute):
 router = APIRouter(prefix=PATH, route_class=CoreRoute, tags=['supervisor-core'])
 
 async def service(request: Request, session=Depends(get_session, scope='function')):
-    principal = await request_principal(request, session, mutation=request.method == 'POST')
+    principal = await request_principal(request, session, mutation=request.method in {'POST', 'DELETE'})
     return SupervisorService(session, principal=principal, client=AIClient(settings.AI_SERVICE_URL, 125, service_token=settings.FLOW_SERVICE_TOKEN))
 
 def envelope(request, data):
@@ -82,3 +86,24 @@ async def post(request: Request, body: Confirm, response: Response, value=Depend
 @router.get('/requests/{supervisor_id}', response_model=RequestResponse)
 async def get(request: Request, supervisor_id: UUID, value=Depends(service)):
     return envelope(request, await value.get(supervisor_id))
+
+
+def preparations(value):
+    return PreparationService(value.session, principal=value.principal, client=value.client, resolver_factory=value.resolver_factory)
+
+
+@router.post('/preparations', response_model=PreparationResponse)
+async def prepare_once(request: Request, body: PreparationRequest, response: Response, value=Depends(service)):
+    result = await preparations(value).post(body, http_request_id(request.scope))
+    response.status_code = 202 if result['state'] == 'pending' else 200
+    return envelope(request, result)
+
+
+@router.get('/preparations/{preparation_id}', response_model=PreparationResponse)
+async def preparation_get(request: Request, preparation_id: UUID, value=Depends(service)):
+    return envelope(request, await preparations(value).get(preparation_id))
+
+
+@router.delete('/preparations/{preparation_id}', response_model=PreparationResponse)
+async def preparation_delete(request: Request, preparation_id: UUID, value=Depends(service)):
+    return envelope(request, await preparations(value).delete(preparation_id))

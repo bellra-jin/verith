@@ -61,3 +61,11 @@ test('CF022 default-off private core never forwards or opens legacy Supervisor',
  let calls=0;const routes=load('src/app/api/private/[...path]/route.ts',{fetchSpy:async()=>{calls++;}});
  const r=await routes.POST(new Request('http://localhost:3200/api/private/supervisor/core/prepare',{method:'POST'}),{params:Promise.resolve({path:['supervisor','core','prepare']})});assert.equal(r.status,403);assert.equal(calls,0);assert.equal((await r.json()).schema_version,'supervisor.core.v1');
 });
+
+test('CF023 preparation methods stay default-off with the same closed VM config registry',async()=>{
+ let calls=0;const routes=load('src/app/api/private/[...path]/route.ts',{fetchSpy:async()=>{calls++;throw Error('must not send');}});
+ for(const [method,parts] of [['POST',['supervisor','core','preparations']],['GET',['supervisor','core','preparations','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']],['DELETE',['supervisor','core','preparations','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa']]]){
+  const response=await routes[method](new Request('http://localhost:3200/api/private/'+parts.join('/'),{method}),{params:Promise.resolve({path:parts})});assert.equal(response.status,403);assert.equal((await response.json()).schema_version,'supervisor.core.v1');
+ }
+ assert.equal(calls,0);
+});

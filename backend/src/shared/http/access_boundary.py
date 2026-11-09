@@ -97,14 +97,14 @@ class AccessBoundary:
             from src.shared.config import settings
             from src.modules.auth.api.router import configured
             from src.modules.supervisor.api.router import failure
-            from src.modules.supervisor.api.schemas import Draft,Confirm
+            from src.modules.supervisor.api.schemas import Draft,Confirm,PreparationRequest
             from src.modules.supervisor.domain.contracts import decode
             if not settings.FLOW_ANALYSIS_ENABLED:await failure(scope,'FEATURE_UNAVAILABLE',403)(scope,receive,send);return
             if not configured():await failure(scope,'AUTH_REQUIRED',401)(scope,receive,send);return
             timeout=140 if method=='POST' and path=='/api/supervisor/core/requests' else 15
             deadline=asyncio.get_running_loop().time()+timeout;scope.setdefault('state',{})['core_deadline']=deadline
             try:
-                if scope.get('query_string') or not (method=='POST' and path in {'/api/supervisor/core/prepare','/api/supervisor/core/requests'} or method=='GET' and re.fullmatch(r'/api/supervisor/core/requests/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',path)):raise ValueError()
+                if scope.get('query_string') or not (method=='POST' and path in {'/api/supervisor/core/prepare','/api/supervisor/core/requests','/api/supervisor/core/preparations'} or method=='GET' and re.fullmatch(r'/api/supervisor/core/requests/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',path) or method in {'GET','DELETE'} and re.fullmatch(r'/api/supervisor/core/preparations/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',path)):raise ValueError()
                 raw=None
                 if method=='POST':
                     h=scope.get('headers',[]);ct=[v for k,v in h if k.lower()==b'content-type'];cl=[v for k,v in h if k.lower()==b'content-length']
@@ -117,7 +117,7 @@ class AccessBoundary:
                             if len(raw)+len(msg.get('body',b''))>16384:raise ValueError()
                             raw.extend(msg.get('body',b''))
                             if not msg.get('more_body',False):break
-                    (Draft if path.endswith('/prepare') else Confirm).model_validate(decode(raw))
+                    (Draft if path.endswith('/prepare') else PreparationRequest if path.endswith('/preparations') else Confirm).model_validate(decode(raw))
             except TimeoutError:await failure(scope,'DEADLINE_EXCEEDED',504)(scope,receive,send);return
             except (ValueError,TypeError,UnicodeError,RecursionError):await failure(scope,'INPUT_INVALID',422)(scope,receive,send);return
             delivered=False

@@ -94,3 +94,5 @@ __all__ = [
 
 # Supervisor confirmed plan bindings
 from db.models.supervisor.request_binding import SupervisorRequestBinding
+
+from db.models.supervisor.preparation import SupervisorMeaningPreparation, SupervisorMeaningEpoch  # noqa: F401

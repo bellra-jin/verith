@@ -1,7 +1,7 @@
 """Immutable confirmed plan -> fixed Flow body; never an execution ledger."""
 from datetime import datetime
 from uuid import UUID
-from sqlalchemy import DateTime, Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint
+from sqlalchemy import DateTime, Text, LargeBinary, ForeignKey, CheckConstraint, UniqueConstraint, ForeignKeyConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 from db.base import Base
@@ -23,4 +23,5 @@ class SupervisorRequestBinding(Base):
     confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     handoff_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint('owner_user_id', 'client_key_digest', name=KEY_CONSTRAINT), *[CheckConstraint(v, name='supervisor_binding_' + k) for (k, v) in CHECKS.items()])
+    preparation_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    __table_args__ = (UniqueConstraint('id','owner_user_id',name='uq_supervisor_binding_id_owner'), UniqueConstraint('preparation_id',name='uq_supervisor_binding_preparation'), ForeignKeyConstraint(['preparation_id','owner_user_id'],['supervisor_meaning_preparations.id','supervisor_meaning_preparations.owner_user_id'],name='fk_supervisor_preparation_owner',ondelete='RESTRICT',deferrable=True,initially='DEFERRED',use_alter=True), UniqueConstraint('owner_user_id', 'client_key_digest', name=KEY_CONSTRAINT), *[CheckConstraint(v, name='supervisor_binding_' + k) for (k, v) in CHECKS.items()])

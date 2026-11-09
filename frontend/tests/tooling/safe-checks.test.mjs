@@ -607,3 +607,146 @@ test('CF023 controller/resource selection adds no adjacent input and leaves the 
  assert.match(fixture,/SupervisorSession/);assert.match(fixture,/cf019-ready.json/);assert.match(fixture,/server.closeAllConnections/);assert.match(fixture,/590000/);assert.doesNotMatch(fixture,/function FakeApp|verified:true|next\/navigation/);
  assert.equal(c.reactProductionFiles.length,5);
 });
+
+test('CF025 one raw URL validator rejects normalization/query bypasses and canonicalizes only UUIDs',async()=>{
+ const {validateFixtureTarget:parse}=await import('../helpers/supervisor-fixture.mjs');
+ const id='AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA';
+ assert.deepEqual(parse('/research'),{status:200,kind:'research',id:null});assert.equal(parse('/research?supervisor_id='+id).id,id.toLowerCase());
+ for(const value of ['/research?','/research?supervisor_id=','/research?supervisor_id=no','/research?supervisor_id='+id+'&supervisor_id='+id,'/research?unknown=x','/research?analysis_id='+id,'/research?supervisor_id='+id+'&','/research??supervisor_id='+id,'//research','https://example.invalid/research','/research#x','/research\\x','/research\n','/research/../research','/%72esearch','/research?%73upervisor_id='+id,'/research?'+('한'.repeat(1000))])assert.equal(parse(value).status,422);
+ assert.equal(parse('/').status,404);assert.equal(parse('/other').status,404);assert.equal(parse('/bundle.js?x=1').status,422);
+});
+
+test('CF025 actual route adapter preserves initial/reloaded IDs, back navigation and listener cleanup',async()=>{
+ const {fixtureAdapter}=await import('../helpers/supervisor-fixture.mjs');
+ const id='AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA',ids=[],listeners=new Map(),calls=[];let invalid=0,outside=0;
+ const location={pathname:'/research',search:'?supervisor_id='+id,hash:''};
+ const history=Object.fromEntries(['pushState','replaceState'].map(name=>[name,(_state,_title,href)=>{calls.push([name,href]);const u=new URL(href,'http://127.0.0.1:1234');Object.assign(location,{pathname:u.pathname,search:u.search,hash:u.hash});}]));
+ const adapter=fixtureAdapter({origin:'http://127.0.0.1:1234',location,history,events:{addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:(k,v)=>{assert.equal(listeners.get(k),v);listeners.delete(k);}},onChange:id=>ids.push(id),onInvalid:()=>invalid++,onOutside:()=>outside++});
+ assert.equal(adapter.initial.id,id.toLowerCase());const cleanup=adapter.listen();assert.equal(calls.length,0);
+ adapter.navigate('/research',true);assert.equal(ids.at(-1),null);adapter.navigate('http://127.0.0.1:1234/research?supervisor_id='+id);assert.equal(ids.at(-1),id.toLowerCase());
+ Object.assign(location,{search:'',hash:''});listeners.get('popstate')();assert.equal(ids.at(-1),null);
+ location.search='?analysis_id='+id;listeners.get('popstate')();assert.equal(invalid,1);
+ adapter.navigate('https://example.invalid/research');adapter.navigate('/research?supervisor_id=x');assert.equal(invalid,3);
+ adapter.navigate('/reports/flow/'+id);assert.equal(outside,1);assert.equal(calls.length,2);cleanup();assert.equal(listeners.size,0);
+});
+
+test('CF025 terminal exact lexical body closes duplicate/extra keys and never trusts client counters',async()=>{
+ const {terminalAction}=await import('../helpers/supervisor-fixture.mjs');
+ for(const action of ['complete','cancel'])assert.equal(terminalAction(' { "action" : "'+action+'" } '),action);
+ for(const value of ['null','[]','{}','{"action":"complete","action":"cancel"}','{"action":"complete","counts":{}}','{"action":"other"}','{"action":true}','{"action":"complete"} trailing'])assert.throws(()=>terminalAction(value),/terminal body invalid/);
+});
+
+test('CF025 actual lifecycle freezes after the first transition, drains before receipt/ACK/close',async()=>{
+ const {createFixtureTerminal}=await import('../helpers/supervisor-fixture.mjs');
+ for(const action of ['complete','cancel','timed_out','failed']){
+  const events=[];let release;const terminal=createFixtureTerminal({stopWork(){events.push('fenced');},drain:()=>new Promise(resolve=>{release=()=>{events.push('drained');resolve();};}),writeReceipt:async value=>{events.push('receipt');return value;},ack:async()=>events.push('ack'),close:async()=>events.push('close')});
+  let count=0;const delayed=()=>{if(terminal.open())count++;};delayed();const done=terminal.finish(action);delayed();
+  assert.equal(count,1);assert.equal(terminal.phase,'closing');await assert.rejects(terminal.finish(action==='complete'?'cancel':'complete'),/conflict/);release();
+  const receipt=await done;assert.equal(receipt.state,{complete:'completed',cancel:'cancelled',timed_out:'timed_out',failed:'failed'}[action]);assert.deepEqual(events,['fenced','drained','receipt','ack','close']);assert.equal(terminal.open(),false);await assert.rejects(terminal.finish(action),/conflict/);
+ }
+});
+
+test('CF025 drain/receipt/ACK/close failures never become completed; cleanup failure propagates',async()=>{
+ const {createFixtureTerminal}=await import('../helpers/supervisor-fixture.mjs');
+ for(const fail of ['drain','receipt','ack','close']){
+  const events=[];const invoke=async name=>{events.push(name);if(name===fail)throw Error('synthetic '+fail);};
+  const terminal=createFixtureTerminal({stopWork(){},drain:()=>invoke('drain'),writeReceipt:()=>invoke('receipt'),ack:()=>invoke('ack'),close:()=>invoke('close')});
+  await assert.rejects(terminal.finish('complete'),new RegExp('synthetic '+fail));assert.equal(terminal.phase,'failed');assert.ok(events.includes('close'));
+  if(fail==='drain')assert.equal(events.includes('receipt'),false);
+ }
+});
+
+function cf025Receipt(action='complete'){
+ return {schema:'cf025.terminal.v1',nonce:'synthetic',pid:123,cwd:'/owned',port:1234,action,state:action==='complete'?'completed':'cancelled',counts:{sessionGET:1,preparePOST:1,prepareGET:0,prepareDELETE:0,confirmPOST:1,outcomeGET:1,model:0,provider:0},browser:Object.fromEntries(['react_mount','interaction','storage_navigation','visual_1440','visual_390','focus'].map(k=>[k,'not_executed']))};
+}
+test('CF025 parent actual callbacks require receipt plus both settlements and postcheck; unknown ACK stays unknown',async()=>{
+ const {collectFixtureTerminal,validateTerminalReceipt}=await import('../helpers/supervisor-fixture.mjs');
+ for(const action of ['complete','cancel'])for(const ack of ['received','unknown']){
+  const receipt=cf025Receipt(action),events=[];
+  const result=await collectFixtureTerminal({probe:Promise.resolve({action,ack,counts:receipt.counts,http:{reload:'passed'}}),child:Promise.resolve('exit0'),proof:receipt,readReceipt:async()=>{events.push('receipt');return receipt;},postcheck:async()=>events.push('postcheck')});
+  assert.equal(result.ack,ack);assert.equal(result.receipt.state,receipt.state);assert.deepEqual(events,['postcheck','receipt']);assert.equal(result.browser.react_mount,'not_executed');
+ }
+ for(const mutation of [r=>r.pid++,r=>r.nonce='wrong',r=>r.counts.provider++,r=>r.browser.interaction='passed',r=>r.state='cancelled',r=>r.extra=true]){const receipt=cf025Receipt(),proof={...receipt};mutation(receipt);assert.throws(()=>validateTerminalReceipt(receipt,proof),/mismatch/);}
+ const receipt=cf025Receipt(),base={probe:Promise.resolve({action:'complete',ack:'received',counts:receipt.counts,http:{}}),child:Promise.resolve(),proof:receipt,readReceipt:async()=>receipt,postcheck:async()=>{}};
+ await assert.rejects(collectFixtureTerminal({...base,child:Promise.reject(Error('early child failure'))}),/child settlement/);
+ await assert.rejects(collectFixtureTerminal({...base,probe:Promise.reject(Error('probe failure'))}),/probe failed/);
+ await assert.rejects(collectFixtureTerminal({...base,postcheck:async()=>{throw Error('postcheck failure');}}),/postcheck failure/);
+ await assert.rejects(collectFixtureTerminal({...base,readReceipt:async()=>{throw Error('receipt absent');}}),/receipt absent/);
+});
+
+test('CF025 parent reads only a new private regular terminal file; symlinks/hardlinks/mode/size fail',async()=>{
+ const {readTerminal,fixtureSources}=await import('../../scripts/check-local-ports.mjs');
+ const {createHash}=await import('node:crypto');
+ assert.equal(createHash('sha256').update(fs.readFileSync('scripts/safe-checks-guard.cjs')).digest('hex'),'3a9cb45bc865d560612ccd5876f060c69aa0abe5ff635576888781d9efe7d3ee');
+ assert.equal(fixtureSources.length,5);for(const source of fixtureSources)assert.equal(sourceAllowed(source),true);
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'cf025-receipt-')),file=path.join(root,'cf025-terminal.json'),value=cf025Receipt();
+ try{
+  fs.writeFileSync(file,JSON.stringify(value),{mode:0o600,flag:'wx'});assert.deepEqual(readTerminal(root),value);
+  fs.chmodSync(file,0o644);assert.throws(()=>readTerminal(root),/identity/);fs.chmodSync(file,0o600);
+  fs.linkSync(file,path.join(root,'second'));assert.throws(()=>readTerminal(root),/identity/);fs.unlinkSync(path.join(root,'second'));
+  fs.renameSync(file,path.join(root,'saved'));fs.symlinkSync(path.join(root,'saved'),file);assert.throws(()=>readTerminal(root),/identity/);fs.unlinkSync(file);
+  fs.writeFileSync(file,'x'.repeat(16385),{mode:0o600});assert.throws(()=>readTerminal(root),/identity/);
+ }finally{fs.rmSync(root,{recursive:true});}
+});
+
+test('CF025 stopped signal only resumes after final terminal phase, never closing',async()=>{
+ const {createFixtureTerminal}=await import('../helpers/supervisor-fixture.mjs');
+ for(const action of ['complete','cancel']){
+  let signal;const stopped=new Promise(resolve=>{signal=resolve;});const events=[];
+  const terminal=createFixtureTerminal({stopWork(){},drain:async()=>{},writeReceipt:async v=>v,ack:async()=>{},close:async()=>{events.push('close');await Promise.resolve();},settled(){events.push(terminal.phase);signal();}});
+  const task=terminal.finish(action);await stopped;
+  assert.equal(terminal.phase,action==='complete'?'completed':'cancelled');assert.deepEqual(events,['close',terminal.phase]);await task;
+ }
+});
+
+test('CF025 unknown ACK means absent response only; received HTTP/JSON/state errors remain failures',async()=>{
+ const {terminalAcknowledgement,FixtureProtocolError}=await import('../helpers/supervisor-fixture.mjs');
+ await assert.rejects(terminalAcknowledgement(async()=>{throw new FixtureProtocolError();},'complete'),/ACK invalid/);
+ assert.equal((await terminalAcknowledgement(async()=>{throw Error('transport uncertain');},'complete')).ack,'unknown');
+ for(const action of ['complete','cancel'])assert.equal((await terminalAcknowledgement(async()=>({status:200,json:()=>({state:action==='complete'?'completed':'cancelled'})}),action)).ack,'received');
+ for(const response of [{status:409,json:()=>({state:'completed'})},{status:500,json:()=>({state:'completed'})},{status:200,json:()=>{throw Error('malformed');}},{status:200,json:()=>({state:'cancelled'})},{status:200,json:()=>({state:'completed',extra:true})}])await assert.rejects(terminalAcknowledgement(async()=>response,'complete'),/ACK invalid/);
+});
+
+test('CF025 actual fixture body receiver pauses oversize without destroying its response socket and bounds body wait',async()=>{
+ const {EventEmitter}=await import('node:events');
+ const source=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8'),tree=ts.createSourceFile('fixture.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const node=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='readBody');assert.ok(node);
+ for(const kind of ['valid','oversize','timeout','aborted']){
+  const req=new EventEmitter();let paused=0,cleared=0,fire,delay;
+  req.pause=()=>paused++;req.destroy=()=>{throw Error('must not destroy socket before fixed error response');};
+  const read=vm.runInNewContext(node.getText(tree)+';readBody;',{Buffer,Promise,Date:{now:()=>0},expires:590000,setTimeout(fn,ms){fire=fn;delay=ms;return 1;},clearTimeout(){cleared++;}},{timeout:100});
+  const task=read(req,1024);
+  assert.equal(delay,5000);
+  if(kind==='valid'){req.emit('data',Buffer.from('{"action":"complete"}'));req.emit('end');assert.equal(await task,'{"action":"complete"}');assert.equal(paused,0);}
+  else{if(kind==='oversize')req.emit('data',Buffer.alloc(1025));else if(kind==='timeout')fire();else req.emit('aborted');await assert.rejects(task,/body invalid/);assert.equal(paused,1);}
+  assert.equal(cleared,1);for(const event of ['data','end','error','aborted'])assert.equal(req.listenerCount(event),0);
+ }
+});
+
+test('CF025 actual probe absolute deadline survives trickled response bytes, independent of inactivity timer',async()=>{
+ const {EventEmitter}=await import('node:events');
+ const source=fs.readFileSync('tests/integration/supervisor/chat-http-readiness.test.mjs','utf8'),tree=ts.createSourceFile('probe.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const node=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='request');assert.ok(node);
+ let responseCallback,absolute,delay,inactivity,cleared=0;
+ const req=new EventEmitter();req.end=()=>{};req.setTimeout=ms=>{inactivity=ms;};req.destroy=error=>{req.emit('error',error);req.emit('close');};
+ const requests=new Set(),read=vm.runInNewContext(node.getText(tree)+';request;',{Buffer,Promise,Date:{now:()=>0},deadline:60000,origin:'http://127.0.0.1:1234',proof:{port:1234},requests,http:{request(options,callback){assert.equal(options.hostname,'127.0.0.1');assert.equal(options.port,1234);responseCallback=callback;return req;}},setTimeout(fn,ms){absolute=fn;delay=ms;return 1;},clearTimeout(){cleared++;}},{timeout:100});
+ const task=read('/research');const res=new EventEmitter();res.statusCode=200;res.headers={};responseCallback(res);
+ for(let n=0;n<5;n++)res.emit('data',Buffer.from('a'));
+ assert.equal(delay,5000);assert.equal(inactivity,5000);absolute();await assert.rejects(task,/absolute request deadline/);assert.equal(cleared,1);assert.equal(requests.size,0);
+});
+
+test('CF025 actual probe received response cap/parser violations cannot be recovered as unknown terminal ACK',async()=>{
+ const {EventEmitter}=await import('node:events');
+ const {FixtureProtocolError,terminalAcknowledgement}=await import('../helpers/supervisor-fixture.mjs');
+ const source=fs.readFileSync('tests/integration/supervisor/chat-http-readiness.test.mjs','utf8'),tree=ts.createSourceFile('probe.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const node=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='request');
+ for(const kind of ['size','parser','incomplete']){
+  let respond;const req=new EventEmitter();req.end=()=>{};req.setTimeout=()=>{};req.destroy=e=>{req.emit('error',e);req.emit('close');};
+  const request=vm.runInNewContext(node.getText(tree)+';request;',{Buffer,Promise,Date:{now:()=>0},deadline:60000,origin:'http://127.0.0.1:1234',proof:{port:1234},requests:new Set(),FixtureProtocolError,http:{request(_options,callback){respond=callback;return req;}},setTimeout(){return 1;},clearTimeout(){}},{timeout:100});
+  const job=terminalAcknowledgement(()=>request('/fixture-finish',{method:'POST',body:'{"action":"complete"}',limit:1}),'complete');
+  if(kind==='size'){const res=new EventEmitter();res.statusCode=200;res.headers={};respond(res);res.emit('data',Buffer.from('xx'));}
+  else if(kind==='parser')req.destroy(Object.assign(Error('synthetic parser failure'),{code:'HPE_INVALID_STATUS'}));
+  else req.destroy(Object.assign(Error('incomplete response'),{code:'ECONNRESET'}));
+  if(kind==='incomplete')assert.equal((await job).ack,'unknown');else await assert.rejects(job,/ACK invalid/);
+ }
+});

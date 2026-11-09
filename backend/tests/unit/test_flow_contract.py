@@ -177,8 +177,8 @@ def assert_public_contract_compatibility(values):
         assert projected['schemas']['CommonResponse[DemoRunView]']==DemoResponse.model_json_schema()
         del projected['schemas']['CommonResponse[DemoRunView]']
     components = api["components"]["schemas"]
-    assert list(ErrorCode) == [ErrorCode(value) for value in LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS]
-    assert components["ErrorCode"]["enum"] == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS
+    assert list(ErrorCode) == [ErrorCode(value) for value in LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS + ["USAGE_LIMIT_EXCEEDED"]]
+    assert components["ErrorCode"]["enum"] == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS + ["USAGE_LIMIT_EXCEEDED"]
     for path, method, status in [("/api/flow/runs", "post", "202"), ("/api/flow/runs/{run_id}", "get", "200")]:
         operation = api["paths"][path]
         assert set(operation) == {method}
@@ -219,10 +219,13 @@ def assert_public_contract_compatibility(values):
     if generic_name in projected["schemas"]:
         assert projected["schemas"][generic_name] == RunResponse.model_json_schema()
         del projected["schemas"][generic_name]
-    # Reviewed existing model definitions only. A fourth value or changed pointer fails.
+    # Inspect the one approved CF-018 enum addition before projecting to the old baseline.
+    from src.modules.flow.domain.execution import ERRORS
+    assert ERRORS[ErrorCode.USAGE_LIMIT_EXCEEDED] == (429, "분석 사용 한도에 도달했습니다. 기존 결과는 조회할 수 있습니다.")
+    # All other values/fields remain exact; an unapproved value or pointer fails.
     for name in ("CommonResponse", "SafeError", "FlowRunState"):
         enum = projected["schemas"][name]["$defs"]["ErrorCode"]["enum"]
-        assert enum == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS
+        assert enum == LEGACY_ERROR_CODES + CF003_ENUM_ADDITIONS + ["USAGE_LIMIT_EXCEEDED"]
         projected["schemas"][name]["$defs"]["ErrorCode"]["enum"] = LEGACY_ERROR_CODES[:]
     digests = {name: hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
                for name, value in projected.items()}

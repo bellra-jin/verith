@@ -10,6 +10,9 @@ from typing import Annotated,Literal
 SPEC = {'engine': 'flow.graph.v1', 'model': 'gpt-5.4-mini', 'provider': 'openai', 'payload_schema': 1, 'input_schema': 1, 'prompt': 'flow.explain.fact-selection.v1', 'prompt_sha256': '9e8a04b6d7d0f534d54552e78ed489cb74f3cc7160fbd379b030758ae891406c', 'config_sha256': '91c95356110d0294051eb7871bfb06100ebd003ccb0f2da33c6add2b0594b637', 'config': 'flow.analysis.fact-selection.v1', 'deadline_seconds': 120, 'provider_timeout_seconds': 20, 'sdk_retries': 0, 'dispatch_retries': 0, 'explain_regenerations': 2, 'max_completion_tokens': 1000, 'policy': 'flow.fact-selection.v1', 'policy_sha256': '4cf9fa103736cc5c852eb96cbb1f42253ad875f89bccf3dcd47a43bb76f6fd22'}
 
 
+USAGE_SPEC={'version': 'flow.usage.v1', 'price_id': 'openai.gpt-5.4-mini.standard.2026-11-09.v1', 'currency': 'USD', 'model': 'gpt-5.4-mini', 'response_models': ['gpt-5.4-mini', 'gpt-5.4-mini-2026-03-17'], 'input_token_cap': 400000, 'output_token_cap': 1000, 'openai_call_cap': 3, 'prompt_byte_cap': 32768, 'output_byte_cap': 16384, 'input_nano': 750, 'cached_nano': 75, 'output_nano': 4500, 'kis_token_cap': 2, 'kis_data_cap': 4, 'kis_retry_in_data_cap': 2, 'n': 1, 'service_tier': 'default'}
+SPEC={**SPEC,'usage':USAGE_SPEC}
+
 UNITS={'supply': {'date': 'ISO8601-date', '개인': 'million_KRW', '외국인': 'million_KRW', '기관': 'million_KRW', '거래대금': 'million_KRW', '증권': 'million_KRW', '투자신탁': 'million_KRW', '사모펀드': 'million_KRW', '은행': 'million_KRW', '보험': 'million_KRW', '종금': 'million_KRW', '기금': 'million_KRW', '외국인순매매량': 'share', '기관순매매량': 'share'}, 'quotes': {'date': 'ISO8601-date', '종가': 'KRW', '전일비': 'KRW', '등락률': 'percent', '거래량': 'share', '외국인한도소진율': 'percent'}, 'ownership': {'date': 'ISO8601-date', 'value': 'percent'}}
 
 def canonical(value):return json.dumps(value,ensure_ascii=False,allow_nan=False,sort_keys=True,separators=(',',':'))

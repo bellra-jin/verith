@@ -92,7 +92,7 @@ export function AnalysisRequest({userId,analysisId,initialView,onAccountChange}:
    if(result.state==='running')timer.current=setTimeout(()=>{if(revision===generation.current)readRequest.current(false,result.analysis_id);},0);
   }catch(e){if(revision===generation.current&&intent.current.accepts(ticket)){
    if(e instanceof AnalysisHttpError&&e.status===401){invalidate();onAccountChange(null);}
-   setError('응답을 확인하지 못했습니다. 입력과 멱등키를 유지합니다. 동일 요청 확인은 버튼을 누르세요.');
+   setError(e instanceof AnalysisHttpError&&e.code==='USAGE_LIMIT_EXCEEDED'?e.message:'응답을 확인하지 못했습니다. 입력과 멱등키를 유지합니다. 동일 요청 확인은 버튼을 누르세요.');
   }}finally{clearTimeout(timeout);intent.current.finish(ticket);if(revision===generation.current){busyRef.current=false;setBusy(false);}}
  }
  function startNew(){invalidate();pending.current=null;try{sessionStorage.removeItem(pendingKey(userId));window.location.assign('/research');}catch{setBlocked(true);setError('요청 기록을 변경할 수 없습니다.');}}

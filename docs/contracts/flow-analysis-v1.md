@@ -15,3 +15,7 @@ Backend는 종목 이름·후보 기준일·실행 사양과 120초 claim을 고
 AI 내부 HTTP는 JSON/UTF-8/크기/DTO 입력 오류만 `422 INPUT_INVALID`로 처리한다. 유효 요청 뒤 일반 engine/provider 오류와 `ValueError`는 `503 SERVICE_UNAVAILABLE`, deadline·KIS/SDK timeout은 `504 DEADLINE_EXCEEDED`, 결과 추출·snapshot binding·canonical/크기 계약 위반은 `502 RESULT_CONTRACT_INVALID`다. gate/auth·no-store와 실제 sync 작업 종료까지 slot을 보유하는 조건은 유지한다.
 
 Backend의 Flow client는 서비스 주소/포트/token 설정 오류와 내부401/403·일반5xx를 unavailable로 구분한다. 명시적 bounded JSON의502 `error.code=RESULT_CONTRACT_INVALID`와 잘못된200 결과만 contract 오류다. 기존400/409/422 입력 거부는 validation 오류다. coordinator는 validation→`failed/DATA_INSUFFICIENT`, contract→`failed/RESULT_CONTRACT_INVALID`, unavailable/timeout→`unknown/SERVICE_UNAVAILABLE`를 기록한다. 이는 AI 내부 상태와 Backend 분석 POST/GET의 기존200/202 응답을 구분하는 설명이며 자동 재실행을 추가하지 않는다. [합성·실제 실행 결과와 남은 한계](../work/CF-017-flow-error-classification.md)를 따른다.
+
+## CF-018 새 실행의 한도·관측 비용
+
+새 Flow admission은 [사용 한도 v1](flow-usage-v1.md)의 필수 control을 거친다. 미설정은 새 실행만 닫고 기존 key·GET·snapshot-only 복구와 legacy NULL은 보존한다. 동일키 게시 복구는 추가 예약/dispatch가 없다. 새 usage metadata는 additive SPEC에만 요구하며 과거 row.spec_json에 새 정책을 소급하지 않는다. 수신 usage의 회계 transaction은 결과 공개/auth·deadline·게시 transaction과 별개다. 새 고정 오류 `USAGE_LIMIT_EXCEEDED`는429이며 v1 payload/기존 enum과 오류 의미는 보존한다.

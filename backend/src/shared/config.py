@@ -16,6 +16,7 @@ API/AI 서버/JWT 등 나머지 설정은 각 담당자가 후속 브랜치에�
 from __future__ import annotations
 
 import pathlib
+from typing import Any
 
 from pydantic import Field
 
@@ -50,6 +51,12 @@ class Settings(BaseSettings):
     FUNDAMENTAL_SERVICE_TOKEN: str = ""
     FLOW_ANALYSIS_ENABLED: bool = False
     FLOW_SERVICE_TOKEN: str = Field(default="", repr=False)
+    # Raw, non-secret values: parse only on a new Flow admission, never startup/GET.
+    FLOW_USAGE_LIMITS_ENABLED: Any = "false"
+    FLOW_SUPPORTED_TICKERS: Any = ""
+    FLOW_USER_DAILY_REQUEST_LIMIT: Any = "0"
+    FLOW_SERVICE_DAILY_REQUEST_LIMIT: Any = "0"
+    FLOW_SERVICE_DAILY_BUDGET_USD: Any = "0"
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = Field(default="", repr=False)
     AUTH_REDIRECT_URI: str = ""

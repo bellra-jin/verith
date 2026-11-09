@@ -129,3 +129,23 @@ test('stopped observation after invalidation rechecks session but cannot verify 
  const source=fs.readFileSync(path.join(root,'src/features/flow/components/analysis-request.tsx'),'utf8');assert.ok(source.includes('setVerified(!result.stopped)'));assert.ok(source.includes('!checked||!verified'));assert.ok(source.includes('knownIdRef.current!==null&&!canReplay(knownIdRef.current,pending.current)'));assert.ok(source.includes('setReplayable(canReplay(id,loaded))'));assert.ok(source.includes("disabled={busy||reading==='manual'||!(analysisId||knownId)}"));
  const recovered=await h.observeAnalysis(b,a,new AbortController().signal,()=>true);assert.equal(recovered.view.state,'stored');assert.equal(stateGets,1);assert.equal(p.permit(6000),false);
 });
+
+
+test('only exact safe 429 code survives; fixed notice preserves request and GET recovery',async()=>{
+ const h=load(),secret='private-provider-message';
+ const response=()=>Response.json({request_id:a,data:null,error:{code:'USAGE_LIMIT_EXCEEDED',message:secret}},{status:429});
+ await assert.rejects(()=>h.wire(response()),e=>e instanceof h.AnalysisHttpError&&e.status===429&&e.code==='USAGE_LIMIT_EXCEEDED'&&!e.message.includes(secret));
+ for(const error of [{code:'UNREVIEWED',message:secret},{code:'USAGE_LIMIT_EXCEEDED',message:secret,extra:true},{code:'USAGE_LIMIT_EXCEEDED',message:123}]){
+  await assert.rejects(()=>h.wire(Response.json({request_id:a,data:null,error},{status:429})),e=>e.code===null&&!e.message.includes(secret));
+ }
+ const before=JSON.stringify(pending);let posts=0,gets=0;
+ const session={user_id:a.toLowerCase(),csrf_token:'synthetic'};
+ const client=load(async(url,options)=>{
+  if(url==='/api/auth/session')return Response.json(session);
+  if(options?.method==='POST'){posts++;return response();}
+  gets++;return Response.json({request_id:a,data:view('stored'),error:null});
+ });
+ await assert.rejects(()=>client.postAnalysis(pending,'synthetic',new AbortController().signal),e=>e.code==='USAGE_LIMIT_EXCEEDED');
+ assert.equal(JSON.stringify(pending),before);assert.equal(posts,1);
+ const recovered=await client.getAnalysis(a,new AbortController().signal);assert.equal(recovered.state,'stored');assert.equal(gets,1);assert.equal(posts,1);
+});

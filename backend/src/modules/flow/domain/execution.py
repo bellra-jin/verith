@@ -86,9 +86,11 @@ class ErrorCode(StrEnum):
     FEATURE_UNAVAILABLE = "FEATURE_UNAVAILABLE"
     AUTH_REQUEST_INVALID = "AUTH_REQUEST_INVALID"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    USAGE_LIMIT_EXCEEDED = "USAGE_LIMIT_EXCEEDED"
 
 
 ERRORS: dict[ErrorCode, tuple[int, str]] = {
+    ErrorCode.USAGE_LIMIT_EXCEEDED: (429, "분석 사용 한도에 도달했습니다. 기존 결과는 조회할 수 있습니다."),
     ErrorCode.AUTH_REQUIRED: (401, "인증이 필요합니다."),
     ErrorCode.RESOURCE_NOT_FOUND: (404, "리소스를 찾을 수 없습니다."),
     ErrorCode.IDEMPOTENCY_CONFLICT: (409, "같은 멱등키에 다른 입력이 사용되었습니다."),

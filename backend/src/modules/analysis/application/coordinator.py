@@ -16,9 +16,10 @@ from src.modules.analysis.application.ports import AnalysisAdapter,AnalysisProfi
 from src.shared.infrastructure.clients.ai_client import AIContractError,AIValidationError
 
 class AnalysisCoordinator:
-    def __init__(self,session,*,principal,client,profile:AnalysisProfile):
+    def __init__(self,session,*,principal,client,profile:AnalysisProfile,usage_control=None):
         self.session,self.principal,self.client=session,principal,client
         self.profile=profile
+        self.usage_control=usage_control
 
     def _adapter(self,row):
         return self.profile.adapter(row,self.principal.user_id)
@@ -54,17 +55,21 @@ class AnalysisCoordinator:
             row=await self.profile.repository.by_key(self.session,self.principal.user_id,key)
             winner=False;token=None
             if row is None:
+                extra=self.usage_control.new_values(body,{'id':uuid4()}) if self.usage_control is not None else {}
                 stock=await self.session.scalar(select(Stock).where(Stock.stock_code==body.ticker))
-                if stock is None or not stock.stock_name or not stock.stock_name.strip():raise self._error('INPUT_INVALID')
+                if stock is None or not stock.stock_name or not stock.stock_name.strip():raise self._error('FEATURE_UNAVAILABLE' if self.usage_control is not None else 'INPUT_INVALID')
                 name=stock.stock_name.strip()
                 if len(name)>256 or any(ord(c)<32 for c in name):raise self._error('INPUT_INVALID')
                 stamp=await self.session.scalar(select(func.clock_timestamp()));token=secrets.token_bytes(32)
-                row=await self.profile.repository.admit(self.session,dict(id=uuid4(),owner_user_id=self.principal.user_id,
+                values=dict(id=extra['budget_reservation_id'] if extra else uuid4(),owner_user_id=self.principal.user_id,
                     operation=self.profile.operation,key_digest=key,input_fingerprint=fingerprint,admission_request_id=request_id,
                     attempt_id=uuid4(),ticker=body.ticker,stock_name=name,**self.profile.input_clock(body,stamp),
                     request_json=normalized,spec_json=self.profile.spec_json(),claim_digest=hashlib.sha256(token).digest(),
-                    started_at=stamp,deadline_at=stamp+timedelta(seconds=self.profile.deadline_seconds),state='running'))
+                    started_at=stamp,deadline_at=stamp+timedelta(seconds=self.profile.deadline_seconds),state='running')
+                values.update(extra)
+                row=await self.profile.repository.admit(self.session,values)
                 winner=row is not None
+                if winner and self.usage_control is not None:await self.usage_control.reserve(row,stamp)
                 if row is None:row=await self.profile.repository.by_key(self.session,self.principal.user_id,key)
             if row is None:raise self._error('SERVICE_UNAVAILABLE')
             known=row.id
@@ -96,6 +101,12 @@ class AnalysisCoordinator:
             return await self._failed(known,token,'failed','DATA_INSUFFICIENT')
         except Exception:
             return await self._failed(known,token,'unknown','SERVICE_UNAVAILABLE')
+        if self.usage_control is not None:
+            try:await self.usage_control.observe(row,token,response)
+            except asyncio.CancelledError:
+                await self._rollback();raise
+            except Exception:
+                await self._rollback();raise self._error('SERVICE_UNAVAILABLE',known) from None
         return await self._receive(known,token,response)
 
     async def _failed(self,id,token,state,code):

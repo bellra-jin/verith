@@ -9,7 +9,8 @@ export function canonicalUuid(v:string):string{if(!uuid(v))throw Error('Invalid 
 const record=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 const stamp=(v:unknown):v is string=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}T/.test(v)&&Number.isFinite(Date.parse(v));
 
-export class AnalysisHttpError extends Error {constructor(public readonly status:number){super('분석 요청을 확인할 수 없습니다.');}}
+export type AnalysisSafeCode='USAGE_LIMIT_EXCEEDED';
+export class AnalysisHttpError extends Error {constructor(public readonly status:number,public readonly code:AnalysisSafeCode|null=null){super(code==='USAGE_LIMIT_EXCEEDED'?'분석 사용 한도에 도달했습니다. 입력과 멱등키는 유지됩니다. 기존 결과는 상태 다시 조회로 확인할 수 있습니다.':'분석 요청을 확인할 수 없습니다.');}}
 export function pendingKey(user:string):string{return 'verith.flow.analysis.v1:'+canonicalUuid(user);}
 export function pendingValue(v:unknown):PendingAnalysis{
  if(!record(v)||Object.keys(v).some(k=>!['ticker','question','as_of','idempotency_key','analysis_id'].includes(k))||
@@ -40,7 +41,10 @@ export function analysisView(v:unknown):AnalysisView{
 export async function wire(response:Response):Promise<AnalysisView>{
  let value:unknown;try{value=await response.json();}catch{throw new AnalysisHttpError(502);}
  if(!record(value)||!uuid(value.request_id)||Object.keys(value).sort().join(',')!=='data,error,request_id')throw new AnalysisHttpError(502);
- if(!response.ok)throw new AnalysisHttpError(response.status);
+ if(!response.ok){
+  const limited=response.status===429&&value.data===null&&record(value.error)&&Object.keys(value.error).sort().join(',')==='code,message'&&value.error.code==='USAGE_LIMIT_EXCEEDED'&&typeof value.error.message==='string';
+  throw new AnalysisHttpError(response.status,limited?'USAGE_LIMIT_EXCEEDED':null);
+ }
  if(value.error!==null)throw new AnalysisHttpError(502);
  const view=analysisView(value.data);
  if(response.status!==(['stored','failed'].includes(view.state)?200:202))throw new AnalysisHttpError(502);

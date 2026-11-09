@@ -137,3 +137,9 @@ downgrade는 flow_runs ACCESS EXCLUSIVE → flow_input_snapshots ACCESS EXCLUSIV
 ## CF-015 · c15001a7e0001
 
 Parent `c12001a7e0001`. Adds nullable Fundamental root owner, ownerful partial index uniqueness, and a separate guarded analysis ledger. No legacy backfill. Duplicate ownerful indexes abort upgrade. Downgrade locks and refuses any nonempty ledger/owned root/index. Only disposable attested PG is tested by the focused checker.
+
+## CF-018 새 한도 원장 migration
+
+`20261109_c18001a7e0001_flow_usage_limits.py`의 parent는 `c15001a7e0001`이다. 새3테이블과 nullable Flow 예산 참조를 한 transaction에서 추가하며 old NULL을 재해석/backfill하지 않는다. 새 run/예약은 같은 transaction에서 만들고 deferred 참조·기간 검증을 commit까지 통과해야 한다.
+
+downgrade는 Flow와 회계 테이블을 잠근 뒤 세 회계 테이블 중 하나라도 nonempty이면 고정 거부한다. 기간/예약/호출 데이터를 삭제해 downgrade를 통과시키지 않는다. 모두 empty일 때만 새 참조/테이블/함수를 제거하고 legacy Flow 행·원 snapshot/ID/SHA를 보존한다. 운영 DB 실행 안내나 권한이 아니며, 새 소유 격리 PG의 DDL rollback/empty downgrade·nonempty refusal 결과는 [작업 기록](../../docs/work/CF-018-flow-usage-limits.md)에 별도로 기록한다.

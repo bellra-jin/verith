@@ -49,11 +49,20 @@ def explain(signals: dict, gate2: GateResult, meta: dict, *, bank=None, executio
     template = _PROMPT_PATH.read_text(encoding="utf-8")
     prompt = template.replace("{{facts}}", _facts_to_text(signals, meta, bank))
 
-    kwargs = {} if execution_context is None else {'timeout':execution_context.timeout('openai'), 'max_retries':0, 'max_completion_tokens':1000}
+    prompt_bytes=len(prompt.encode('utf8'))
+    if prompt_bytes>32768:raise ValueError('Flow prompt exceeds byte cap')
+    kwargs = {'n':1,'service_tier':'default'} if execution_context is None else {'timeout':execution_context.timeout('openai'), 'max_retries':0, 'max_completion_tokens':1000, 'n':1, 'service_tier':'default'}
     try:
         llm = ChatOpenAI(model=_MODEL, temperature=_TEMPERATURE, **kwargs)
+        identity=execution_context.begin_call('openai','completion',input_bytes=prompt_bytes) if execution_context is not None else None
         response = llm.invoke(prompt)
+        if execution_context is not None:execution_context.openai_observed(identity,response)
     except APITimeoutError:
         raise DeadlineExceeded("OpenAI deadline exceeded") from None
+    content=response.content
+    if not isinstance(content,str):raise ValueError('Flow output is not text')
+    output_bytes=len(content.encode('utf8'))
+    if execution_context is not None:execution_context.output_observed(identity,output_bytes)
+    if output_bytes>16384:raise ValueError('Flow output exceeds byte cap')
     if execution_context is not None: execution_context.check('openai_result')
-    return response.content
+    return content

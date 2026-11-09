@@ -315,7 +315,7 @@ async def _verify(proof):
             return flow_result(request,context,report_id=flow_chosen)
         flow=flow_app(flow_engine);original_client=flow_router.AIClient
         def flow_client(*args,**kwargs):return original_client(*args,**kwargs,transport=httpx.ASGITransport(app=flow))
-        with patch.object(settings,'FLOW_ANALYSIS_ENABLED',True),patch.object(settings,'FLOW_SERVICE_TOKEN',TOKEN),patch.object(flow_router,'AIClient',flow_client),patch.dict('os.environ',{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':TOKEN}):
+        with patch.object(settings,'FLOW_USAGE_LIMITS_ENABLED','true'),patch.object(settings,'FLOW_SUPPORTED_TICKERS','005930'),patch.object(settings,'FLOW_USER_DAILY_REQUEST_LIMIT','1000'),patch.object(settings,'FLOW_SERVICE_DAILY_REQUEST_LIMIT','1000'),patch.object(settings,'FLOW_SERVICE_DAILY_BUDGET_USD','10000'),patch.object(settings,'FLOW_ANALYSIS_ENABLED',True),patch.object(settings,'FLOW_SERVICE_TOKEN',TOKEN),patch.object(flow_router,'AIClient',flow_client),patch.dict('os.environ',{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':TOKEN}):
             flow_body=body()|{'as_of':'2026-11-08T00:00:00Z'}
             first_flow=response(await call('POST','/api/flow/analyses',value=flow_body),200)
             check(first_flow['state']=='stored' and flow_calls[first_flow['analysis_id']]==1,'CF015 Flow coordinator publication')

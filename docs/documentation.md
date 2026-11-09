@@ -1,8 +1,12 @@
 # 문서 목록과 권위
 
+## CF-018 Flow 사용 한도·보수 예약
+
+[사용 한도 v1](contracts/flow-usage-v1.md)·[구현/검증 상태](work/CF-018-flow-usage-limits.md)를 따른다. 인증 사용자·Flow 실행·실제 호출 단위의 제한이며 미설정은 새 admission만 닫는다. $0.9135 예약·usage 추정·unknown hold는 실제 청구와 구분하고 미편입 관점을 통제한다고 주장하지 않는다. 최종 UX/승인 순서는 전체 작업 운영 v1.2 §4.1을 유일한 현재 기준으로 참조하며 이 문서에서 새 로드맵을 만들지 않는다.
+
 ## CF-017 Flow 오류 분류
 
-[내부 오류 계약](contracts/flow-analysis-v1.md#flow-내부-오류-분류-cf-017)과 [구현·집중 검사 기록](work/CF-017-flow-error-classification.md)을 따른다. 입력422·공급자/서비스503·deadline504·명시적 결과502를 분리하며 기존 coordinator/저장/API 계약은 유지한다. 별도 실제 실행은 Google 로그인→삼성전자005930 KIS/OpenAI 분석→저장·같은 결과 재조회→UI 삭제·404·임시 자료/자원 정리까지 확인했다. 개발 측 합성 검사와 전달받은 실제 실행/독립 artifact 검토를 구분하며, [범위와 남은 조건](flow-live-readiness.md#공급자-실행-전-남은-경계-cf-017)을 따른다. 단일 종목 검증이며 deleted enum UI·운영 전반·실제 청구서와 원격 CI/PR/병합은 별도다.
+[내부 오류 계약](contracts/flow-analysis-v1.md#flow-내부-오류-분류-cf-017)과 [구현·집중 검사 기록](work/CF-017-flow-error-classification.md)을 따른다. 입력422·공급자/서비스503·deadline504·명시적 결과502를 분리하며 기존 coordinator/저장/API 계약은 유지한다. 별도 실제 실행은 Google 로그인→삼성전자005930 KIS/OpenAI 분석→저장·같은 결과 재조회→UI 삭제·404·임시 자료/자원 정리까지 확인했다. 개발 측 합성 검사와 전달받은 실제 실행/독립 artifact 검토를 구분하며, [범위와 남은 조건](flow-live-readiness.md#공급자-실행-전-남은-경계-cf-017)을 따른다. 단일 종목 검증이며 deleted enum UI·운영 전반·실제 청구서와 원격 CI/PR/병합의 당시 대기 문장은 이력이다. CF-017 PR #22는 develop `d6efac632ca87b194e4025892c3741815039d2b5`에 병합됐으며 head `e7db7aba1226bb91f93739c79bac70d5dafe74a9`의 Ready 이후 [CI42555725577](https://github.com/bellra-jin/verith/actions/runs/42555725577) 성공을 조율 측이 별도 확인했다.
 
 ## CF-010 Docker 합성 HTTP 검증 상태
 

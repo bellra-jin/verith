@@ -53,3 +53,13 @@ transport `supervisor.core.v1`과 기존 policy1/plan hash/Confirm digest·bindi
 Confirm의 optional preparation_id가 없으면 legacy 필드 집합으로만 digest한다. 있으면 저장한 plan/draft/선택·동의·owner·현재 canonical을 검증하고 root→leaf 모든 ancestor를 원자적으로 소비·redact하여 승리 binding에 연결한다. 기존 binding replay가 preparation 잠금·TTL보다 우선한다. sibling/parent-child는 shared ancestor에 의해 하나의 binding만 채택한다. 미소비 sibling도 consumed/deleted/expired ancestor 뒤 plan/원문을 노출하거나 재사용하지 않는다.
 
 준비 삭제는 child ID여도 실제 root 원문까지 redact한다. consumed lineage는 보고서 삭제 경로를 사용하고, 만료 미소비 원문 삭제는 허용한다. 운영 purge/미접근 만료행의 물리 잔류 정리 전체는 보장하지 않는다. 실제 OpenAI credential/전송과 전체 입력/계수 요금 증빙은 별도 pending이며 한정 verifier 외에서 호출을 열지 않는다.
+
+## CF-024 private 검증 조립
+
+production 기본 gateway는 unavailable로 유지한다. private verifier의 synthetic 모드는 같은 실제 Principal·준비 claim/attempt·CF023 epoch와 DurableMeaningBudget을 실제 PreparationService/AIClient/ASGI/OpenAIMeaningGateway 경계에 연결하며 공급자 transport와 credential만 고정 합성값이다. 별도 성공용 후보 반환 경로·public budget endpoint·AI DB 자격은 없다.
+
+live 모드의 초기화는 원본 owned proof/CreationReceipt object identity·명시 epoch UUID/생성시각/상태 결합의 SELECT 검증만 수행한다. verifier_epoch의 INSERT는 합성 일회용 DB 초기화에만 사용한다. 다른 resource/새 작업 번호/같은 UUID를 근거로 epoch를 새로 만들거나 재설정하지 않는다. live는 외부에서 확인된 action-time authority와 정확한 DeferredKeySource/source capability, 계수 mapping/요금 근거를 요구한다. 이 repo가 bool/hash/합성 fixture로 실제 승인을 발급하지 않는다.
+
+각 count/generation phase는 동일 proof의 fresh session에서 Principal·준비 owner/key/draft/spec/attempt/epoch·상태를 검증한 뒤 같은 session scope의 기존 durable 승인으로 위임한다. count 예약 commit ACK 이후에만 key supplier를 최대1회 호출한다. 키 결과는 attempt의 지역 참조로만 사용하며 종료 시 instance 참조를 제거한다. 문자열의 완전한 메모리 소거를 보장하지 않는다.
+
+provider5초·verifier60초·승인 만료 중 가장 이른 절대 deadline을 공급/HTTP/정산·실패 정리에 적용하며 단계마다 시간을 갱신하지 않는다. 정산/취소/ACK불명은 성공 후보로 보고하지 않고 원 hold를 보존한다. 영속 block ACK를 확인하지 못하면 block 완료로 주장하지 않으며 같은 proof/epoch 확인 전에 추가 송신하지 않는다. 실제 모델/key 전송과 계수 요금 근거는 pending이며 이번 합성 검증은 실제 비용/모델 품질·운영 인수의 증거가 아니다.

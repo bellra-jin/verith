@@ -21,7 +21,7 @@ _MESSAGE_MAX = 300
 
 
 def _safe_message(exc: Exception) -> str:
-    return str(exc).replace("\n", " ").strip()[:_MESSAGE_MAX]
+    return 'Agent execution unavailable'
 
 
 def run_tasks(
@@ -69,7 +69,7 @@ def run_tasks(
                 AgentResult(
                     status="failed",
                     reason="execution_failed",
-                    error=ExecutionError(type=type(exc).__name__, message=_safe_message(exc)),
+                    error=ExecutionError(type='ExecutionUnavailable', message=_safe_message(exc)),
                     **snapshot,
                 )
             )

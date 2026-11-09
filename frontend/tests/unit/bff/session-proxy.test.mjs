@@ -144,3 +144,26 @@ test('Fundamental exact four field request and owned readers/delete retain bound
  assert.equal(seen.length,count);
  for(const v of ['', 'TRUE','1','false']){const config=load('src/shared/server/fundamental-analysis-config.ts',()=>{}, {env:{FUNDAMENTAL_ANALYSIS_ENABLED:v}});assert.equal(config.fundamentalAnalysisEnabled(),false);}
 });
+
+
+test('CF020 exact planning POST forwards only safe headers and uses a twelve-second budget',async()=>{
+ const seen=[],timeouts=[];const handlers=load('src/app/api/private/[...path]/route.ts',async(url,init)=>{seen.push([url,init]);return Response.json({request_id:randomUUID(),data:null,error:null});},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout(ms){timeouts.push(ms);return new AbortController().signal;}}});
+ const response=await handlers.POST(new Request('http://app.unit/api/private/flow/plans',{method:'POST',headers:{'content-type':'application/json',cookie:'synthetic-cookie',origin:'http://app.unit','x-csrf-token':'synthetic-csrf','x-flow-service-token':'must-not-forward','x-user-id':'spoof'},body:'{"query":"합성 수급"}'}),{params:Promise.resolve({path:['flow','plans']})});
+ assert.equal(response.status,200);assert.equal(seen.length,1);assert.equal(seen[0][0],'http://backend.unit/api/flow/plans');assert.deepEqual(timeouts,[12000]);
+ assert.equal(seen[0][1].headers.get('cookie'),'synthetic-cookie');assert.equal(seen[0][1].headers.get('x-csrf-token'),'synthetic-csrf');assert.equal(seen[0][1].headers.get('x-flow-service-token'),null);assert.equal(seen[0][1].headers.get('x-user-id'),null);assert.equal(seen[0][1].redirect,'manual');assert.match(response.headers.get('cache-control'),/no-store/);
+ for(const [method,path,search] of [['GET',['flow','plans'],''],['POST',['flow','plans','extra'],''],['POST',['flow','plans'],'?x=1']]){
+  const bad=await handlers[method](new Request('http://app.unit/api/private/'+path.join('/')+search,{method}),{params:Promise.resolve({path})});assert.equal(bad.status,422);
+ }
+ assert.equal(seen.length,1);
+});
+test('CF020 raw body limit and decoded response limit fail closed without a redirect',async()=>{
+ let calls=0;const proxy=load('src/shared/server/session-proxy.ts',async()=>{calls++;return new Response('x'.repeat(16385));},{env:{FLOW_ANALYSIS_ENABLED:'true'}});
+ const request=body=>new Request('http://app.unit/api/private/flow/plans',{method:'POST',headers:{'content-type':'application/json'},body});
+ assert.equal((await proxy.sessionProxy(request('x'.repeat(4097)),'/api/flow/plans')).status,422);assert.equal(calls,0);
+ assert.equal((await proxy.sessionProxy(request('{"query":"합성"}'),'/api/flow/plans')).status,502);assert.equal(calls,1);
+});
+test('CF020 planning streaming timeout begins before body read',async()=>{
+ const controller=new AbortController();let calls=0;const proxy=load('src/shared/server/session-proxy.ts',async()=>{calls++;throw Error('must not send');},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout(ms){assert.equal(ms,12000);return controller.signal;}}});
+ const stream=new ReadableStream({start(){}});const request=new Request('http://app.unit/api/private/flow/plans',{method:'POST',headers:{'content-type':'application/json'},body:stream,duplex:'half'});
+ const result=proxy.sessionProxy(request,'/api/flow/plans');controller.abort();assert.equal((await result).status,504);assert.equal(calls,0);
+});

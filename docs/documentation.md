@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-020 Supervisor 자연어 준비와 Flow 연결
+
+[계획 계약](contracts/supervisor-flow-plan-v1.md)과 [source/검증/차단 기록](work/CF-020-supervisor-flow-orchestration.md)을 따른다. AI가 무비용 의도/계획을 소유하고 Backend가 canonical resolver·인증·owner·기존 usage/coordinator를 소유한다. 준비는 실행권이 아니며 News·미지원 관점을 Flow로 대신 실행하지 않는다. pending/known ID 복구와 admission snapshot은 보존한다. 이전 사용자 직접 Git 안내보다 이번 작업의 명시 위임이 우선하며 실제 최신 head/Ready CI·독립 검토·검증 범위를 구분한다.
+
 ## CF-019 Flow 표시·삭제 UX
 
 [표시/삭제 계약](contracts/flow-display-quality-v1.md)·[활성화 없는 한도 안내](flow-usage-configuration.md)·[이번 실행/미검증](work/CF-019-flow-quality-delete-ux.md)을 따른다. 기존 숫자/해석·Backend/DB/회계는 보존하며 실제 React 합성 클릭과 helper/source assertion을 구분한다.

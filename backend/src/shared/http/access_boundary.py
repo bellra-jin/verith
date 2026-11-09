@@ -92,6 +92,53 @@ class AccessBoundary:
                     message={**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
                 await send(message)
             await self.app(scope,fundamental_receive,fundamental_send);return
+        if path == '/api/flow/plans' or path.startswith('/api/flow/plans/'):
+            import asyncio
+            from starlette.datastructures import Headers
+            from src.shared.config import settings
+            from src.modules.auth.api.router import configured
+            from src.modules.flow.api.query_plan_router import failure
+            from src.modules.flow.api.query_plan_schemas import QueryPlanRequest
+            from src.modules.flow.domain.query_plan import decode,PLAN_TIMEOUT_SECONDS
+            from src.modules.flow.api.synthetic_demo_schemas import json_media
+            async def reject(code,status):await failure(scope,code,status)(scope,receive,send)
+            if not settings.FLOW_ANALYSIS_ENABLED:
+                await reject('FEATURE_UNAVAILABLE',403);return
+            if not configured():
+                await reject('AUTH_REQUIRED',401);return
+            if path!='/api/flow/plans' or method!='POST':
+                await reject('FEATURE_UNAVAILABLE',403);return
+            deadline=asyncio.get_running_loop().time()+PLAN_TIMEOUT_SECONDS
+            scope.setdefault('state',{})['cf020_deadline']=deadline
+            try:
+                headers=Headers(scope=scope)
+                if scope.get('query_string') or len(headers.getlist('content-type'))!=1 or not json_media(headers) or headers.getlist('content-encoding') or len(headers.getlist('content-length'))>1:raise ValueError()
+                length=headers.get('content-length')
+                if length is not None and (not length.isascii() or not length.isdigit() or int(length)>4096):raise ValueError()
+                raw=bytearray()
+                async with asyncio.timeout_at(deadline):
+                    while True:
+                        message=await receive()
+                        if message['type']!='http.request':raise ValueError()
+                        raw.extend(message.get('body',b''))
+                        if len(raw)>4096:raise ValueError()
+                        if not message.get('more_body',False):break
+                QueryPlanRequest.model_validate(decode(bytes(raw)))
+            except TimeoutError:
+                await reject('DEADLINE_EXCEEDED',504);return
+            except (ValueError,TypeError,UnicodeError,RecursionError):
+                await reject('INPUT_INVALID',422);return
+            consumed=False
+            async def plan_receive():
+                nonlocal consumed
+                if not consumed:consumed=True;return {'type':'http.request','body':bytes(raw),'more_body':False}
+                return await receive()
+            async def plan_send(message):
+                if message['type']=='http.response.start':
+                    values=[(k,v) for k,v in message.get('headers',[]) if k.lower() not in {b'cache-control',b'vary'}]
+                    message={**message,'headers':values+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
+                await send(message)
+            await self.app(scope,plan_receive,plan_send);return
         if path == '/api/flow/analyses' or path.startswith('/api/flow/analyses/'):
             from uuid import UUID
             from src.shared.config import settings

@@ -525,3 +525,13 @@ test('CF019 owned stop precedes command settlement and package postcheck; cleanu
  await assert.rejects(stopAndSettleBrowserTask(Promise.resolve().then(()=>{finished=true;}),async()=>{throw cleanupFailure;}),error=>error===cleanupFailure);
  assert.equal(finished,true);
 });
+
+
+test('CF020 exact planning sources/modes reuse the existing protected worker and production inputs',async()=>{
+ const c=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(c.supervisorUnit,['unit/supervisor/query-plan.test.mjs','unit/flow/analysis-request.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs']);
+ for(const p of c.supervisorExact){assert.equal(c.sourceAllowed(p),true);assert.ok(c.readSource(process.cwd(),p).length);assert.equal(c.sourceAllowed(p+'.adjacent'),false);}
+ for(const mode of ['supervisor-unit','supervisor-type','supervisor-lint','supervisor-browser'])assert.ok(c.modes.includes(mode));
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8');assert.match(source,/cap.cf020Planning=supervisorBrowser/);assert.match(source,/workload:selected.length===1/);
+ assert.equal(c.reactProductionFiles.length,5);
+});

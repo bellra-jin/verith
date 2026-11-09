@@ -18,7 +18,7 @@ from src.modules.auth.api import router as auth
 from src.modules.flow.api import router as flow_reports
 from src.modules.flow.api import run_router as flow_runs
 from src.modules.flow.api import synthetic_demo_router
-from src.modules.flow.api import analysis_router
+from src.modules.flow.api import analysis_router,query_plan_router
 from src.modules.auth.application.session_service import AuthenticationRequired
 from src.modules.auth.infrastructure.google_oidc import LoginFailed
 from starlette.responses import JSONResponse
@@ -111,6 +111,7 @@ app.include_router(flow_reports.router)
 app.include_router(flow_runs.router)
 app.include_router(synthetic_demo_router.router)
 app.include_router(analysis_router.router)
+app.include_router(query_plan_router.router)
 app.include_router(industry_reports.router)
 app.include_router(reports.router)
 app.include_router(news.router)

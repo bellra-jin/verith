@@ -17,9 +17,11 @@ const modules={},ids=['react','react/jsx-runtime','react-dom','react-dom/client'
 for(let i=0;i<5;i++){if(cap.reactProduction[i].relative!==reactProductionFiles[i])throw Error('CF019 exact registry');modules[ids[i]]=checkedProduction(cap.reactProduction[i]);}
 for(const [id,file] of Object.entries({
  '@/features/flow/lib/report-display':'src/features/flow/lib/report-display.ts','@/features/flow/lib/report-deletion':'src/features/flow/lib/report-deletion.ts',
+ '@/features/flow/lib/analysis-request':'src/features/flow/lib/analysis-request.ts','../lib/query-plan':'src/features/supervisor/lib/query-plan.ts',QueryPreparation:'src/features/supervisor/components/query-preparation.tsx',
  '@/features/flow/lib/observation-window':'src/features/flow/lib/observation-window.ts',SessionControls:'src/features/flow/components/session-controls.tsx',FlowReportView:'src/features/flow/components/flow-report-view.tsx'}))
  modules[id]=ts.transpileModule(fs.readFileSync(file,'utf8'),{fileName:file,compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-let account=A,status=204,authStatus=200,reportStatus=200,delay=0;const removed=new Set(),counts={sessionGET:0,reportGET:0,DELETE:0},nonce=cap.nonce,origin='http://127.0.0.1:'+cap.ports[0];
+let account=A,status=204,authStatus=200,reportStatus=200,delay=0;const removed=new Set(),counts={sessionGET:0,reportGET:0,DELETE:0,plansPOST:0,analysisPOST:0},nonce=cap.nonce,origin='http://127.0.0.1:'+cap.ports[0];
+const planningOnly=cap.cf020Planning===true;
 const payload={meta:{stock_name:'합성 표시 종목',ticker:'000000',base_date:'2026-11-06'},report_id:R,signals:{strength:{외국인:{ratio:0,strong:false},기관:{ratio:null,strong:false}},consecutive:{},inst_detail:{기금:0,증권:-1}},verification:{outcome:'fact_only',regen_count:0},interpretation:null};
 const bundle=`const registry={${Object.entries(modules).map(([id,body])=>JSON.stringify(id)+':function(module,exports,require){'+body+'\n}').join(',')}};const cache={};function require(id){if(!Object.hasOwn(registry,id))throw Error('Closed registry');if(!cache[id]){const m={exports:{}};cache[id]=m;registry[id](m,m.exports,require);}return cache[id].exports;}
 const React=require('react'),root=require('react-dom/client').createRoot(document.getElementById('app')),Controls=require('SessionControls').SessionControls,View=require('FlowReportView').FlowReportView;
@@ -51,7 +53,24 @@ function App(){const [id,setId]=React.useState(${JSON.stringify(R)}),[stats,setS
  React.createElement('button',{onClick:()=>{const next=id===${JSON.stringify(R)}?${JSON.stringify(S)}:${JSON.stringify(R)};history.pushState(null,'','/reports/flow/'+next);setId(next);}},'대상 변경'),
  React.createElement('button',{onClick:()=>fetch('/fixture-stop',{method:'POST',headers:{'X-Fixture-Nonce':${JSON.stringify(nonce)}}})},'fixture 종료')),
  React.createElement('div',{inert:controlState.phase==='pending'||controlState.phase==='error'},React.createElement(Controls,{csrfToken:'synthetic',reportId:id,userId:${JSON.stringify(A)},returnTo:'/?limit=20&offset=40'},React.createElement(View,{payload:shown}))));}
-root.render(React.createElement(App));`;
+function PlanningApp(){
+ const Preparation=require('QueryPreparation').QueryPreparation,analysis=require('@/features/flow/lib/analysis-request');
+ const [prepared,setPrepared]=React.useState(null),[consent,setConsent]=React.useState(false),[stats,setStats]=React.useState(''),[outcome,setOutcome]=React.useState(''),[accountRevision,setAccountRevision]=React.useState(0);const locked=React.useRef(false);
+ const clear=React.useCallback(()=>{setPrepared(null);setConsent(false);},[]);
+ React.useEffect(()=>{const timer=setInterval(()=>fetch('/fixture-counts').then(r=>r.json()).then(v=>setStats(JSON.stringify(v))),300);return()=>clearInterval(timer);},[]);
+ async function execute(){
+  if(locked.current||!prepared||!consent)return;locked.current=true;
+  const abort=new AbortController();const timer=setTimeout(()=>abort.abort(),15000);
+  try{const session=await analysis.fetchSession(abort.signal);if(session.user_id!==${JSON.stringify(A)})throw Error('Synthetic account mismatch');const pending=analysis.freshPending(prepared.ticker,prepared.query);const value=await analysis.postAnalysis(pending,session.csrf_token,abort.signal);setOutcome('기존 실제 helper 합성 POST 완료 · '+value.state);}
+  catch{setOutcome('합성 실행 확인 실패');}finally{clearTimeout(timer);locked.current=false;}
+ }
+ return React.createElement(React.Fragment,null,React.createElement('h1',null,'CF020 synthetic preparation React'),React.createElement('p',{'data-testid':'counts'},stats),
+ React.createElement(Preparation,{key:accountRevision,userId:${JSON.stringify(A)},onPrepared:setPrepared,onClear:clear,onAccountChange:()=>{clear();setAccountRevision(v=>v+1);}}),
+ React.createElement('label',null,React.createElement('input',{type:'checkbox',checked:consent,disabled:!prepared,onChange:e=>setConsent(e.target.checked)}),'단일 Flow 분석 실행 동의'),
+ React.createElement('button',{disabled:!prepared||!consent,onClick:()=>void execute()},'확정 입력으로 기존 분석 POST'),React.createElement('p',{'role':'status'},outcome),
+ ...[['계정 A',{account:${JSON.stringify(A)}}],['계정 B',{account:${JSON.stringify(B)}}],['계획 지연',{delay:250}],['계획 즉시',{delay:0}]].map(([label,value])=>React.createElement('button',{key:label,onClick:async()=>{try{const r=await fetch('/fixture-control',{method:'POST',headers:{'Content-Type':'application/json','X-Fixture-Nonce':${JSON.stringify(nonce)}},body:JSON.stringify(value)});if(!r.ok)throw Error();setOutcome('합성 제어 적용 완료');}catch{setOutcome('합성 제어 오류 · 중단');}}},label)));
+}
+root.render(React.createElement(${JSON.stringify(planningOnly)}?PlanningApp:App));`;
 let finish,expired=false;const stopped=new Promise(resolve=>{finish=resolve;});
 const server=http.createServer(async(req,res)=>{
  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
@@ -64,6 +83,24 @@ const server=http.createServer(async(req,res)=>{
   if(value.account===A||value.account===B)account=value.account;if([204,404,401,403,500].includes(value.status))status=value.status;if([200,401,403].includes(value.authStatus))authStatus=value.authStatus;if([200,404,401,403,500].includes(value.reportStatus))reportStatus=value.reportStatus;if([0,250,16000].includes(value.delay))delay=value.delay;if(value.restore===true){removed.clear();status=204;authStatus=200;reportStatus=200;delay=0;}json({updated:true,account:account===A?'A':'B',status,authStatus,reportStatus,delay});return;
  }
  if(p==='/fixture-counts'&&req.method==='GET'){json(counts);return;}
+ if(planningOnly&&p==='/api/private/flow/plans'&&req.method==='POST'){
+  counts.plansPOST++;let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>4096){json({},422);return;}}
+  let value;try{value=JSON.parse(raw);if(typeof value.query!=='string'||!value.query.trim()||value.query.length>300)throw Error();}catch{json({},422);return;}
+  if(account!==A||req.headers['x-csrf-token']!=='synthetic-fresh-csrf'){json({},401);return;}
+  const question=value.query;if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
+  const stock={stock_code:'005930',stock_name:'합성 삼성전자',market:'KOSPI'},candidate={...stock,match_type:'ambiguous_group'};
+  const unsupported=/차트|종합|뉴스|rsi|이동평균/i.test(question),flow=/수급|외국인|기관/.test(question),ambiguous=question.includes('모호');
+  const status=unsupported?'unsupported':!flow?'needs_clarification':ambiguous&&!value.selected_ticker?'needs_stock_selection':'ready_for_confirmation';
+  const resolution=['unsupported','needs_clarification'].includes(status)?null:{status:status==='needs_stock_selection'?'ambiguous':'resolved',reason:status==='needs_stock_selection'?'ambiguous_alias':'exact_match',stock:status==='needs_stock_selection'?null:stock,candidates:status==='needs_stock_selection'?[candidate]:[]};
+  const plan={version:'supervisor.flow-plan.v1',policy_version:'supervisor.flow-only.1',query_sha256:crypto.createHash('sha256').update(question).digest('hex'),requested_views:unsupported?['technical']:flow?['flow']:[],status,reason:{unsupported:'unsupported_views',needs_clarification:'clarify_intent',needs_stock_selection:'stock_ambiguous',ready_for_confirmation:'stock_resolved'}[status],resolution,candidate_ref:resolution?'a'.repeat(64):null};
+  json({request_id:A,data:plan,error:null});return;
+ }
+ if(planningOnly&&p==='/api/private/flow/analyses'&&req.method==='POST'){
+  counts.analysisPOST++;let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>4096){json({},422);return;}}
+  let value;try{value=JSON.parse(raw);if(value.ticker!=='005930'||typeof value.question!=='string'||value.allow_analysis!==true||typeof value.idempotency_key!=='string')throw Error();}catch{json({},422);return;}
+  if(account!==A||req.headers['x-csrf-token']!=='synthetic-fresh-csrf'){json({},401);return;}
+  json({request_id:A,data:{analysis_id:A,admission_request_id:B,attempt_id:S,state:'stored',deadline_at:new Date(Date.now()+120000).toISOString(),report_id:R,report_url:'/reports/flow/'+R,error:null},error:null});return;
+ }
  if(p==='/api/auth/session'&&req.method==='GET'){counts.sessionGET++;json(authStatus===200?{user_id:account,csrf_token:'synthetic-fresh-csrf'}:{},authStatus);return;}
  if(['/api/private/flow/reports/'+R,'/api/private/flow/reports/'+S].includes(p)){
   if(req.method==='GET'){counts.reportGET++;json({report_id:p.endsWith(R)?R:S,report:{report_id:p.endsWith(R)?R:S}},removed.has(p.endsWith(R)?R:S)?404:reportStatus);return;}

@@ -149,3 +149,10 @@ test('only exact safe 429 code survives; fixed notice preserves request and GET 
  assert.equal(JSON.stringify(pending),before);assert.equal(posts,1);
  const recovered=await client.getAnalysis(a,new AbortController().signal);assert.equal(recovered.state,'stored');assert.equal(gets,1);assert.equal(posts,1);
 });
+
+
+test('CF020 planner is new-only and does not replace fixed pending or GET-only recovery (source assertion)',()=>{
+ const jsx=fs.readFileSync(path.join(root,'src/features/flow/components/analysis-request.tsx'),'utf8');
+ for(const phrase of ['!hasPending&&!analysisId&&!knownId&&verified&&<QueryPreparation','dispatchPreparedAnalysis(preparationBinding.current,preparation','preparedHref.current!==window.location.href','readRequest.current(true)','canReplay(analysisId,pending.current)'])assert.ok(jsx.includes(phrase));
+ const helper=fs.readFileSync(path.join(root,'src/features/flow/lib/analysis-request.ts'),'utf8');assert.doesNotMatch(helper,/prepareQuery|flow\/plans/);
+});

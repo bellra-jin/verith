@@ -29,7 +29,7 @@ from src.modules.stocks.infrastructure import stock_repository as repo
 from src.modules.stocks.api.schemas import ResolvedStock, StockCandidate, StockResolveResponse
 from src.modules.stocks.domain.text_normalize import normalize_stock_text
 
-_CODE_RE = re.compile(r"\d{6}")
+_CODE_RE = re.compile(r"(?<!\d)[0-9]{6}(?!\d)")
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
 _MAX_RUN = 5  # 연속 token 최대 결합 수(다어절 종목명 대비)
 _MATCH_PRIORITY = {"stock_code": 0, "stock_name": 1, "alias": 2, "ambiguous_group": 3}
@@ -131,7 +131,7 @@ class StockResolverService:
             return StockResolveResponse(status="ambiguous", reason="unknown_identifier", candidates=candidates)
         if not best:
             return StockResolveResponse(status="not_found", reason="no_match")
-        if len(best) == 1:
+        if len(best) == 1 and next(iter(best.values())).match_type != "ambiguous_group":
             only = next(iter(best.values()))
             s = stock_by_code[only.stock_code]
             return StockResolveResponse(

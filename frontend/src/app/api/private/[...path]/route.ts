@@ -13,6 +13,11 @@ async function handle(request: Request, context:{params:Promise<{path:string[]}>
     if(!analysis&&!reports||analysis&&url.search)return analysisProxyError('INPUT_INVALID',422);
     return sessionProxy(request,'/api/'+route,url.search);
   }
+  if(route==='flow/plans'||route.startsWith('flow/plans/')){
+    if(!flowAnalysisEnabled())return analysisProxyError('FEATURE_UNAVAILABLE',403);
+    if(route!=='flow/plans'||request.method!=='POST'||new URL(request.url).search)return analysisProxyError('INPUT_INVALID',422);
+    return sessionProxy(request,'/api/flow/plans');
+  }
   if(route==='flow/analyses'||route.startsWith('flow/analyses/')){
     if(!flowAnalysisEnabled())return analysisProxyError('FEATURE_UNAVAILABLE',403);
     const exact=route==='flow/analyses'&&request.method==='POST'||request.method==='GET'&&/^flow\/analyses\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(route);

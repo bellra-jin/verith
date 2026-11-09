@@ -14,8 +14,9 @@ function load(relative,{env={},fetchSpy=()=>{throw new Error('unexpected upstrea
   if(name==='next/headers')return {headers:async()=>new Headers(cookie ? {Cookie:cookie} : {})};
   if(name==='./session-backend')return load('src/shared/server/session-backend.ts',{env,fetchSpy,cookie});
   if(name==='./fundamental-analysis-config'||name==='@/shared/server/fundamental-analysis-config')return load('src/shared/server/fundamental-analysis-config.ts',{env,fetchSpy,cookie});
-  if(name==='./flow-analysis-config')return load('src/shared/server/flow-analysis-config.ts',{env,fetchSpy,cookie});
-  if(name==='./flow-demo-config')return load('src/shared/server/flow-demo-config.ts',{env,fetchSpy,cookie});
+  if(name==='./flow-analysis-config'||name==='@/shared/server/flow-analysis-config')return load('src/shared/server/flow-analysis-config.ts',{env,fetchSpy,cookie});
+  if(name==='./flow-demo-config'||name==='@/shared/server/flow-demo-config')return load('src/shared/server/flow-demo-config.ts',{env,fetchSpy,cookie});
+  if(name==='@/shared/server/session-proxy')return load('src/shared/server/session-proxy.ts',{env,fetchSpy,cookie});
   if(name==='node:crypto')return {randomUUID};
   throw new Error('Unexpected import '+name);
  }});
@@ -48,4 +49,10 @@ test('canonical local BFF rejects origin/Host/alias injections before upstream',
   assert.equal((await proxy.sessionProxy(new Request('http://localhost:3200/api/auth/session',{headers}),'/api/auth/session')).status,403);
  }
  assert.equal(calls,1);
+});
+
+
+test('CF020 private planning keeps exact absolute config imports and the existing disabled gate',async()=>{
+ let calls=0;const handlers=load('src/app/api/private/[...path]/route.ts',{fetchSpy:async()=>{calls++;throw Error('must not send');}});
+ const response=await handlers.POST(new Request('http://localhost:3200/api/private/flow/plans',{method:'POST'}),{params:Promise.resolve({path:['flow','plans']})});assert.equal(response.status,403);assert.equal(calls,0);
 });

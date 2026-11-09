@@ -60,6 +60,44 @@ class AIClient:
         self._flow_token = service_token
         self._fundamental_token = service_token
 
+    async def plan_flow(self,payload:dict)->dict:
+        """One 3s/32KiB decoded planning exchange, fixed origin/path/header; retry0."""
+        from urllib.parse import urlsplit
+        from src.modules.flow.domain.query_plan import canonical,decode
+        try:
+            target=urlsplit(self._base_url);httpx.URL(self._base_url);token=self._flow_token.encode('ascii')
+            if (target.scheme not in {'http','https'} or not target.hostname or target.port==0 or target.username or target.password or target.path not in {'','/'} or target.query or target.fragment or len(token)<32 or any(c<32 or c>126 for c in token)):raise ValueError()
+        except (ValueError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Planning service unavailable') from None
+        try:
+            data=canonical(payload).encode('utf8')
+            if len(data)>32768:raise AIContractError('Invalid planning request')
+            async with asyncio.timeout(3):
+                async with httpx.AsyncClient(timeout=3,transport=self._transport,follow_redirects=False,trust_env=False) as client:
+                    async with client.stream('POST',self._base_url+'/internal/supervisor/plan',content=data,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Flow-Service-Token':token.decode('ascii')}) as response:
+                        if response.headers.get('content-encoding','identity').lower()!='identity':
+                            if response.status_code==200:raise AIContractError('Invalid planning response')
+                            raise AIUnavailableError('Planning service unavailable')
+                        if response.status_code==504:raise AITimeoutError('Planning deadline exceeded')
+                        if response.status_code not in {200,502}:raise AIUnavailableError('Planning service unavailable')
+                        raw=bytearray()
+                        async for part in response.aiter_bytes():
+                            if len(raw)+len(part)>32768:
+                                if response.status_code==200:raise AIContractError('Invalid planning response')
+                                raise AIUnavailableError('Planning service unavailable')
+                            raw.extend(part)
+                        try:
+                            value=decode(bytes(raw))
+                            if type(value) is not dict:raise ValueError()
+                            if response.status_code==502:
+                                if set(value)=={'error'} and type(value['error']) is dict and set(value['error'])=={'code','message'} and value['error']['code']=='RESULT_CONTRACT_INVALID' and type(value['error']['message']) is str:raise AIContractError('Invalid planning response')
+                                raise AIUnavailableError('Planning service unavailable')
+                            return value
+                        except (ValueError,UnicodeError,RecursionError):
+                            if response.status_code==502:raise AIUnavailableError('Planning service unavailable') from None
+                            raise AIContractError('Invalid planning response') from None
+        except (TimeoutError,httpx.TimeoutException):raise AITimeoutError('Planning deadline exceeded') from None
+        except (httpx.HTTPError,httpx.InvalidURL):raise AIUnavailableError('Planning service unavailable') from None
+
     async def analyze_flow(self, payload: dict) -> dict:
         """One bounded internal Flow request. No redirect, environment proxy or retry."""
         from urllib.parse import urlsplit

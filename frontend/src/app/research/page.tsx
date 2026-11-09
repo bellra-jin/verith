@@ -5,7 +5,7 @@ import {uuid,canonicalUuid} from '@/features/flow/lib/analysis-request';
 
 export const dynamic='force-dynamic';
 export const revalidate=0;
-export const metadata={title:'veriθ · Flow 분석'};
+export const metadata={title:'veriθ · 자연어 Flow 준비'};
 export default async function ResearchPage({searchParams}:{searchParams:Promise<Record<string,string|string[]|undefined>>}){
  if(!flowAnalysisEnabled())return <main><h1>Flow 분석</h1><p>현재 사용할 수 없습니다.</p><Link href="/">홈</Link></main>;
  const query=await searchParams;

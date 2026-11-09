@@ -152,6 +152,32 @@ def project_cf015_exact_additions(api):
     stock['required']=True;stock['schema']={'type':'string','pattern':r'^\d{6}$','title':'Stock Code'}
 
 
+def project_cf020_exact_additions(api):
+    """Validate this one path and exact model definitions before projection."""
+    from src.modules.flow.api.query_plan_schemas import QueryPlanRequest,QueryPlanResponse
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.openapi.models import Schema
+    components=api['components']['schemas'];path='/api/flow/plans'
+    assert set(api['paths'][path])=={'post'}
+    operation=api['paths'][path]['post']
+    assert operation['requestBody']['content']['application/json']['schema']=={'$ref':'#/components/schemas/QueryPlanRequest'}
+    assert operation['responses']['200']['content']['application/json']['schema']=={'$ref':'#/components/schemas/QueryPlanResponse'}
+    assert not operation.get('parameters')
+    request=components['QueryPlanRequest']
+    assert set(request['properties'])=={'query','selected_ticker','candidate_ref'} and request['required']==['query']
+    assert request['additionalProperties'] is False and request['properties']['query']['maxLength']==300
+    expected={}
+    for model in (QueryPlanRequest,QueryPlanResponse):
+        schema=model.model_json_schema(ref_template='#/components/schemas/{model}',mode='validation' if model is QueryPlanRequest else 'serialization')
+        expected.update(schema.pop('$defs',{}));expected[model.__name__]=schema
+    names={'QueryPlanRequest','QueryPlanResponse','QueryPlanSafeError','PlanView','CanonicalResolution','StockReference','StockOption'}
+    assert set(expected)==names
+    for name in names:
+        assert components[name]==jsonable_encoder(Schema.model_validate(expected[name]),by_alias=True,exclude_none=True)
+    for name in names:del components[name]
+    del api['paths'][path]
+
+
 def assert_public_contract_compatibility(values):
     """Validate exact additions first, then remove only reviewed JSON pointers from a copy."""
     import hashlib
@@ -161,6 +187,7 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf020_exact_additions(api)
     project_cf015_exact_additions(api)
     from src.modules.fundamental.api.analysis_schemas import FundamentalAnalysisResponse
     if "CommonResponse[FundamentalAnalysisView]" in projected["schemas"]:

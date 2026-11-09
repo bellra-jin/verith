@@ -103,22 +103,7 @@ class FlowAdapter:
     """flow 공개 진입: stock context(stock_name/ticker) + query. base_date 등은 flow 내부 책임."""
 
     def run(self, task: TaskEnvelope, deps: ExecutionDeps) -> Any:
-        from src.agents.flow.application.agent import run as flow_run
-
-        return flow_run(
-            query=task.rewritten_query,
-            stock_name=task.context.stock_name,
-            ticker=task.context.stock_code,
-        )
-
-
-class NewsAdapter:
-    """news 공개 진입: question 하나. 종목 context 는 보조일 뿐 필수 아님."""
-
-    def run(self, task: TaskEnvelope, deps: ExecutionDeps) -> Any:
-        from src.agents.news.application.workflow import run_query
-
-        return run_query(task.rewritten_query)
+        raise AdapterConfigError('Use authenticated Flow coordinator')
 
 
 class IndustryAdapter:
@@ -147,7 +132,6 @@ def default_adapters() -> dict[AgentType, AgentAdapter]:
     return {
         "fundamental": FundamentalAdapter(),
         "technical": TechnicalAdapter(),
-        "news": NewsAdapter(),
         "flow": FlowAdapter(),
         "industry": IndustryAdapter(),
     }

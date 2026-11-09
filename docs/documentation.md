@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-017 Flow 오류 분류
+
+[내부 오류 계약](contracts/flow-analysis-v1.md#flow-내부-오류-분류-cf-017)과 [구현·집중 검사 기록](work/CF-017-flow-error-classification.md)을 따른다. 입력422·공급자/서비스503·deadline504·명시적 결과502를 분리하며 기존 coordinator/저장/API 계약은 유지한다. 별도 실제 실행은 Google 로그인→삼성전자005930 KIS/OpenAI 분석→저장·같은 결과 재조회→UI 삭제·404·임시 자료/자원 정리까지 확인했다. 개발 측 합성 검사와 전달받은 실제 실행/독립 artifact 검토를 구분하며, [범위와 남은 조건](flow-live-readiness.md#공급자-실행-전-남은-경계-cf-017)을 따른다. 단일 종목 검증이며 deleted enum UI·운영 전반·실제 청구서와 원격 CI/PR/병합은 별도다.
+
 ## CF-010 Docker 합성 HTTP 검증 상태
 
 CF-010 PR #14 병합 뒤 최신 develop `233f674c1fd42d2bb75c995df415c3629ef519cd`의 [후속 실제 회차](work/CF-010-docker-synthetic-demo.md)는 **전체 exit0**으로 완료했다. Verith lock 기반 ignore-scripts 설치와 network-off 후 production build·TAP 두 HTTP 시험·사후 container source/hash·사후 network-off·host source 확인·자기 CID 제거/부재/label0이 통과했다. runner의 BASE·BRANCH 고정값 두 개와 실행 manifest·문서2개만 갱신했다. 이전 PR의 exit1/미실행은 당시 이력으로 보존한다. 실제 Backend/DB·Google/provider·React/브라우저와 Mac harness 자체 수용은 별도다.

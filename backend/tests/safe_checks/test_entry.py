@@ -599,12 +599,46 @@ class CF015Boundary(unittest.TestCase):
         self.assertTrue(all(a.asname.startswith('_') for node in imports for a in node.names))
 
 
+class CF017Boundary(unittest.TestCase):
+    def test_exact_twelve_pins_single_collection_and_adjacent_exclusion(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        expected={'ai/src/agents/flow/'+p for p in ('api/http.py','api/schemas.py','application/execution_runtime.py','api/payload.py','domain/models.py','domain/observation_window.py','infrastructure/token_cache.py','domain/interpretation_claims.py','domain/verification/consecutive.py','infrastructure/kis_client.py','infrastructure/llm/explain.py')}|{'ai/src/shared/runtime/deadline.py'}
+        self.assertEqual(set(c.CF017_INPUTS),expected)
+        self.assertEqual(c.CF017_TESTS,('tests/unit/test_cf017_flow_error_classification.py',))
+        root=Path(__file__).resolve().parents[3]
+        for name in expected:
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),c.CF017_INPUTS[name])
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):
+            copied=c.selected_sources(Path('/synthetic'),flow_errors_only=True)
+        self.assertEqual({p for p in copied if p.startswith('ai/')},expected)
+        for old in (c.CF012_INPUTS,c.CF014_INPUTS,c.CF015_INPUTS):
+            for name in set(old)&expected:self.assertEqual(old[name],c.CF017_INPUTS[name])
+
+    def test_closed_origins_AST_only_providers_and_unchanged_guard(self):
+        from scripts import check_safe as c
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        import sys
+        from scripts.cf015_fundamental_check import load_origins
+        load_origins()
+        self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        self.assertEqual(len(c.FLOW_INPUTS),2);self.assertEqual(len(c.CF004_INPUTS),1)
+        self.assertEqual((len(c.CF012_INPUTS),len(c.CF014_INPUTS),len(c.CF015_INPUTS)),(4,14,14))
+        for name in ('agents.flow.infrastructure.kis_client','agents.flow.infrastructure.llm.explain','pandas','openai','langchain_openai'):
+            self.assertNotIn(name,sys.modules)
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
     adapter_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf013_self_only",False)
     quality_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf014_self_only",False)
     fundamental_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf015_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    errors_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf017_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

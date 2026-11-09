@@ -15,6 +15,9 @@ _SLOT=threading.BoundedSemaphore(1)
 class EngineUnavailable(RuntimeError):pass
 
 
+class ResultContractError(RuntimeError):pass
+
+
 class ExecutionContext:
     def __init__(self,request):
         self.request=request
@@ -69,7 +72,7 @@ class FlowExecutionRuntime:
                 context.check('engine')
                 if self.engine is not None:
                     result=self.engine(request,context)
-                    payload,snapshot=result['payload'],result['input_snapshot']
+
                 else:
                     # Only after exact route gate + service token + engine gate.
                     from .. import config
@@ -79,16 +82,24 @@ class FlowExecutionRuntime:
                     from .agent import run
                     value=run(query=request.question,stock_name=request.stock_name,ticker=request.ticker,
                               base_date=request.candidate_date,execution_context=context)
-                    payload,snapshot=value.payload,context.captured
-                    if snapshot is None:raise ValueError('Input observations missing')
-                    snapshot={**snapshot,'observed_calls':dict(context.calls)}
                 context.check('export')
-                if snapshot.get('request')!=request.wire():raise ValueError('Input binding mismatch')
-                value={'schema_version':1,'analysis_id':str(request.analysis_id),'attempt_id':str(request.attempt_id),
-                    'admission_request_id':str(request.admission_request_id),'fingerprint':request.fingerprint,
-                    'report_id':payload['report_id'],'input_snapshot':snapshot,'input_sha256':sha(snapshot),'payload':payload}
-                if len(canonical(value).encode())>2097152:raise ValueError('Flow result too large')
-                return value
+                # Provider invocation is outside this result-only boundary.
+                try:
+                    if self.engine is not None:
+                        payload,snapshot=result['payload'],result['input_snapshot']
+                    else:
+                        payload,snapshot=value.payload,context.captured
+                        if snapshot is None:raise ValueError()
+                        snapshot={**snapshot,'observed_calls':dict(context.calls)}
+                    if not isinstance(payload,dict) or not isinstance(snapshot,dict):raise ValueError()
+                    if snapshot.get('request')!=request.wire():raise ValueError()
+                    value={'schema_version':1,'analysis_id':str(request.analysis_id),'attempt_id':str(request.attempt_id),
+                        'admission_request_id':str(request.admission_request_id),'fingerprint':request.fingerprint,
+                        'report_id':payload['report_id'],'input_snapshot':snapshot,'input_sha256':sha(snapshot),'payload':payload}
+                    if len(canonical(value).encode('utf8'))>2097152:raise ValueError()
+                    return value
+                except (ValueError,TypeError,KeyError,AttributeError,OverflowError,RecursionError):
+                    raise ResultContractError('Flow result is invalid') from None
             finally:_SLOT.release() # Slot is released by actual sync completion, never response timeout.
         try:future=asyncio.get_running_loop().run_in_executor(None,work)
         except BaseException:_SLOT.release();raise

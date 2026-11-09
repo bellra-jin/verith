@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import {displayNumber,displayArrow,displayDirection,gaugeVerdict,institutionLeader,ZERO_LIMIT_NOTICE,STRENGTH_NOTICE} from "@/features/flow/lib/report-display";
 import { finiteNumber, observationWindow, persistenceCells, record, relationText, safeDaily } from "@/features/flow/lib/observation-window";
 
 import type { FlowPayload, FlowGate, FlowPriceRow } from "@/features/flow/api/reports";
@@ -23,19 +24,12 @@ const STRENGTH_THRESHOLD_PCT = "12%";
 const DETAIL_LABELS: Record<string, string> = { 기금: "기금(연기금)", 증권: "증권(금융투자)" };
 const DETAIL_DISPLAY = ["기금", "증권", "투자신탁", "사모펀드", "보험"] as const;
 
-function cls(v: number): string {
-  return v > 0 ? "buy" : v < 0 ? "sell" : "mut";
-}
 function color(v: number): string {
-  return v > 0 ? BUY : v < 0 ? SELL : MUT;
+  return finiteNumber(v) && v > 0 ? BUY : finiteNumber(v) && v < 0 ? SELL : MUT;
 }
-function fmtSigned(v: number): string {
-  return `${v > 0 ? "+" : ""}${Math.round(v).toLocaleString("ko-KR")}`;
-}
-function fmtEok(millionWon: number): string {
-  const eok = millionWon / 100;
-  return `${eok > 0 ? "+" : ""}${eok.toLocaleString("ko-KR", { maximumFractionDigits: 1, minimumFractionDigits: 1 })}억원`;
-}
+function fmtSigned(v: unknown): string { return displayNumber(v); }
+function fmtEok(v: unknown): string { return displayNumber(v, 1, "억원", .01); }
+function magnitude(v: unknown): string { return displayNumber(v, 0, "", 1, false).replace(/^-/, ""); }
 function shortDate(iso: string): string {
   return (iso || "").slice(5).replace("-", "/");
 }
@@ -48,7 +42,7 @@ type FactRow = {
   consecSignal: boolean;
   ratio: number | null;
   strong: boolean;
-  direction: "매수" | "매도" | "중립";
+  direction: "매수" | "매도" | "중립" | "판단 보류";
   pct: string;
   amt: string | null;
   raw5: number | null;
@@ -56,21 +50,23 @@ type FactRow = {
 };
 
 function factRows(s: NonNullable<FlowPayload["signals"]>): FactRow[] {
-  const ratios = SUBJECTS.map((n) => s.strength?.[n]?.ratio ?? null);
+  const ratios = SUBJECTS.map((n) => finiteNumber(s.strength?.[n]?.ratio) ? s.strength[n].ratio : null);
   const maxAbs = Math.max(0, ...ratios.filter((r): r is number => r != null).map(Math.abs));
   return SUBJECTS.map((name, i) => {
     const r = ratios[i];
-    const direction = r == null || r === 0 ? "중립" : r > 0 ? "매수" : "매도";
+    const direction = displayDirection(r);
+    const storedDays = s.consecutive?.[name]?.days;
+    const days = finiteNumber(storedDays) && Number.isInteger(storedDays) && storedDays >= 0 ? storedDays : null;
     const stored5 = s.persistence?.[name]?.sum_5;
     const v5 = finiteNumber(stored5) ? stored5 : null;
     return {
       name,
-      days: s.consecutive?.[name]?.days ?? null,
-      consecSignal: Boolean(s.consecutive?.[name]?.signal),
+      days,
+      consecSignal: days !== null && s.consecutive?.[name]?.signal === true,
       ratio: r,
-      strong: Boolean(s.strength?.[name]?.strong),
+      strong: r !== null && s.strength?.[name]?.strong === true,
       direction,
-      pct: r == null ? "N/A" : `${r > 0 ? "+" : ""}${(r * 100).toFixed(1)}%`,
+      pct: displayNumber(r, 1, "%", 100),
       amt: v5 == null ? null : fmtEok(v5),
       raw5: v5 ?? null,
       barW: r == null || !maxAbs ? 0 : Math.round((Math.abs(r) / maxAbs) * 500) / 10,
@@ -80,14 +76,12 @@ function factRows(s: NonNullable<FlowPayload["signals"]>): FactRow[] {
 
 // 수급 종합 게이지 — 외국인+기관 강도 합의 부호(재표현, builder._gauge 와 동일 규칙·아크).
 function gaugeView(s: NonNullable<FlowPayload["signals"]>) {
-  const fore = s.strength?.["외국인"]?.ratio ?? 0;
-  const inst = s.strength?.["기관"]?.ratio ?? 0;
-  const sum = fore + inst;
-  if (sum > 0)
+  const verdict = gaugeVerdict(s.strength?.["외국인"]?.ratio, s.strength?.["기관"]?.ratio);
+  if (verdict === "매수 우위")
     return { verdict: "매수 우위", color: BUY, arc: "M 140 30 A 110 110 0 0 1 237.1 88.4", kx: 237.1, ky: 88.4 };
-  if (sum < 0)
+  if (verdict === "매도 우위")
     return { verdict: "매도 우위", color: SELL, arc: "M 42.9 88.4 A 110 110 0 0 1 140 30", kx: 42.9, ky: 88.4 };
-  return { verdict: "중립", color: MUT, arc: null, kx: 140, ky: 30 };
+  return { verdict, color: MUT, arc: null, kx: 140, ky: 30 };
 }
 
 function headline(rows: FactRow[]): string {
@@ -96,7 +90,7 @@ function headline(rows: FactRow[]): string {
   if (buyers.length && sellers.length) return `${buyers.join("·")}이 사고, ${sellers.join("·")}이 파는 국면`;
   if (buyers.length) return `${buyers.join("·")} 매수 국면`;
   if (sellers.length) return `${sellers.join("·")} 매도 국면`;
-  return "방향이 뚜렷하지 않은 국면";
+  return rows.some(r => r.direction === "판단 보류") ? "자료 부족으로 방향 판단 보류" : "방향이 뚜렷하지 않은 국면";
 }
 
 // ── 해석 하이라이트 렌더 ─────────────────────────────────────────────────────
@@ -229,7 +223,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
   const gauge = gaugeView(s);
 
   // 헤더 종가(builder._header_price): price_daily 마지막 행.
-  const priceDaily = s.price_daily ?? null;
+  const priceDaily = Array.isArray(s.price_daily) ? s.price_daily.filter(r => record(r) && typeof r.date === "string") : null;
   const lastPrice: FlowPriceRow | null = priceDaily?.length ? priceDaily[priceDaily.length - 1] : null;
 
   // 일별 순매수 차트(builder._daily_view): 최대 |값| 기준 48% 스케일.
@@ -246,15 +240,13 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
   // 기관 세부(builder._inst_detail_view): 표시 5개·내림차순·주도 문구.
   const instDetail = s.inst_detail ?? null;
   const instShown = instDetail
-    ? DETAIL_DISPLAY.filter((n) => instDetail[n] != null).map((n) => [n, instDetail[n]] as const).sort((a, b) => b[1] - a[1])
+    ? DETAIL_DISPLAY.filter((n) => finiteNumber(instDetail[n])).map((n) => [n, instDetail[n]] as const).sort((a, b) => b[1] - a[1])
     : [];
   const instMax = instShown.length ? Math.max(...instShown.map(([, val]) => Math.abs(val))) : 0;
-  const instLeader = instShown.length
-    ? instShown[0][1] > 0 ? `${DETAIL_LABELS[instShown[0][0]] ?? instShown[0][0]} 주도` : "세부 전반 순매도"
-    : null;
+  const instLeader = institutionLeader(instShown.map(([name, value]) => [DETAIL_LABELS[name] ?? name, value] as const));
 
   // 한도소진율(builder._ownership_view): min-max 스케일(26~90px) + 처음↔끝 delta.
-  const ownership = s.ownership ?? null;
+  const ownership = Array.isArray(s.ownership) ? s.ownership.filter(r => record(r) && typeof r.date === "string" && finiteNumber(r.ratio)) : null;
   const ownRatios = ownership?.map((r) => r.ratio) ?? [];
   const ownLo = ownRatios.length ? Math.min(...ownRatios) : 0;
   const ownSpan = ownRatios.length ? Math.max(...ownRatios) - ownLo : 0;
@@ -286,11 +278,10 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
           </h1>
           {lastPrice ? (
             <div className="mt-2.5 flex items-baseline gap-2.5">
-              <span className="text-[30px] font-extrabold tracking-tight">{Math.round(lastPrice.close).toLocaleString("ko-KR")}</span>
+              <span className="text-[30px] font-extrabold tracking-tight">{displayNumber(lastPrice.close, 0, "", 1, false)}</span>
               <span className="text-[15px] font-bold" style={{ color: color(lastPrice.change) }}>
-                {lastPrice.change > 0 ? "▲ " : lastPrice.change < 0 ? "▼ " : "― "}
-                {Math.abs(Math.round(lastPrice.change)).toLocaleString("ko-KR")} ({lastPrice.change_rate > 0 ? "+" : ""}
-                {lastPrice.change_rate}%)
+                {displayArrow(lastPrice.change)}
+                {magnitude(lastPrice.change)} ({displayNumber(lastPrice.change_rate, 2, "%")})
               </span>
             </div>
           ) : null}
@@ -354,7 +345,7 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                       style={{ color: r.direction === "매수" ? BUY : r.direction === "매도" ? SELL : MUT }}
                     >
                       {r.amt ?? r.pct}
-                      {r.amt ? <span className="block text-[11px] font-semibold text-[#8B95A1]">거래대금의 {r.pct}</span> : null}
+                      {r.amt ? <span className="block text-[11px] font-semibold text-[#8B95A1]">일평균 거래대금 대비 {r.pct}</span> : null}
                     </span>
                   </div>
                 ))}
@@ -380,16 +371,15 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                     {[...priceDaily].reverse().map((r) => (
                       <tr key={r.date}>
                         <td className="whitespace-nowrap border-b border-[#F2F4F6] px-2.5 py-2 text-left font-bold text-[#4E5968]">{shortDate(r.date)}</td>
-                        <td className="border-b border-[#F2F4F6] px-2.5 py-2 text-right text-[#333D4B]">{Math.round(r.close).toLocaleString("ko-KR")}</td>
+                        <td className="border-b border-[#F2F4F6] px-2.5 py-2 text-right text-[#333D4B]">{displayNumber(r.close, 0, "", 1, false)}</td>
                         <td className="whitespace-nowrap border-b border-[#F2F4F6] px-2.5 py-2 text-right" style={{ color: color(r.change) }}>
-                          {r.change > 0 ? "▲ " : r.change < 0 ? "▼ " : "― "}
-                          {Math.abs(Math.round(r.change)).toLocaleString("ko-KR")}
+                          {displayArrow(r.change)}
+                          {magnitude(r.change)}
                         </td>
                         <td className="border-b border-[#F2F4F6] px-2.5 py-2 text-right" style={{ color: color(r.change) }}>
-                          {r.change_rate > 0 ? "+" : ""}
-                          {r.change_rate}%
+                          {displayNumber(r.change_rate, 2, "%")}
                         </td>
-                        <td className="border-b border-[#F2F4F6] px-2.5 py-2 text-right text-[#333D4B]">{Math.round(r.volume).toLocaleString("ko-KR")}</td>
+                        <td className="border-b border-[#F2F4F6] px-2.5 py-2 text-right text-[#333D4B]">{displayNumber(r.volume, 0, "", 1, false)}</td>
                         <td className="border-b border-[#F2F4F6] px-2.5 py-2 text-right" style={{ color: r.inst_qty == null ? MUT : color(r.inst_qty) }}>
                           {r.inst_qty == null ? "—" : fmtSigned(r.inst_qty)}
                         </td>
@@ -520,16 +510,17 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                   <div key={r.name} className="flex items-center justify-between py-[3px] text-[13.5px]">
                     <span className="text-[#4E5968]">{r.name}</span>
                     <span className="flex items-center gap-1.5">
-                      <b className="font-extrabold">{r.days ?? 0}일</b>
+                      <b className="font-extrabold">{r.days === null ? "자료 없음" : `${r.days}일`}</b>
                       <Chip on={r.consecSignal} label="신호" />
                     </span>
                   </div>
                 ))}
               </div>
               <div className="rounded-2xl bg-[#F9FAFB] px-5 py-4">
-                <div className="mb-2.5 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title={`${window.shortLabel} 순매수 합 ÷ 하루평균 거래대금 · ${window.notice} · ${STRENGTH_THRESHOLD_PCT} 이상이면 '강함'으로 표시합니다`}>
-                  순매수 강도
+                <div className="mb-2.5 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title={`${window.shortLabel} 순매수 합 ÷ 같은 창의 일평균 거래대금 · ${window.notice} · ${STRENGTH_THRESHOLD_PCT} 이상이면 '강함'으로 표시합니다`}>
+                  일평균 거래대금 대비 강도
                 </div>
+                <p className="mb-2 text-xs text-[#8B95A1]">{STRENGTH_NOTICE} {ZERO_LIMIT_NOTICE}</p>
                 {rows.map((r) => (
                   <div key={r.name} className="flex items-center justify-between py-[3px] text-[13.5px]">
                     <span className="text-[#4E5968]">{r.name}</span>
@@ -589,13 +580,12 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                 <div className="mb-2.5 cursor-help text-[12.5px] font-bold text-[#8B95A1]" title="외국인이 살 수 있는 한도 대비 실제 보유 비율(%) · 한도가 100%인 대부분 종목은 보유율과 같습니다">
                   외국인 한도소진율 추이
                 </div>
-                {ownership?.length ? (
+                {ownership?.length && Number.isFinite(ownSpan) && Number.isFinite(ownDelta) ? (
                   <>
                     <div className="flex items-baseline gap-2.5">
-                      <span className="text-[30px] font-extrabold leading-none tracking-tight">{ownRatios[ownRatios.length - 1].toFixed(2)}%</span>
+                      <span className="text-[30px] font-extrabold leading-none tracking-tight">{displayNumber(ownRatios[ownRatios.length - 1], 2, "%", 1, false)}</span>
                       <span className="text-[13px] font-bold" style={{ color: color(ownDelta) }}>
-                        {ownDelta > 0 ? "▲" : ownDelta < 0 ? "▼" : "―"} {ownDelta > 0 ? "+" : ""}
-                        {ownDelta.toFixed(2)}%p
+                        {ownDelta > 0 ? "▲" : ownDelta < 0 ? "▼" : "―"} {displayNumber(ownDelta, 2, "%p")}
                       </span>
                     </div>
                     <div className="mt-3.5 flex h-[110px] items-end gap-4 border-b-[1.5px] border-[#E5E8EB] px-1">
@@ -607,12 +597,12 @@ export function FlowReportView({ payload }: { payload: FlowPayload }) {
                           <div key={r.date} className="group relative flex h-full flex-1 flex-col items-center justify-end gap-[7px] rounded-md transition-colors hover:bg-[#F7F8FA]">
                             <HoverTip align={oi === 0 ? "left" : oi === ownership.length - 1 ? "right" : "center"}>
                               <div className="font-bold">{r.date}</div>
-                              <div>한도소진율 {r.ratio.toFixed(2)}%</div>
+                              <div>한도소진율 {displayNumber(r.ratio, 2, "%", 1, false)}</div>
                               {dayDelta != null ? (
-                                <div>전일 대비 {dayDelta > 0 ? "+" : ""}{dayDelta.toFixed(2)}%p</div>
+                                <div>전일 대비 {displayNumber(dayDelta, 2, "%p")}</div>
                               ) : null}
                             </HoverTip>
-                            <span className="text-[11px] text-[#B0B8C1]">{r.ratio.toFixed(2)}</span>
+                            <span className="text-[11px] text-[#B0B8C1]">{displayNumber(r.ratio, 2, "", 1, false)}</span>
                             <div className="w-full max-w-[30px] rounded-t-[5px] bg-[#FBCBD0]" style={{ height: `${Math.round(h)}px` }} />
                           </div>
                         );

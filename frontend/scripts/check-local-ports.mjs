@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {spawn,execFileSync} from 'node:child_process';
 
-export const modes=['self-test','unit','local-http','build','type','lint','analysis-unit','analysis-lint','analysis-type','fundamental-unit','fundamental-type','fundamental-lint'];
+export const modes=['self-test','unit','local-http','build','type','lint','analysis-unit','analysis-lint','analysis-type','fundamental-unit','fundamental-type','fundamental-lint','flow-review-unit','flow-review-type','flow-review-lint','flow-review-browser'];
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const repo=path.dirname(project);
 const unit=['unit/bff/disabled-routes.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs','unit/flow/observation.test.mjs','unit/flow/synthetic-demo.test.mjs'];
@@ -13,9 +13,21 @@ const fundamentalUnit=['unit/fundamental/analysis-request.test.mjs','unit/bff/se
 const fundamentalType=["src/app/fundamental/page.tsx", "src/app/page.tsx", "src/app/reports/fundamental/[reportId]/page.tsx", "src/features/fundamental/components/analysis-request.tsx", "src/features/fundamental/components/fundamental-report-view.tsx", "src/features/fundamental/components/fundamental-actions.tsx", "src/features/fundamental/lib/analysis-request.ts", "src/features/fundamental/api/reports.ts", "src/shared/server/fundamental-analysis-config.ts", "src/shared/server/session-proxy.ts", "src/app/api/private/[...path]/route.ts"];
 const fundamentalLint=["src/app/fundamental/page.tsx", "src/app/page.tsx", "src/app/reports/fundamental/[reportId]/page.tsx", "src/features/fundamental/components/analysis-request.tsx", "src/features/fundamental/components/fundamental-report-view.tsx", "src/features/fundamental/components/fundamental-actions.tsx", "src/features/fundamental/lib/analysis-request.ts", "src/features/fundamental/api/reports.ts", "src/shared/server/fundamental-analysis-config.ts", "src/shared/server/session-proxy.ts", "src/app/api/private/[...path]/route.ts", "tests/unit/fundamental/analysis-request.test.mjs", "tests/unit/bff/session-proxy.test.mjs", "tests/unit/config/ports.test.mjs", "scripts/check-local-ports.mjs"];
 const analysisUnit=['unit/flow/analysis-request.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs'];
+export const flowReviewUnit=['unit/flow/report-display.test.mjs','unit/flow/report-deletion.test.mjs','tooling/safe-checks.test.mjs'];
+export const flowReviewType=['src/features/flow/lib/report-display.ts','src/features/flow/lib/report-deletion.ts','src/features/flow/components/flow-report-view.tsx','src/features/flow/components/session-controls.tsx','src/app/reports/flow/[reportId]/page.tsx'];
+export const flowReviewExact=['tests/fixtures/cf019-flow-display-cases.json',...flowReviewUnit.map(p=>'tests/'+p),'tests/integration/flow/report-browser-fixture.mjs',...flowReviewType];
+export const reactProductionFiles=['react/cjs/react.production.js','react/cjs/react-jsx-runtime.production.js','react-dom/cjs/react-dom.production.js','react-dom/cjs/react-dom-client.production.js','scheduler/cjs/scheduler.production.js'];
+export function reactRecords(dependency,sourceRoot=project){
+ const lock=JSON.parse(readSource(sourceRoot,'package-lock.json').toString());
+ return reactProductionFiles.map(relative=>{
+  const name=relative.split('/')[0],filename=path.join(dependency,relative),metadata=fs.lstatSync(filename),manifest=JSON.parse(fs.readFileSync(path.join(dependency,name,'package.json'),'utf8'));
+  if(fs.realpathSync(filename)!==filename||!metadata.isFile()||metadata.nlink!==1||manifest.version!==lock.packages['node_modules/'+name].version)throw Error('CF019 production dependency identity mismatch');
+  return {relative,size:metadata.size,sha256:crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex'),version:manifest.version};
+ });
+}
 const http=['integration/bff/disabled-http.test.mjs','integration/bff/session-http.test.mjs','integration/bff/ports-http.test.mjs','integration/bff/synthetic-demo-http.test.mjs'];
 const fixed=['tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts','package.json','package-lock.json','tsconfig.json','next.config.ts','postcss.config.mjs','eslint.config.mjs',
- ...unit.map(p=>'tests/'+p),...http.map(p=>'tests/'+p),'tests/helpers/safe-http.mjs','scripts/safe-checks-guard.cjs','scripts/check-local-ports.mjs'];
+ ...flowReviewExact,...unit.map(p=>'tests/'+p),...http.map(p=>'tests/'+p),'tests/helpers/safe-http.mjs','scripts/safe-checks-guard.cjs','scripts/check-local-ports.mjs'];
 const fresh=new Set(['scripts/safe-checks-guard.cjs','tests/helpers/safe-http.mjs','tests/tooling/safe-checks.test.mjs','tests/unit/flow/observation.test.mjs','tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts']);
 for(const file of ["src/app/fundamental/page.tsx", "src/app/page.tsx", "src/app/reports/fundamental/[reportId]/page.tsx", "src/features/fundamental/components/analysis-request.tsx", "src/features/fundamental/components/fundamental-report-view.tsx", "src/features/fundamental/components/fundamental-actions.tsx", "src/features/fundamental/lib/analysis-request.ts", "src/features/fundamental/api/reports.ts", "src/shared/server/fundamental-analysis-config.ts", "src/shared/server/session-proxy.ts", "src/app/api/private/[...path]/route.ts", "tests/unit/fundamental/analysis-request.test.mjs", "tests/unit/bff/session-proxy.test.mjs", "tests/unit/config/ports.test.mjs", "scripts/check-local-ports.mjs"])fresh.add(file);
 for(const file of ["src/shared/server/flow-demo-config.ts", "src/app/flow/demo/page.tsx", "src/features/flow/components/synthetic-demo.tsx", "src/features/flow/lib/synthetic-demo.ts", "tests/unit/flow/synthetic-demo.test.mjs", "tests/integration/bff/synthetic-demo-http.test.mjs"])fresh.add(file);
@@ -97,6 +109,7 @@ export async function checkedCommand({record,root,dependency,argv,env,timeout,ch
 }
 // Exact tracked BFF source, not a data/private-directory grant. Index/identity checks still apply.
 const privateRouteSource='src/app/api/private/[...path]/route.ts';
+for(const name of flowReviewExact)fresh.add(name);
 export function privatePath(p){if(p===privateRouteSource)return false;const blocked=new Set(['private','secret','secrets','key','keys','credential','credentials','dump','dumps','backup','backups','log','logs']);return p.split('/').some(part=>blocked.has(part.toLowerCase())||part.toLowerCase().startsWith('.env')||part.toLowerCase().startsWith('credentials')||part.toLowerCase().split('.').slice(1).some(s=>['key','pem','p12','sql','dump','bak','backup','log'].includes(s)));}
 export function sourceAllowed(p){return !privatePath(p)&&(fixed.includes(p)||icons.has(p)||p.startsWith('src/')&&/\.(ts|tsx|css|ico)$/.test(p));}
 export function readSource(root,relative){
@@ -171,9 +184,20 @@ export async function command(argv,{root,env,timeout=120000,children=new Set(),l
   let output='';
   for(const stream of [child.stdout,child.stderr])stream.on('data',chunk=>{output=(output+chunk).slice(-200000);});
   await wait(child,timeout);
-  if(child.exitCode!==0)throw Error('check child failed '+String(child.exitCode)+': '+output.slice(-2000));
+  if(child.exitCode!==0){
+   // Keep the journal/aggregate as evidence; its long exit JSON must not mask
+   // the bounded stderr/TAP failure in the command's human-facing summary.
+   const failure=output.replace(/^ST001_SNAPSHOT [^\n]*(?:\n|$)/gm,'').slice(-4000);
+   throw Error('check child failed '+String(child.exitCode)+': '+failure);
+  }
   return output;
  }finally{if(child){await retire(child);children.delete(child);}}
+}
+// Seatbelt uses the special host token localhost for loopback (not IP text).
+// The existing JS endpoint/DNS guard still pins 127.0.0.1 / ::1 and exact ports.
+export function loopbackRules(ports){
+ if(!Array.isArray(ports)||ports.length>2||new Set(ports).size!==ports.length||ports.some(port=>!Number.isInteger(port)||port<1||port>65535))throw Error('invalid exact loopback ports');
+ return ports.flatMap(port=>[`(allow network-inbound (local tcp "localhost:${port}"))`,`(allow network-outbound (remote tcp "localhost:${port}"))`]);
 }
 function policy(root,dependency,node,ports=[]){
  const q=JSON.stringify;
@@ -184,7 +208,7 @@ function policy(root,dependency,node,ports=[]){
  `(allow process-exec (literal ${q(node)}) (literal "/bin/cat") (literal "/usr/bin/true") (literal "/bin/ps") (literal "/usr/sbin/lsof"))`,
  '(allow file-read-data '+reads.map(p=>`(subpath ${q(p)})`).join(' ')+' (literal "/dev/null") (literal "/dev/urandom") (literal "/bin/cat") (literal "/usr/bin/true") (literal "/bin/ps") (literal "/usr/sbin/lsof"))',
  `(allow file-write* (subpath ${q(root)}) (literal "/dev/null"))`,
- ...ports.flatMap(port=>['127.0.0.1','::1'].flatMap(host=>[`(allow network-inbound (local tcp ${q(host+':'+port)}))`,`(allow network-outbound (remote tcp ${q(host+':'+port)}))`]))].join('\n');
+ ...loopbackRules(ports)].join('\n');
 }
 export function validNativeProbe(stage,result,deniedPath){
  if(result.signal!==null||!Number.isInteger(result.status)||result.status<0)return false;
@@ -283,7 +307,32 @@ export function reportObservations(root,diagnosticContext){
  if(!totals.workers||totals.observedOriginalRawDispatches||Object.keys(totals.violations).length||totals.deniedTotal!==totals.expectedNegatives||totals.diagnosticFailures)throw Error('worker observation records show unexpected denial/raw dispatch');
  return totals;
 }
+// Fixed readiness wait: preserve an early protected command failure instead of
+// replacing its bounded stderr/exit evidence with a later generic proof error.
+export async function browserReadiness(task,readProof,pause=()=>new Promise(resolve=>setTimeout(resolve,100))){
+ const settled=task.then(output=>({output}),error=>({error}));
+ for(let i=0;i<100;i++){
+  const proof=readProof();if(proof)return proof;
+  const result=await Promise.race([settled,pause()]);
+  if(result){
+   if(Object.hasOwn(result,'error'))throw result.error;
+   throw Error('CF019 worker exited before readiness: '+String(result.output).slice(-2000));
+  }
+ }
+ throw Error('CF019 worker readiness timeout (10s; no proof)');
+}
+// Stop only registered owned children, then await command finally + package
+// postcheck before the enclosing controller may remove its source-copy root.
+export async function stopAndSettleBrowserTask(task,stop){
+ let stopFailure;try{await stop();}catch(error){stopFailure=error;}
+ const settled=await task.then(()=>({status:'fulfilled'}),error=>({status:'rejected',error}));
+ if(stopFailure)throw stopFailure;
+ return settled;
+}
 async function execute(selected){
+ const flowReviewOnly=selected.length===1&&selected[0].startsWith('flow-review-');
+ const browserOnly=flowReviewOnly&&selected[0]==='flow-review-browser';
+ if(flowReviewOnly)selected=[selected[0]==='flow-review-type'?'type':selected[0]==='flow-review-lint'?'lint':'unit'];
  const fundamentalOnly=selected.length===1&&selected[0].startsWith('fundamental-');
  if(fundamentalOnly)selected=[selected[0]==='fundamental-unit'?'unit':selected[0]==='fundamental-type'?'type':'lint'];
  const analysisOnly=selected.length===1&&selected[0].startsWith('analysis-');
@@ -304,13 +353,38 @@ async function execute(selected){
   fs.writeFileSync(route,`export const dynamic='force-dynamic';export function GET(){return Response.json({nonce:${JSON.stringify(owned.nonce)},pid:process.pid,cwd:process.cwd()});}`);
   const capfile=path.join(root,'capability.json'),guard=path.join(root,'scripts/safe-checks-guard.cjs');
   diagnosticContext={key:crypto.randomBytes(32).toString('hex'),run:crypto.randomBytes(12).toString('hex'),copySources};
-  const cap={root,dependency,runtime:[path.dirname(path.dirname(node)),'/System','/usr/lib'],ports:[],lifetime:1800,nonce:owned.nonce,packageSnapshot,diagnostics:diagnosticContext,workload:selected.length===1?selected[0]:'all'};
+  const cap={root,dependency,runtime:[path.dirname(path.dirname(node)),'/System','/usr/lib'],ports:[],lifetime:browserOnly?600:1800,nonce:owned.nonce,packageSnapshot,diagnostics:diagnosticContext,workload:selected.length===1?selected[0]:'all'};
   fs.writeFileSync(capfile,JSON.stringify(cap),{mode:0o600});
   const env=environment(root,{NODE_OPTIONS:'--require='+guard,ST001_SAFE_CAP:capfile,NODE_ENV:'production'});
   const profile=path.join(root,'policy.sb');
   const run=async(args,timeout)=>{if(aborted)throw Error('controller interrupted/expired');return checkedCommand({record:packageSnapshot,root,dependency,argv:['/usr/bin/sandbox-exec','-f',profile,node,...args],env,timeout,children,prepare(){cap.lifetime=Math.floor(timeout/1000);fs.writeFileSync(capfile,JSON.stringify(cap));}});};
   if(selected.includes('self-test')){const output=await run(['--test-reporter=tap','tests/tooling/safe-checks.test.mjs'],120000);validateTestOutput(output);console.log(output);}
-  if(selected.includes('unit'))for(const file of (fundamentalOnly?fundamentalUnit:analysisOnly?analysisUnit:unit)){const output=await run(['--test-reporter=tap','tests/'+file],120000);validateTestOutput(output);console.log(output);}
+  if(selected.includes('unit')&&!browserOnly)for(const file of (flowReviewOnly?flowReviewUnit:fundamentalOnly?fundamentalUnit:analysisOnly?analysisUnit:unit)){const output=await run(['--test-reporter=tap','tests/'+file],120000);validateTestOutput(output);console.log(output);}
+  if(browserOnly){
+   const {reservePair}=await import('../tests/helpers/safe-http.mjs');const reservations=await reservePair();let task,browserFailure;
+   try{
+    cap.ports=reservations.ports;cap.reactProduction=reactRecords(dependency);fs.writeFileSync(capfile,JSON.stringify(cap));fs.writeFileSync(profile,policy(root,dependency,node,cap.ports));await reservations.close();
+    task=run(['--test-reporter=tap','tests/integration/flow/report-browser-fixture.mjs'],600000);
+    const proof=await browserReadiness(task,()=>{const file=path.join(root,'cf019-ready.json');return fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;});
+    if(!proof||proof.nonce!==owned.nonce||proof.cwd!==root||proof.port!==cap.ports[0]||![...children].some(child=>child.pid===proof.pid&&child.st001OwnedRoot===root))throw Error('CF019 worker readiness ownership mismatch');
+    const listener=execFileSync('/usr/sbin/lsof',['-nP','-a','-p',String(proof.pid),'-iTCP:'+proof.port,'-sTCP:LISTEN','-Fpn'],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'}}).toString().trim().split('\n');
+    const cwd=execFileSync('/usr/sbin/lsof',['-a','-p',String(proof.pid),'-d','cwd','-Fn'],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'}}).toString().trim().split('\n');
+    if(!listener.includes('p'+proof.pid)||!listener.includes('n127.0.0.1:'+proof.port)||!cwd.includes('n'+root))throw Error('CF019 listener/cwd identity mismatch');
+    console.log('CF019_OWNED_READY '+JSON.stringify({port:proof.port,nonce:owned.nonce,pid:proof.pid,cwd:root}));
+    console.log(await task);
+   }catch(error){browserFailure=error;throw error;}finally{
+    try{await reservations.close();}finally{
+     if(task){
+      const settled=await stopAndSettleBrowserTask(task,()=>abortOwned(children,stopChild));
+      if(settled.status==='rejected'){
+       if(!browserFailure)throw settled.error;
+       if(settled.error!==browserFailure)console.error('CF019_TASK_SETTLED_AFTER_FAILURE '+String(settled.error?.message??'command failed').slice(-4000));
+      }
+     }
+     if(JSON.stringify(cap.reactProduction)!==JSON.stringify(reactRecords(dependency)))throw Error('CF019 production dependency postcheck drift');
+    }
+   }
+  }
   if(selected.includes('build')||selected.includes('local-http'))console.log(await run(['node_modules/next/dist/bin/next','build','--webpack'],900000));
   if(selected.includes('local-http')){
    // Dynamic ports are reserved in the parent helper before profile generation.
@@ -326,13 +400,19 @@ async function execute(selected){
    // Installed Next writeAppTypeDeclarations.js uses these exact standard references.
    // The owned copy has no ignored next-env file; this adds declarations, never any/stubs.
    fs.writeFileSync(path.join(root,'next-env.d.ts'),'/// <reference types=\"next\" />\n/// <reference types=\"next/image-types/global\" />\n');
+   if(flowReviewOnly)fs.writeFileSync(path.join(root,'tsconfig.cf019.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts',...flowReviewType]}));
    if(fundamentalOnly)fs.writeFileSync(path.join(root,'tsconfig.cf015.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts',...fundamentalType]}));
    if(analysisOnly)fs.writeFileSync(path.join(root,'tsconfig.cf012.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts','src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts']}));
-   console.log(await run(['node_modules/typescript/bin/tsc','--noEmit','--incremental','false',...(fundamentalOnly?['-p','tsconfig.cf015.json']:analysisOnly?['-p','tsconfig.cf012.json']:[])],180000));
+   console.log(await run(['node_modules/typescript/bin/tsc','--noEmit','--incremental','false',...(flowReviewOnly?['-p','tsconfig.cf019.json']:fundamentalOnly?['-p','tsconfig.cf015.json']:analysisOnly?['-p','tsconfig.cf012.json']:[])],180000));
   }
-  if(selected.includes('lint'))console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
-   ...(fundamentalOnly?fundamentalLint:analysisOnly?['src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts','tests/unit/flow/analysis-request.test.mjs','tests/unit/bff/session-proxy.test.mjs','tests/unit/config/ports.test.mjs','scripts/check-local-ports.mjs']:Object.values(relocationSources).filter(p=>/\.(ts|tsx)$/.test(p))),
-   ...(analysisOnly||fundamentalOnly?[]:[ 'src/features/technical/components/indicator-card.tsx',
+  if(selected.includes('lint')&&flowReviewOnly){
+   const report=path.join(root,'cf019-eslint.json');
+   try{console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore','--format','json','--output-file',report,...flowReviewType,...flowReviewUnit.map(p=>'tests/'+p),'tests/integration/flow/report-browser-fixture.mjs','scripts/check-local-ports.mjs'],180000));}
+   finally{if(fs.existsSync(report)){const findings=JSON.parse(fs.readFileSync(report,'utf8')).flatMap(file=>file.messages.map(m=>({file:path.relative(root,file.filePath),line:m.line,rule:m.ruleId,severity:m.severity,message:m.message.split('\n')[0]})));console.log('CF019_LINT '+JSON.stringify(findings));}}
+  }
+  if(selected.includes('lint')&&!flowReviewOnly)console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
+   ...(flowReviewOnly?[...flowReviewType,...flowReviewUnit.map(p=>'tests/'+p),'tests/integration/flow/report-browser-fixture.mjs','scripts/check-local-ports.mjs']:fundamentalOnly?fundamentalLint:analysisOnly?['src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts','tests/unit/flow/analysis-request.test.mjs','tests/unit/bff/session-proxy.test.mjs','tests/unit/config/ports.test.mjs','scripts/check-local-ports.mjs']:Object.values(relocationSources).filter(p=>/\.(ts|tsx)$/.test(p))),
+   ...(flowReviewOnly||analysisOnly||fundamentalOnly?[]:[ 'src/features/technical/components/indicator-card.tsx',
    'src/shared/server/flow-demo-config.ts','src/app/flow/demo/page.tsx','src/features/flow/components/synthetic-demo.tsx','src/features/flow/lib/synthetic-demo.ts','src/app/api/private/[...path]/route.ts','src/proxy.ts','tests/unit/flow/synthetic-demo.test.mjs',
    'src/features/flow/lib/observation-window.ts','src/features/flow/components/flow-report-view.tsx','tests/unit/flow/observation.test.mjs',
    'src/shared/server/session-backend.ts','src/shared/server/session-proxy.ts','src/features/archive/lib/pagination.ts','src/app/page.tsx','src/app/reports/flow/[reportId]/page.tsx','src/features/flow/components/session-controls.tsx','src/shared/api/backend.ts',

@@ -37,77 +37,66 @@ _env = Environment(
 )
 
 
+def _display_number(value, precision=0, unit="", scale=1, signed=True):
+    """Presentation wrapper preserves the raw nonzero sign before unit underflow."""
+    if not finite_number(value):
+        return "자료 없음"
+    nonzero, positive = value != 0, value > 0
+    try:
+        shown = value * scale
+    except OverflowError:
+        return "표시 범위 초과"
+    if not finite_number(shown):
+        return "표시 범위 초과"
+    text = f"{abs(shown):,.{precision}f}"
+    if nonzero and (shown == 0 or float(text.replace(",", "")) == 0):
+        return ("양수" if positive else "음수") + f"·표시 정밀도 미만({unit})"
+    return ("-" if shown < 0 else "+" if signed and shown > 0 else "") + text + unit
+
+
+def _record(value):
+    return value if type(value) is dict else {}
+
+
+def _direction(value):
+    return "판단 보류" if not finite_number(value) else "매수" if value > 0 else "매도" if value < 0 else "중립"
+
+
 def _fact_rows(signals: dict) -> list[dict]:
-    """signals dict → 3주체 표시 행. 값 변형 없음 — 재배치 + 표시용 포맷만.
-
-    direction/pct/bar_w 는 전부 이미 있는 ratio 의 재표현이다:
-      direction : ratio 부호 → 매수/매도/중립 (부호를 단어로)
-      pct       : ratio 를 %문자열로 (표시 포맷)
-      bar_w     : 3주체 |ratio| 중 최대를 50 으로 놓은 상대 막대 폭 (표시 스케일)
-    """
-    consecutive = signals.get("consecutive", {})
-    strength = signals.get("strength", {})
-    raw_persistence = signals.get("persistence")
-    persistence = raw_persistence if type(raw_persistence) is dict else {}
-
-    ratios = {
-        s: strength.get(s, {}).get("ratio") for s in SUBJECTS
-    }
-    max_abs = max((abs(r) for r in ratios.values() if r is not None), default=0.0)
-
-    rows: list[dict] = []
-    for subject in SUBJECTS:            # 개인 → 외국인 → 기관 순서 고정(단일 출처)
-        c = consecutive.get(subject, {})
-        r = ratios[subject]
-        if r is None:
-            direction, pct, bar_w = "중립", "N/A", 0.0
-        else:
-            direction = "매수" if r > 0 else "매도" if r < 0 else "중립"
-            pct = f"{r * 100:+.1f}%"
-            bar_w = (abs(r) / max_abs * 50.0) if max_abs else 0.0
-        # amt: 강도와 같은 창(RECENT_DAYS)의 순매수 합 — persistence.sum_5 의
-        # 재표현(게이트2 규칙5 검증분). 백만원→억원은 ratio→% 와 같은 표시용
-        # 단위 재표현(값 자체는 signals 에 백만원 그대로). 없으면 None(구버전 방어).
-        claim = persistence.get(subject)
-        v5 = claim.get("sum_5") if type(claim) is dict else None
-        amt = f"{v5 / 100:+,.1f}억원" if finite_number(v5) else None
-        rows.append({
-            "name": subject,
-            "days": c.get("days"),
-            "consec_signal": c.get("signal"),
-            "ratio": r,
-            "strong": strength.get(subject, {}).get("strong"),
-            "direction": direction,
-            "pct": pct,
-            "amt": amt,
-            "bar_w": round(bar_w, 1),
-        })
+    consecutive = _record(signals.get("consecutive"))
+    strength = _record(signals.get("strength"))
+    persistence = _record(signals.get("persistence"))
+    ratios = {name: _record(strength.get(name)).get("ratio") for name in SUBJECTS}
+    max_abs = max((abs(v) for v in ratios.values() if finite_number(v)), default=0)
+    rows = []
+    for name in SUBJECTS:
+        claim = _record(consecutive.get(name))
+        raw = ratios[name]
+        ratio = raw if finite_number(raw) else None
+        days = claim.get("days")
+        days = days if type(days) is int and days >= 0 else None
+        amount = _record(persistence.get(name)).get("sum_5")
+        rows.append(dict(name=name, days=days, consec_signal=days is not None and claim.get("signal") is True,
+            ratio=ratio, strong=ratio is not None and _record(strength.get(name)).get("strong") is True,
+            direction=_direction(ratio), pct=_display_number(ratio, 1, "%", 100),
+            amt=_display_number(amount, 1, "억원", .01) if finite_number(amount) else None,
+            bar_w=round(abs(ratio) / max_abs * 50, 1) if ratio is not None and max_abs else 0))
     return rows
 
 
 def _gauge(signals: dict) -> dict:
-    """수급 종합 게이지의 표시용 분류 — 새 계산이 아니라 있는 값의 재표현.
-
-    규칙(단순 고정): 외국인 강도 + 기관 강도 합의 부호.
-      양수 → 매수 우위 / 음수 → 매도 우위 / 0 → 중립.
-    이미 계산된 두 ratio 를 더해 부호만 보는 것이므로 파생 판정이 아니라
-    alignment·강도의 재표현이다. 절대 signals 를 수정하지 않는다.
-    """
-    strength = signals.get("strength", {})
-    fore = strength.get(COL_FORE, {}).get("ratio") or 0.0
-    inst = strength.get(COL_INST, {}).get("ratio") or 0.0
-    s = fore + inst
-
-    if s > 0:
-        return {"verdict": "매수 우위", "color": "#F04452",
-                "arc": "M 140 30 A 110 110 0 0 1 237.1 88.4",
-                "knob_x": 237.1, "knob_y": 88.4}
-    if s < 0:
-        return {"verdict": "매도 우위", "color": "#3182F6",
-                "arc": "M 42.9 88.4 A 110 110 0 0 1 140 30",
-                "knob_x": 42.9, "knob_y": 88.4}
-    return {"verdict": "중립", "color": "#8B95A1",
-            "arc": None, "knob_x": 140, "knob_y": 30}
+    strength = _record(signals.get("strength"))
+    fore, inst = (_record(strength.get(name)).get("ratio") for name in (COL_FORE, COL_INST))
+    verdict, total = "판단 보류", None
+    if finite_number(fore) and finite_number(inst):
+        total = fore + inst
+        if finite_number(total):
+            verdict = "매수 우위" if total > 0 else "매도 우위" if total < 0 else "중립"
+    if verdict == "매수 우위":
+        return dict(verdict=verdict, color="#F04452", arc="M 140 30 A 110 110 0 0 1 237.1 88.4", knob_x=237.1, knob_y=88.4)
+    if verdict == "매도 우위":
+        return dict(verdict=verdict, color="#3182F6", arc="M 42.9 88.4 A 110 110 0 0 1 140 30", knob_x=42.9, knob_y=88.4)
+    return dict(verdict=verdict, color="#8B95A1", arc=None, knob_x=140, knob_y=30)
 
 
 def _daily_view(signals: dict) -> list[dict] | None:
@@ -131,9 +120,9 @@ def _daily_view(signals: dict) -> list[dict] | None:
             v = row[s]
             bars.append({
                 "subject": s,
-                "cls": "buy" if v > 0 else "sell",
+                "cls": "buy" if v > 0 else "sell" if v < 0 else "mut",
                 "h": round(abs(v) / max_abs * 48.0, 1) if max_abs and v else 0.0,
-                "val": f"{v:+,.0f}",
+                "val": _display_number(v),
             })
         iso = row.get("date", "")
         view.append({"iso": iso, "label": iso[5:].replace("-", "/"), "bars": bars})
@@ -159,7 +148,7 @@ def _persistence_view(signals: dict, window: dict | None = None) -> dict:
         for key, out in (("sum_5", "d5"), ("sum_20", "d20")):
             value = claim.get(key)
             available = finite_number(value)
-            row[out] = {"val": f"{value:+,.0f}" if available else "자료 없음",
+            row[out] = {"val": _display_number(value),
                         "cls": "buy" if available and value > 0 else "sell" if available and value < 0 else "mut",
                         "w": round(abs(value) / max_abs * 100.0, 1) if available and max_abs else 0.0,
                         "available": available}
@@ -169,37 +158,21 @@ def _persistence_view(signals: dict, window: dict | None = None) -> dict:
 
 
 def _ownership_view(signals: dict) -> dict | None:
-    """한도소진율 팩트 → 표시용 뷰. 값 변형 없음 — 표시 스케일·포맷만.
-
-    막대 높이는 min-max 상대 스케일 — 소진율은 하루 0.0x%p로 움직여 절대
-    스케일로는 전부 같은 높이가 된다(목업 동일). 바닥 26px를 둬 최솟값도
-    막대가 보인다. delta 는 창의 처음↔끝 차이 — 이미 검증된 두 값의 재표현
-    (_gauge 가 두 ratio 를 더하는 것과 같은 범주). 없으면 None → placeholder.
-    """
-    ownership = signals.get("ownership")
-    if not ownership:
+    raw = signals.get("ownership")
+    if type(raw) is not list:
         return None
-    ratios = [row["ratio"] for row in ownership]
+    rows = [r for r in raw if type(r) is dict and type(r.get("date")) is str and finite_number(r.get("ratio"))]
+    if not rows:
+        return None
+    ratios = [r["ratio"] for r in rows]
     lo, hi = min(ratios), max(ratios)
-    span = hi - lo
-    bars = []
-    for row in ownership:
-        iso = row.get("date", "")
-        h = 26.0 + (row["ratio"] - lo) / span * 64.0 if span else 55.0
-        bars.append({
-            "iso": iso,
-            "label": iso[5:].replace("-", "/"),   # "07/03" (daily 와 같은 포맷)
-            "num": f"{row['ratio']:.2f}",         # KIS 원본이 소수 2자리 — 그대로
-            "h": round(h, 1),
-        })
-    delta = ratios[-1] - ratios[0]
-    return {
-        "bars": bars,
-        "latest": f"{ratios[-1]:.2f}%",
-        "delta": f"{delta:+.2f}%p",
-        "delta_cls": "buy" if delta > 0 else "sell" if delta < 0 else "mut",
-        "delta_arrow": "▲" if delta > 0 else "▼" if delta < 0 else "―",
-    }
+    span, delta = hi-lo, ratios[-1]-ratios[0]
+    if not finite_number(span) or not finite_number(delta):
+        return None
+    bars = [dict(iso=r["date"], label=r["date"][5:].replace("-", "/"), num=_display_number(r["ratio"], 2, signed=False),
+        h=round(26+(r["ratio"]-lo)/span*64 if span else 55, 1)) for r in rows]
+    return dict(bars=bars, latest=_display_number(ratios[-1], 2, "%", signed=False), delta=_display_number(delta, 2, "%p"),
+        delta_cls="buy" if delta > 0 else "sell" if delta < 0 else "mut", delta_arrow="▲" if delta > 0 else "▼" if delta < 0 else "―")
 
 
 # 표시용 라벨: KIS 공식명 기본 + 통칭 병기(확인 가능성 — 원본과 같은 이름).
@@ -209,63 +182,37 @@ _DETAIL_DISPLAY = ("기금", "증권", "투자신탁", "사모펀드", "보험")
 
 
 def _inst_detail_view(signals: dict) -> dict | None:
-    """기관 세부 팩트 → 표시용 뷰. 값 변형 없음 — 정렬·스케일·라벨만.
-
-    5일 합(검증된 값) 내림차순 정렬로 '주도 주체'를 맨 위에. 막대 폭은 표시
-    스케일, leader 문구는 최대값의 재표현일 뿐 새 판정이 아니다.
-    """
-    detail = signals.get("inst_detail")
-    if not detail:
-        return None
-    shown = [(name, detail.get(name)) for name in _DETAIL_DISPLAY
-             if detail.get(name) is not None]
+    detail = _record(signals.get("inst_detail"))
+    shown = [(name, detail.get(name)) for name in _DETAIL_DISPLAY if finite_number(detail.get(name))]
     if not shown:
         return None
-    shown.sort(key=lambda kv: kv[1], reverse=True)          # 5일 합 내림차순
-    max_abs = max(abs(v) for _, v in shown) or 0.0
-    rows = [{
-        "label": _DETAIL_LABELS.get(name, name),
-        "val": f"{v:+,.0f}",
-        "cls": "buy" if v > 0 else "sell" if v < 0 else "mut",
-        "w": round(abs(v) / max_abs * 100.0, 1) if max_abs else 0.0,
-    } for name, v in shown]
-    top_name, top_val = shown[0]
-    leader = f"{_DETAIL_LABELS.get(top_name, top_name)} 주도" if top_val > 0 else "세부 전반 순매도"
-    return {"rows": rows, "leader": leader}
+    shown.sort(key=lambda pair: pair[1], reverse=True)
+    max_abs = max(abs(value) for _, value in shown)
+    rows = [dict(label=_DETAIL_LABELS.get(name, name), val=_display_number(value),
+        cls="buy" if value > 0 else "sell" if value < 0 else "mut",
+        w=round(abs(value) / max_abs * 100, 1) if max_abs else 0) for name, value in shown]
+    name, value = shown[0]
+    leader = f"{_DETAIL_LABELS.get(name, name)} 주도" if value > 0 else "표시된 세부 중 순매수 없음(0 포함)" if value == 0 else "표시된 세부 값은 모두 순매도"
+    return dict(rows=rows, leader=leader)
 
 
 def _price_table_view(signals: dict) -> list[dict] | None:
-    """일자별 시세 팩트 → 날짜별 표(기준점) 뷰. 값 변형 없음 — 표시 포맷·순서만.
-
-    최신이 위(내림차순)는 네이버 등 시세표의 읽기 관행 — 표시 순서 재배치일 뿐
-    값은 price_daily(게이트2 규칙8 검증분) 그대로. ▲/▼와 색은 부호의 재표현.
-    없으면 None → placeholder 후퇴.
-    """
     price = signals.get("price_daily")
-    if not price:
+    if type(price) is not list or not price:
         return None
-    def _qty(v: float | None) -> dict:
-        """순매매량 셀 — 값이 없으면(출처 결손) '—' 로 정직하게 비운다."""
-        if v is None:
-            return {"txt": "—", "cls": "mut"}
-        return {"txt": f"{v:+,.0f}",
-                "cls": "buy" if v > 0 else "sell" if v < 0 else "mut"}
-
+    def quantity(value):
+        return dict(txt=_display_number(value), cls="buy" if finite_number(value) and value > 0 else "sell" if finite_number(value) and value < 0 else "mut")
     rows = []
-    for row in reversed(price):                     # 최신이 위 — 표시 순서만 뒤집음
-        chg, rate = row["change"], row["change_rate"]
-        chg_cls = "buy" if chg > 0 else "sell" if chg < 0 else "mut"
-        rows.append({
-            "label": row["date"][5:].replace("-", "/"),   # "07/04" (다른 블록과 동일)
-            "close": f"{row['close']:,.0f}",
-            "chg": ("▲ " if chg > 0 else "▼ " if chg < 0 else "― ") + f"{abs(chg):,.0f}",
-            "chg_cls": chg_cls,
-            "rate": f"{rate:+.2f}%",
-            "vol": f"{row['volume']:,.0f}",
-            "inst": _qty(row.get("inst_qty")),      # 기관 먼저 — 네이버 표 순서
-            "fore": _qty(row.get("frgn_qty")),
-        })
-    return rows
+    for row in reversed(price):
+        if type(row) is not dict or type(row.get("date")) is not str:
+            continue
+        change = row.get("change")
+        arrow = "▲ " if finite_number(change) and change > 0 else "▼ " if finite_number(change) and change < 0 else "― " if finite_number(change) else ""
+        rows.append(dict(label=row["date"][5:].replace("-", "/"), close=_display_number(row.get("close"), signed=False),
+            chg=arrow+_display_number(change, signed=False).lstrip("-"), chg_cls=quantity(change)["cls"],
+            rate=_display_number(row.get("change_rate"), 2, "%"), vol=_display_number(row.get("volume"), signed=False),
+            inst=quantity(row.get("inst_qty")), fore=quantity(row.get("frgn_qty"))))
+    return rows or None
 
 
 # 해석 강조 마커(**…**) — 프롬프트가 1~2곳만 허용한 볼드 표시.
@@ -287,22 +234,11 @@ def _interpretation_html(text: str | None) -> Markup | None:
 
 
 def _header_price(signals: dict) -> dict | None:
-    """헤더용 현재가 요약 — price_daily 마지막 행(기준일 종가)의 재표현.
-
-    시세 표와 같은 검증분(게이트2 규칙8)에서 최신 하루만 크게 보여준다.
-    값 변형 없음 — 포맷·부호 색만. 없으면 None → 헤더는 종전대로.
-    """
-    price = signals.get("price_daily")
-    if not price:
+    rows = _price_table_view(signals)
+    if not rows:
         return None
-    last = price[-1]
-    chg, rate = last["change"], last["change_rate"]
-    return {
-        "close": f"{last['close']:,.0f}",
-        "chg": ("▲ " if chg > 0 else "▼ " if chg < 0 else "― ") + f"{abs(chg):,.0f}",
-        "rate": f"({rate:+.2f}%)",
-        "cls": "buy" if chg > 0 else "sell" if chg < 0 else "mut",
-    }
+    row = rows[0]
+    return dict(close=row["close"], chg=row["chg"], rate="("+row["rate"]+")", cls=row["chg_cls"])
 
 
 def _headline(rows: list[dict]) -> str:
@@ -318,7 +254,7 @@ def _headline(rows: list[dict]) -> str:
         return f"{'·'.join(buyers)} 매수 국면"
     if sellers:
         return f"{'·'.join(sellers)} 매도 국면"
-    return "방향이 뚜렷하지 않은 국면"
+    return "자료 부족으로 방향 판단 보류" if any(r["direction"] == "판단 보류" for r in rows) else "방향이 뚜렷하지 않은 국면"
 
 
 def build_report(

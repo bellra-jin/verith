@@ -35,3 +35,8 @@
 이전 단일 실제 시나리오의 성공이 새 운영 한도의 활성화나 실호출 승인을 뜻하지 않는다. 새 raw 정책5개는 기본 닫힘이며 실제 값/.env를 이번 작업에서 읽거나 갱신하지 않는다. 지원 목록·사용자/편입 Flow 서비스 일일 횟수·서비스 일일 추정 비용 한도가 유효할 때만 새 실행을 접수한다. 유효 한도 소진/blocked는429이며 기존 상태 조회와 동일 key의 게시 복구는 가능하다.
 
 $0.9135는 실행당 보수 예약이고 실제 사용액/청구서/사용자 지출 허가가 아니다. observed_calls 계수와 실제 usage/청구 증거를 구분한다. body 유실·usage 누락·timeout·unknown은 잔여 hold이며 시간 경과/보고서 삭제로 자동 환불하지 않는다. 다른 관점·앱 밖 호출과 KIS 요금은 미통제/미산정이다. [계약](contracts/flow-usage-v1.md)·[이번 검증 상태](work/CF-018-flow-usage-limits.md)를 따른다. 실제 공급자/Google/브라우저 검증을 이번 무키 검사로 반복하거나 대체하지 않는다.
+
+
+## CF-019 표시·삭제 및 운영 설정 안내
+
+[한도 설정 형태/주입/적용 시점](flow-usage-configuration.md)은 source 기반 안내이며 실제 값이나 운영 DB 적용을 확인/활성화한 것이 아니다. [표시·삭제 계약](contracts/flow-display-quality-v1.md)은 저장0/누락/작은값과 active 상세 확인/복구를 구분한다. 현재 구현/검사와 실제 React 합성 클릭 도구 차단은 [작업 기록](work/CF-019-flow-quality-delete-ux.md)을 따른다. Backend self3/unit54·Frontend94/type/lint는 통과했지만 수정 후 초기 GET/본문·삭제 클릭은 미검증이고 run5 자동 정리/테스트 프로필 정리 증거는 대기이므로 CF019 전체 수용/merge-ready가 아니다. 앞선 CF017 관측/미확인 문장은 그때 이력이며 이번 source/클릭 증거로 소급하지 않는다.

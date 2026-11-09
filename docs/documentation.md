@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-019 Flow 표시·삭제 UX
+
+[표시/삭제 계약](contracts/flow-display-quality-v1.md)·[활성화 없는 한도 안내](flow-usage-configuration.md)·[이번 실행/미검증](work/CF-019-flow-quality-delete-ux.md)을 따른다. 기존 숫자/해석·Backend/DB/회계는 보존하며 실제 React 합성 클릭과 helper/source assertion을 구분한다.
+
 ## CF-018 Flow 사용 한도·보수 예약
 
 [사용 한도 v1](contracts/flow-usage-v1.md)·[구현/검증 상태](work/CF-018-flow-usage-limits.md)를 따른다. 인증 사용자·Flow 실행·실제 호출 단위의 제한이며 미설정은 새 admission만 닫는다. $0.9135 예약·usage 추정·unknown hold는 실제 청구와 구분하고 미편입 관점을 통제한다고 주장하지 않는다. 최종 UX/승인 순서는 전체 작업 운영 v1.2 §4.1을 유일한 현재 기준으로 참조하며 이 문서에서 새 로드맵을 만들지 않는다.

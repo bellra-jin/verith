@@ -153,3 +153,9 @@ jobs:
       - name: Protected Flow usage limits unit
         run: |
           env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" usage-unit
+      - name: Protected Flow display quality self
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" display-self
+      - name: Protected Flow display quality unit
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" display-unit

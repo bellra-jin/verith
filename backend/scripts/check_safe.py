@@ -375,7 +375,14 @@ NEW.update(CF018_INPUTS)
 NEW.update(CF018_SOURCES)
 
 
-def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False):
+CF019_TESTS=('tests/unit/test_cf019_flow_display_quality.py',)
+CF019_INPUTS={'ai/src/agents/flow/domain/verification/consecutive.py': '35c8e994f01aa8447b117c0ef9a4746fe66f8b4687091bfa2d042eb3eab2bede', 'ai/src/agents/flow/domain/interpretation_claims.py': '4cf9fa103736cc5c852eb96cbb1f42253ad875f89bccf3dcd47a43bb76f6fd22', 'ai/src/agents/flow/domain/verification/signals.py': '3f4e26fabbb2b64163bb1f8c0a77665316cd61a70d9eb1458d201f6395f57aaa', 'ai/src/agents/flow/domain/verification/interpretation.py': '863adcb582b601eacadb3fe894e92d9669670fbfd6c5f712841a64ba1bcfdd60', 'ai/src/agents/flow/domain/models.py': '41377f16336cc0401c82d390cde04727cc8aa2e53f6d114b025aa62d0de4f894', 'ai/src/agents/flow/application/workflow.py': '03816e283c8f5ba0718738b4b71b79fc48d82f0240159fc23d0bc5259838809b', 'ai/src/agents/flow/infrastructure/llm/explain.py': '14bb4cba44295fe577ec019ca0b8994a712e1c03e44d1fadf8aabb840653c10b', 'ai/src/agents/flow/prompts/explain.txt': '9e8a04b6d7d0f534d54552e78ed489cb74f3cc7160fbd379b030758ae891406c', 'ai/src/agents/flow/api/schemas.py': 'cccacc7290ada82b5344b716f8c671907ffd4d9ad076d91dc0c444730139fb5d', 'ai/src/agents/flow/application/execution_runtime.py': '55e018f7b348a312d3eadb11eccdb281b7e2598a4eb286e0ff677588a0d7f524', 'ai/src/agents/flow/domain/observation_window.py': 'acc50bc0aec7e0eee207f62a3b6bce00f2e37ce7d14e31de1acabc4c2d07ea27', 'ai/src/agents/flow/domain/signals.py': '15de1236f86a78a14e5d5106247d0329167e12eb390b29ebf97cd5cd012ae2be', 'ai/src/agents/flow/config.py': '91c95356110d0294051eb7871bfb06100ebd003ccb0f2da33c6add2b0594b637', 'ai/src/agents/flow/api/payload.py': 'e3076a97d9c4c5cc6159f0488f351b07613353dbe67371a001ff6ee995479fc2', 'ai/src/agents/flow/infrastructure/token_cache.py': '3e090e2992aa9a0c7f78f644132765e616c002b35b5994ebc71a3f2fd26bad7f', 'ai/src/agents/flow/infrastructure/render/builder.py': '4d3bf9c9bed2cbe9bf438f3314517f5dd27b917961f4be48b0eb105bd8369a7e', 'ai/src/agents/flow/infrastructure/render/templates/supply_demand.html': 'ddff99c015a419e488689b3d1a7906b83fe228149d29b1f2be8d0cd77ed8aa2f'}
+CF019_SOURCES=frozenset({'backend/tests/unit/test_cf019_flow_display_quality.py','backend/tests/unit/test_cf014_flow_quality.py','frontend/tests/fixtures/cf019-flow-display-cases.json'})
+NEW.update(CF019_INPUTS)
+NEW.update(CF019_SOURCES)
+
+
+def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False):
     raw = subprocess.check_output(["/usr/bin/git", "ls-files", "--stage", "-z"], cwd=repo,
                                   env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"})
     selected = set()
@@ -397,10 +404,12 @@ def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_e
         result={p for p in result if not p.startswith("ai/") or p in CF017_INPUTS}
     if usage_only:
         result={p for p in result if not p.startswith("ai/") or p in CF018_INPUTS}
+    if display_only:
+        result={p for p in result if not p.startswith("ai/") or p in CF019_INPUTS}
     return sorted(result)
 
 
-def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False):
+def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False):
     if not sys.flags.isolated or not sys.flags.no_site:
         raise UnsafeCheck("use the documented clean env -i Python -I -S launch")
     if set(os.environ) - {"LANG", "TZ", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}:
@@ -423,9 +432,9 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
         policy = prove_os_boundary(owned, executable, sandbox_profile(owned.path, runtime, site, executable), children)
         checkout = owned.path / "checkout"
         fingerprints = {}
-        for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only):
+        for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only, display_only=display_only):
             data = regular_bytes(repo, p)
-            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS)[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             target = checkout / p
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -439,7 +448,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
             cap = {"root": str(owned.path), "source": str(checkout / "backend"),
                    "site": str(site), "runtime": str(runtime), "mode": mode,
                    "parent_pid": os.getpid(), "lifetime": 90 if mode == "self-test" else 300,
-                   "tests": list(CF018_TESTS if usage_only else CF017_TESTS if flow_errors_only else CF015_TESTS if fundamental_only else CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only, "cf015_self_only":fundamental_only, "cf017_self_only":flow_errors_only, "cf018_self_only":usage_only}
+                   "tests": list(CF019_TESTS if display_only else CF018_TESTS if usage_only else CF017_TESTS if flow_errors_only else CF015_TESTS if fundamental_only else CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only, "cf015_self_only":fundamental_only, "cf017_self_only":flow_errors_only, "cf018_self_only":usage_only, "cf019_self_only":display_only}
             capfile = owned.path / "capability.json"
             capfile.write_text(json.dumps(cap))
             worker = checkout / "backend/scripts/safe_checks_bootstrap.py"
@@ -458,16 +467,16 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit", "fundamental-self", "fundamental-unit", "flow-errors-self", "flow-errors-unit", "usage-self", "usage-unit"))
+    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit", "fundamental-self", "fundamental-unit", "flow-errors-self", "flow-errors-unit", "usage-self", "usage-unit", "display-self", "display-unit"))
     values = list(sys.argv[1:] if argv is None else argv)
-    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"], ["fundamental-self"], ["fundamental-unit"], ["flow-errors-self"], ["flow-errors-unit"], ["usage-self"], ["usage-unit"]]:
+    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"], ["fundamental-self"], ["fundamental-unit"], ["flow-errors-self"], ["flow-errors-unit"], ["usage-self"], ["usage-unit"], ["display-self"], ["display-unit"]]:
         parser.error("unsupported mode or extra arguments")
     args = parser.parse_args(values)
     if args.mode == "list":
         print("self-test: synthetic guards only\nunit: fixed six complete files plus audited pure stock/technical files (no DB/external)")
         return 0
     try:
-        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self","quality-self","fundamental-self","flow-errors-self","usage-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit","quality-self","quality-unit","fundamental-self","fundamental-unit","flow-errors-self","flow-errors-unit","usage-self","usage-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"}, quality_only=args.mode in {"quality-self","quality-unit"}, fundamental_only=args.mode in {"fundamental-self","fundamental-unit"}, flow_errors_only=args.mode in {"flow-errors-self","flow-errors-unit"}, usage_only=args.mode in {"usage-self","usage-unit"})
+        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self","quality-self","fundamental-self","flow-errors-self","usage-self","display-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit","quality-self","quality-unit","fundamental-self","fundamental-unit","flow-errors-self","flow-errors-unit","usage-self","usage-unit","display-self","display-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"}, quality_only=args.mode in {"quality-self","quality-unit"}, fundamental_only=args.mode in {"fundamental-self","fundamental-unit"}, flow_errors_only=args.mode in {"flow-errors-self","flow-errors-unit"}, usage_only=args.mode in {"usage-self","usage-unit"}, display_only=args.mode in {"display-self","display-unit"})
     except (UnsafeCheck, OSError, subprocess.SubprocessError) as exc:
         print(f"SAFE_CHECK_BLOCKED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 78

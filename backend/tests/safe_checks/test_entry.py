@@ -661,6 +661,42 @@ class CF018Boundary(unittest.TestCase):
             self.assertNotIn(name,sys.modules)
 
 
+class CF019Boundary(unittest.TestCase):
+    def test_exact_seventeen_inputs_and_single_focused_file(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        self.assertEqual(c.CF019_TESTS,('tests/unit/test_cf019_flow_display_quality.py',))
+        self.assertEqual(len(c.CF019_INPUTS),17)
+        self.assertEqual({k:v for k,v in c.CF019_INPUTS.items() if k in c.CF014_INPUTS},c.CF014_INPUTS)
+        self.assertTrue(set(c.CF014_COMPAT)<=set(c.CF019_INPUTS))
+        root=Path(__file__).resolve().parents[3]
+        for name,digest in c.CF019_INPUTS.items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):copied=c.selected_sources(Path('/synthetic'),display_only=True)
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF019_INPUTS))
+        self.assertIn('frontend/tests/fixtures/cf019-flow-display-cases.json',copied)
+    def test_public_display_modes_dispatch_only_the_new_capability(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('display-self','display-unit'):
+            with patch.object(c,'execute') as execute:
+                self.assertEqual(c.main([mode]),0)
+                self.assertTrue(execute.call_args.kwargs['display_only'])
+                self.assertFalse(execute.call_args.kwargs['usage_only'])
+                self.assertEqual(execute.call_args.args[1],('self-test' if mode.endswith('self') else 'unit',))
+    def test_origin_and_graph_provider_boundaries_unchanged(self):
+        import sys
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        from scripts.cf015_fundamental_check import load_origins
+        load_origins();self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        for name in ('pandas','openai','langchain_openai','agents.flow.infrastructure.render.builder','agents.flow.application.agent'):
+            self.assertNotIn(name,sys.modules)
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -669,6 +705,7 @@ if __name__ == "__main__":
     fundamental_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf015_self_only",False)
     errors_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf017_self_only",False)
     usage_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf018_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    display_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf019_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

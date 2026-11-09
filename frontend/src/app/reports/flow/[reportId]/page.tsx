@@ -19,7 +19,7 @@ export default async function FlowReportPage({
   if (!/^[0-9a-fA-F-]{36}$/.test(reportId)) notFound();
   const auth=await sessionBackendFetch('/api/auth/session');
   if (!auth?.ok) redirect('/');
-  const session=await auth.json() as {csrf_token:string};
+  const session=await auth.json() as {csrf_token:string;user_id:string};
   const response=await sessionBackendFetch(`/api/flow/reports/${reportId}`);
   if (response?.status===404) notFound();
   if (!response?.ok) redirect('/');
@@ -45,8 +45,9 @@ export default async function FlowReportPage({
           <span className="text-xs font-bold uppercase tracking-wider text-[#94a3b8]">수급·자금흐름 리포트</span>
         </div>
 
-        <SessionControls csrfToken={session.csrf_token} reportId={reportId} returnTo={returnTo} />
-        <FlowReportView payload={envelope.report} />
+        <SessionControls csrfToken={session.csrf_token} userId={session.user_id} reportId={reportId} returnTo={returnTo}>
+          <FlowReportView payload={envelope.report} />
+        </SessionControls>
       </article>
     </div>
   );

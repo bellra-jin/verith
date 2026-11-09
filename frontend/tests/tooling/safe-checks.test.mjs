@@ -439,3 +439,89 @@ test('relocation copy inputs use only the exact reviewed source-to-target mappin
  assert.equal(Object.isFrozen(relocationSources),true);
  for(const target of Object.values(relocationSources).filter(p=>/\.(ts|tsx)$/.test(p)))assert.equal(sourceAllowed(target),true);
 });
+
+test('CF019 exact focused sources and five production React inputs retain unit capability and original guard',async()=>{
+ const entry=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(entry.flowReviewUnit,['unit/flow/report-display.test.mjs','unit/flow/report-deletion.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(entry.reactProductionFiles,['react/cjs/react.production.js','react/cjs/react-jsx-runtime.production.js','react-dom/cjs/react-dom.production.js','react-dom/cjs/react-dom-client.production.js','scheduler/cjs/scheduler.production.js']);
+ for(const name of entry.flowReviewExact){assert.equal(sourceAllowed(name),true);assert.equal(sourceAllowed(name+'.adjacent'),false);}
+ const fixture=fs.readFileSync('tests/integration/flow/report-browser-fixture.mjs','utf8');
+ assert.match(fixture,/cap.workload!=='unit'/);assert.match(fixture,/Content-Security-Policy/);assert.match(fixture,/finally/);
+ assert.doesNotMatch(fixture,/from ['"](?:playwright|puppeteer)|child_process|https:\/\//);
+ const tree=ts.createSourceFile('report-browser-fixture.mjs',fixture,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ assert.equal(tree.parseDiagnostics.length,0);
+ const declarations=tree.statements.filter(ts.isVariableStatement).flatMap(s=>[...s.declarationList.declarations]);
+ const bundle=declarations.find(n=>n.name.getText(tree)==='bundle').initializer;
+ assert.ok(ts.isTemplateExpression(bundle));
+ const syntax=bundle.head.text+bundle.templateSpans.map(span=>{
+  const text=span.expression.getText(tree);
+  return (text.startsWith('Object.entries(modules)')?'':text.includes('JSON.stringify(payload')?'{}':'"synthetic"')+span.literal.text;
+ }).join('');
+ assert.equal(ts.createSourceFile('fixture-bundle.js',syntax,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS).parseDiagnostics.length,0);
+ for(const phrase of ['authStatus','reportStatus','16000','removed.has','표시 '+"'"+'+name'])assert.ok(fixture.includes(phrase));
+ // Execute only the fixture's fixed control function in a VM, never React/server.
+ const generated=ts.createSourceFile('fixture-bundle.js',syntax,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const controls=[];function visit(node){if(ts.isFunctionDeclaration(node)&&node.name?.text==='control')controls.push(node);ts.forEachChild(node,visit);}visit(generated);assert.equal(controls.length,1);
+ const code=controls[0].getText(generated)+';control;';
+ const applied={updated:true,account:'B',status:403,authStatus:401,reportStatus:404,delay:16000};
+ for(const kind of ['success','http','malformed','transport']){
+  const states=[],lock={current:false};let calls=0;
+  const fetch=async()=>{calls++;if(kind==='transport')throw Error('synthetic raw error must not leak');return {ok:kind!=='http',json:async()=>kind==='malformed'?{updated:true}:applied};};
+  const control=vm.runInNewContext(code,{controlLock:lock,setControlState:s=>states.push(s),fetch,AbortSignal},{timeout:100});
+  await control({status:403});assert.equal(states[0].phase,'pending');assert.equal(calls,1);
+  assert.equal(states.at(-1).phase,kind==='success'?'complete':'error');
+  if(kind==='success'){assert.ok(states.at(-1).text.includes('적용 완료'));for(const [key,value] of Object.entries(applied).filter(([key])=>key!=='updated'))assert.ok(states.at(-1).text.includes(JSON.stringify(key)+':'+JSON.stringify(value)));assert.equal(lock.current,false);}
+  else{assert.equal(states.at(-1).text,'합성 fixture 제어 오류 · 다음 클릭을 중단하고 새로고침하세요');await control({status:204});assert.equal(calls,1);assert.equal(lock.current,true);}
+ }
+ assert.match(fixture,/fieldset.*disabled:controlState.phase/);assert.match(fixture,/inert:controlState.phase/);
+
+});
+
+
+test('CF019 readiness preserves an early worker failure and keeps fixed proof/deadline checks',async()=>{
+ const {browserReadiness}=await import('../../scripts/check-local-ports.mjs');
+ let waits=0,reads=0;const failure=Error('check child failed 7: SYNTHETIC-WORKER-STDERR');
+ await assert.rejects(browserReadiness(Promise.reject(failure),()=>{reads++;return null;},()=>{waits++;return new Promise(()=>{});}),error=>error===failure);
+ assert.equal(reads,1);assert.equal(waits,1);
+ await assert.rejects(browserReadiness(Promise.resolve('SYNTHETIC-EARLY-EXIT'),()=>null,async()=>{}),/worker exited before readiness: SYNTHETIC-EARLY-EXIT/);
+ const running=new Promise(()=>{});waits=0;
+ const proof={nonce:'synthetic',pid:123,cwd:'/owned',port:1234};
+ assert.equal(await browserReadiness(running,()=>waits===2?proof:null,async()=>{waits++;}),proof);assert.equal(waits,2);
+ waits=0;await assert.rejects(browserReadiness(running,()=>null,async()=>{waits++;}),/readiness timeout/);assert.equal(waits,100);
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8');
+ for(const check of ['proof.nonce!==owned.nonce','proof.cwd!==root','proof.port!==cap.ports[0]','child.pid===proof.pid&&child.st001OwnedRoot===root',"listener.includes('p'+proof.pid)","cwd.includes('n'+root)"])assert.ok(source.includes(check));
+ assert.doesNotMatch(source,/task\.catch\(\(\)=>\{\}\)/);
+});
+
+
+test('CF019 command failure keeps stderr visible when the exit snapshot is long',async()=>{
+ const {command}=await import('../../scripts/check-local-ports.mjs');const {EventEmitter}=await import('node:events');
+ const child=Object.assign(new EventEmitter(),{pid:123,exitCode:7,signalCode:null,stdout:new EventEmitter(),stderr:new EventEmitter()});const children=new Set();let retired=0;
+ await assert.rejects(command(['synthetic-only'],{root:process.cwd(),env:{},children,launch:()=>child,wait:async()=>{child.stderr.emit('data','SYNTHETIC-ACTUAL-WORKER-FAILURE\n');child.stdout.emit('data','ST001_SNAPSHOT '+JSON.stringify({synthetic:'x'.repeat(6000)})+'\n');},retire:async()=>{retired++;}}),error=>error.message==='check child failed 7: SYNTHETIC-ACTUAL-WORKER-FAILURE\n');
+ assert.equal(retired,1);assert.equal(children.size,0);
+});
+
+
+test('CF019 Seatbelt rules use only the reserved localhost TCP ports, never wildcard or IP host syntax',async()=>{
+ const {loopbackRules}=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(loopbackRules([]),[]);
+ assert.deepEqual(loopbackRules([3200,8200]),['(allow network-inbound (local tcp "localhost:3200"))','(allow network-outbound (remote tcp "localhost:3200"))','(allow network-inbound (local tcp "localhost:8200"))','(allow network-outbound (remote tcp "localhost:8200"))']);
+ for(const ports of [[0],[65536],[-1],[1.5],['3200'],['*'],[3200,3200],[1,2,3],null])assert.throws(()=>loopbackRules(ports),/invalid exact loopback ports/);
+ for(const line of loopbackRules([1,65535]))assert.doesNotMatch(line,/\*|127\.0\.0\.1|::1|udp/);
+ const guard=fs.readFileSync('scripts/safe-checks-guard.cjs','utf8');
+ assert.ok(guard.includes("['127.0.0.1','::1','localhost'].includes(host)"));assert.ok(guard.includes('cap.ports.includes(Number(port))'));
+});
+
+test('CF019 owned stop precedes command settlement and package postcheck; cleanup failures remain failures',async()=>{
+ const {stopAndSettleBrowserTask}=await import('../../scripts/check-local-ports.mjs');
+ for(const fail of [false,true]){
+  const events=[];let finish;const commandFailure=Error('synthetic command failure');
+  const task=new Promise(resolve=>{finish=resolve;}).then(()=>{events.push('package-postcheck');if(fail)throw commandFailure;});
+  const result=await stopAndSettleBrowserTask(task,async()=>{events.push('owned-stop');finish();});events.push('root-may-clean');
+  assert.deepEqual(events,['owned-stop','package-postcheck','root-may-clean']);
+  assert.equal(result.status,fail?'rejected':'fulfilled');if(fail)assert.equal(result.error,commandFailure);
+ }
+ let finished=false;const cleanupFailure=Error('synthetic owned stop failure');
+ await assert.rejects(stopAndSettleBrowserTask(Promise.resolve().then(()=>{finished=true;}),async()=>{throw cleanupFailure;}),error=>error===cleanupFailure);
+ assert.equal(finished,true);
+});

@@ -1,0 +1,246 @@
+{
+  "numbers": [
+    {
+      "name": "missing",
+      "value": null,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "자료 없음"
+    },
+    {
+      "name": "boolean",
+      "value": true,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "자료 없음"
+    },
+    {
+      "name": "zero",
+      "value": 0,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "0.0%"
+    },
+    {
+      "name": "negative-zero",
+      "value": -0.0,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "0.0%"
+    },
+    {
+      "name": "tiny-positive",
+      "value": 1e-08,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "양수·표시 정밀도 미만(%)"
+    },
+    {
+      "name": "tiny-negative",
+      "value": -1e-08,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "음수·표시 정밀도 미만(%)"
+    },
+    {
+      "name": "over-hundred",
+      "value": 1.234,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "+123.4%"
+    },
+    {
+      "name": "amount",
+      "value": 1234,
+      "precision": 1,
+      "unit": "억원",
+      "scale": 0.01,
+      "expected": "+12.3억원"
+    },
+    {
+      "name": "tiny-amount",
+      "value": 0.001,
+      "precision": 1,
+      "unit": "억원",
+      "scale": 0.01,
+      "expected": "양수·표시 정밀도 미만(억원)"
+    },
+    {
+      "name": "underflow-positive",
+      "value": 5e-324,
+      "precision": 1,
+      "unit": "억원",
+      "scale": 0.01,
+      "expected": "양수·표시 정밀도 미만(억원)"
+    },
+    {
+      "name": "underflow-negative",
+      "value": -5e-324,
+      "precision": 1,
+      "unit": "억원",
+      "scale": 0.01,
+      "expected": "음수·표시 정밀도 미만(억원)"
+    },
+    {
+      "name": "numeric-string",
+      "value": "1",
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "자료 없음"
+    },
+    {
+      "name": "overflow",
+      "value": 1e+308,
+      "precision": 1,
+      "unit": "%",
+      "scale": 100,
+      "expected": "표시 범위 초과"
+    },
+    {
+      "name": "midpoint-0.5",
+      "value": 0.5,
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "양수·표시 정밀도 미만()"
+    },
+    {
+      "name": "midpoint--0.5",
+      "value": -0.5,
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "음수·표시 정밀도 미만()"
+    },
+    {
+      "name": "midpoint-1.5",
+      "value": 1.5,
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "+2"
+    },
+    {
+      "name": "midpoint--1.5",
+      "value": -1.5,
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "-2"
+    },
+    {
+      "name": "midpoint-2.5",
+      "value": 2.5,
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "+2"
+    },
+    {
+      "name": "midpoint--2.5",
+      "value": -2.5,
+      "precision": 0,
+      "unit": "",
+      "scale": 1,
+      "expected": "-2"
+    },
+    {
+      "name": "midpoint-2.675",
+      "value": 2.675,
+      "precision": 2,
+      "unit": "",
+      "scale": 1,
+      "expected": "+2.67"
+    },
+    {
+      "name": "midpoint--2.675",
+      "value": -2.675,
+      "precision": 2,
+      "unit": "",
+      "scale": 1,
+      "expected": "-2.67"
+    }
+  ],
+  "gauges": [
+    {
+      "fore": null,
+      "inst": 1,
+      "expected": "판단 보류"
+    },
+    {
+      "fore": true,
+      "inst": 1,
+      "expected": "판단 보류"
+    },
+    {
+      "fore": 0,
+      "inst": -0.0,
+      "expected": "중립"
+    },
+    {
+      "fore": 1,
+      "inst": -1,
+      "expected": "중립"
+    },
+    {
+      "fore": 2,
+      "inst": -1,
+      "expected": "매수 우위"
+    },
+    {
+      "fore": -2,
+      "inst": 1,
+      "expected": "매도 우위"
+    },
+    {
+      "fore": 1e+308,
+      "inst": 1e+308,
+      "expected": "판단 보류"
+    }
+  ],
+  "institutions": [
+    {
+      "values": [
+        0,
+        0
+      ],
+      "expected": "표시된 세부 중 순매수 없음(0 포함)"
+    },
+    {
+      "values": [
+        0,
+        -1
+      ],
+      "expected": "표시된 세부 중 순매수 없음(0 포함)"
+    },
+    {
+      "values": [
+        -1,
+        -2
+      ],
+      "expected": "표시된 세부 값은 모두 순매도"
+    },
+    {
+      "values": [
+        2,
+        -1
+      ],
+      "expected": "기금(연기금) 주도"
+    },
+    {
+      "values": [
+        null,
+        true
+      ],
+      "expected": null
+    }
+  ]
+}

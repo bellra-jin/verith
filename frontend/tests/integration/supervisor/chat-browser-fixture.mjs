@@ -5,6 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import ts from 'typescript';
+import {validateFixtureTarget,fixtureAdapter,createFixtureTerminal,terminalAction,browserNotExecuted} from '../../helpers/supervisor-fixture.mjs';
 import {reactProductionFiles} from '../../../scripts/check-local-ports.mjs';
 
 const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
@@ -72,26 +73,81 @@ function outcome(row){
  return {supervisor_id:row.id,plan:row.plan,plan_status:'confirmed',effective_scope:{selected_views:['flow'],fixed_observation_window:true,all_subjects_retained:true,waived_conditions:row.body.consent.waived_conditions,partial_consent:row.body.consent.allow_partial},views:row.plan.requested_views.map(view=>({view,state:view==='flow'?status:'not_executed',reason:view==='flow'?'flow_state':'not_connected'})),coverage:status==='stored'?(row.plan.partial?'partial':'fulfilled'):['failed','unknown'].includes(status)?'unfulfilled':'pending',flow:{analysis_id:row.analysis,admission_request_id:row.analysis,attempt_id:row.analysis,state:status,deadline_at:new Date(Date.now()+120000).toISOString(),report_id:status==='stored'?row.report:null,report_url:status==='stored'?'/reports/flow/'+row.report:null,error:null}};
 }
 const bundle=`const modules={${Object.entries(registry).map(([id,body])=>JSON.stringify(id)+':function(module,exports,require){'+body+'\n}').join(',')}};const cache={};function require(id){if(!Object.hasOwn(modules,id))throw Error('Closed fixture registry');if(!cache[id]){const m={exports:{}};cache[id]=m;modules[id](m,m.exports,require);}return cache[id].exports;}
+const validateFixtureTarget=${validateFixtureTarget.toString()},fixtureAdapter=${fixtureAdapter.toString()};
 const React=require('react'),Session=require('SupervisorSession').SupervisorSession;
-function Fixture(){const [id,setId]=React.useState(null),[stats,setStats]=React.useState('합성 제어 대기'),[failed,setFailed]=React.useState(false);const lock=React.useRef(false);
+function Fixture(){const [id,setId]=React.useState(()=>validateFixtureTarget(location.pathname+location.search+location.hash).id),[stats,setStats]=React.useState('합성 제어 대기'),[failed,setFailed]=React.useState(false);const lock=React.useRef(false);
  const refresh=async()=>{const r=await fetch('/fixture-counts');if(!r.ok)throw Error();setStats(JSON.stringify(await r.json()));};
  const control=async(value)=>{if(lock.current||failed)return;lock.current=true;try{const r=await fetch('/fixture-control',{method:'POST',headers:{'Content-Type':'application/json','X-Fixture-Nonce':${JSON.stringify(nonce)}},body:JSON.stringify(value)});if(!r.ok)throw Error();setStats('적용 완료 · '+JSON.stringify(await r.json()));}catch{setFailed(true);setStats('안전한 fixture 제어 오류 · 다음 클릭 중지');}finally{lock.current=false;}};
- const navigate=React.useCallback((href,replace=false)=>{const u=new URL(href,location.href);if(u.pathname!=='/research'){setStats('합성 navigation 관측 · '+u.pathname);return;}history[replace?'replaceState':'pushState']({},'',u);setId(u.searchParams.get('supervisor_id'));},[]);
+ const adapter=React.useMemo(()=>fixtureAdapter({origin:location.origin,location,history,events:window,onChange:setId,onInvalid:()=>{setId(null);setFailed(true);setStats('안전한 fixture URL 오류');},onOutside:()=>setStats('범위 밖 합성 navigation 관측')}),[]);
+ React.useEffect(()=>adapter.listen(),[adapter]);
+ const finishFixture=async(action)=>{if(lock.current||failed)return;lock.current=true;try{const response=await fetch('/fixture-finish',{method:'POST',headers:{'Content-Type':'application/json','X-Fixture-Nonce':${JSON.stringify(nonce)}},body:JSON.stringify({action})});const value=await response.json();if(response.status!==200||value.state!==(action==='complete'?'completed':'cancelled'))throw Error();setFailed(true);setStats(action==='complete'?'fixture 수명주기 완료 · UI 수용 아님':'fixture 취소 · UI 수용 미완');}catch{setFailed(true);setStats('안전한 fixture 종료 오류 · 재전송하지 마세요');}};
+ const navigate=React.useCallback((href,replace=false)=>adapter.navigate(href,replace),[adapter]);
  const legacy=React.useCallback(()=>React.createElement('p',null,'기존 Flow pending 복구 seam · 이번 fixture는 새 storage 사용'),[]);
- return React.createElement(React.Fragment,null,React.createElement('aside',null,React.createElement('p',null,'CF023 실제 production controller / 합성 HTTP. 질문 예: 삼성전자 수급, 수급, 005930 수급, 삼성전자 외국인 수급과 차트'),React.createElement('p',{role:'status'},stats),...['ready','pending','unknown','running','result_ready','stored','failed'].map(status=>React.createElement('button',{key:status,disabled:failed,onClick:()=>control({status})},'합성 '+status)),... [200,401,403,503].map(httpStatus=>React.createElement('button',{key:'http'+httpStatus,disabled:failed,onClick:()=>control({httpStatus})},'합성 HTTP '+httpStatus)),... [0,250,16000].map(delay=>React.createElement('button',{key:'delay'+delay,disabled:failed,onClick:()=>control({delay})},'합성 지연 '+delay+'ms')),...['A','B'].map(account=>React.createElement('button',{key:account,disabled:failed,onClick:()=>control({account})},'합성 계정 '+account)),React.createElement('button',{onClick:()=>void refresh(),disabled:failed},'합성 카운터 확인')),React.createElement(Session,{supervisorId:id,navigate,renderLegacy:legacy}));}
-history.replaceState({},'','/research');require('react-dom/client').createRoot(document.getElementById('app')).render(React.createElement(Fixture));`;
-let finish,expired=false;
+ return React.createElement(React.Fragment,null,React.createElement('aside',null,React.createElement('p',null,'CF023 실제 production controller / 합성 HTTP. 질문 예: 삼성전자 수급, 수급, 005930 수급, 삼성전자 외국인 수급과 차트'),React.createElement('p',{role:'status'},stats),...['ready','pending','unknown','running','result_ready','stored','failed'].map(status=>React.createElement('button',{key:status,disabled:failed,onClick:()=>control({status})},'합성 '+status)),... [200,401,403,503].map(httpStatus=>React.createElement('button',{key:'http'+httpStatus,disabled:failed,onClick:()=>control({httpStatus})},'합성 HTTP '+httpStatus)),... [0,250,16000].map(delay=>React.createElement('button',{key:'delay'+delay,disabled:failed,onClick:()=>control({delay})},'합성 지연 '+delay+'ms')),...['A','B'].map(account=>React.createElement('button',{key:account,disabled:failed,onClick:()=>control({account})},'합성 계정 '+account)),React.createElement('button',{onClick:()=>void refresh(),disabled:failed},'합성 카운터 확인'),React.createElement('button',{onClick:()=>void finishFixture('complete'),disabled:failed},'fixture 완료'),React.createElement('button',{onClick:()=>void finishFixture('cancel'),disabled:failed},'fixture 취소')),failed?null:React.createElement(Session,{supervisorId:id,navigate,renderLegacy:legacy}));}
+require('react-dom/client').createRoot(document.getElementById('app')).render(React.createElement(Fixture));`;
+let finish,terminalError,terminalResponse,closeDeadline=Infinity;
+const started=Date.now(),expires=started+590000,delays=new Map(),active=new Set();
+const waitDelay=ms=>new Promise(resolve=>{const timer=setTimeout(()=>{delays.delete(timer);resolve();},ms);delays.set(timer,resolve);});
+const bounded=async(task,ms)=>{let timer;try{return await Promise.race([task,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture cleanup deadline')),Math.max(1,Math.min(ms,expires-Date.now(),closeDeadline-Date.now())));})]);}finally{clearTimeout(timer);}};
+function receiptFile(value){
+ const filename='cf025-terminal.json',temporary=filename+'.tmp';
+ if(fs.existsSync(filename))throw Error('Fixture receipt already exists');
+ const fd=fs.openSync(temporary,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL,0o600);
+ try{fs.writeFileSync(fd,JSON.stringify(value));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
+ fs.renameSync(temporary,filename);return value;
+}
 const stopped=new Promise(resolve=>{finish=resolve;});
-const server=http.createServer(async(req,res)=>{
+const server=http.createServer((req,res)=>{
+ const task=handle(req,res).catch(()=>{if(!res.headersSent)res.writeHead(422);res.end();});active.add(task);void task.finally(()=>active.delete(task));
+});
+const terminal=createFixtureTerminal({
+ stopWork(){closeDeadline=Math.min(expires,Date.now()+5000);for(const [timer,resolve] of delays){clearTimeout(timer);resolve();}delays.clear();},
+ async drain(){await bounded(Promise.all([...active]),5000);},
+ async writeReceipt(value){return receiptFile({schema:'cf025.terminal.v1',nonce,pid:process.pid,cwd:process.cwd(),port:cap.ports[0],...value,counts:{...counts},browser:browserNotExecuted()});},
+ async ack(value){if(terminalResponse)await bounded(new Promise((resolve,reject)=>{terminalResponse.once('error',reject);terminalResponse.end(JSON.stringify({state:value.state}),resolve);}),5000);},
+ async close(){server.closeAllConnections();if(server.listening)await bounded(new Promise(resolve=>server.close(resolve)),5000);},
+ settled(){finish();},
+});
+function readBody(req,limit){
+ return new Promise((resolve,reject)=>{
+  const parts=[];let size=0,settled=false;
+  const cleanup=()=>{clearTimeout(timer);req.off('data',data);req.off('end',end);req.off('error',error);req.off('aborted',aborted);};
+  const fail=()=>{if(settled)return;settled=true;cleanup();req.pause();reject(Error('Fixture body invalid'));};
+  const data=chunk=>{size+=chunk.length;if(size>limit){fail();return;}parts.push(chunk);};
+  const end=()=>{if(settled)return;settled=true;cleanup();resolve(Buffer.concat(parts).toString('utf8'));};
+  const error=()=>fail(),aborted=()=>fail();
+  const timer=setTimeout(fail,Math.max(1,Math.min(5000,expires-Date.now())));
+  req.on('data',data);req.once('end',end);req.once('error',error);req.once('aborted',aborted);
+ });
+}
+async function handle(req,res){
  res.setHeader('Cache-Control','no-store');
  res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'`);
  const json=(value,code=200)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
  const fail=(code,status)=>json(failure(code),status);
+ if(req.headers.host!=='127.0.0.1:'+cap.ports[0]){fail('AUTH_REQUEST_INVALID',403);return;}
  if(req.headers.origin&&req.headers.origin!==origin){fail('AUTH_REQUEST_INVALID',403);return;}
+ const research=validateFixtureTarget(req.url);
+ if(req.url==='/fixture-finish'){
+  if(req.method!=='POST'){json({},405);return;}
+  if(req.headers.origin!==origin||req.headers['x-fixture-nonce']!==nonce){json({},403);return;}
+  if(!terminal.open()){json({},409);return;}
+  if(req.headers['content-type']!=='application/json'){json({},422);return;}
+  let action;try{action=terminalAction(await readBody(req,1024));}catch{res.setHeader('Connection','close');json({},422);return;}
+  if(!terminal.open()){json({},409);return;}
+  terminalResponse=res;res.writeHead(200,{'Content-Type':'application/json'});
+  // Return without awaiting finish: this handler settles before drain completes.
+  void terminal.finish(action).catch(error=>{terminalError=error;finish();});return;
+ }
+ if(!terminal.open()){json({},409);return;}
+ if(research.status===422){json({},422);return;}
+ const apiRoot='/api/private/supervisor/core/';
+ const method=req.url==='/research'||research.kind==='research'||['/bundle.js','/chat.css','/fixture-counts','/api/auth/session'].includes(req.url)?['GET']:req.url==='/fixture-control'||req.url===apiRoot+'preparations'||req.url===apiRoot+'requests'?['POST']:/^\/api\/private\/supervisor\/core\/preparations\/[0-9a-f-]{36}$/.test(req.url)?['GET','DELETE']:/^\/api\/private\/supervisor\/core\/requests\/[0-9a-f-]{36}$/.test(req.url)?['GET']:null;
+ if(!method){json({},404);return;}if(!method.includes(req.method)){json({},405);return;}
  let body=null;
  if(req.method==='POST'){
-  let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>16384){fail('INPUT_INVALID',422);return;}}
-  try{body=JSON.parse(raw);}catch{fail('INPUT_INVALID',422);return;}
+  try{body=JSON.parse(await readBody(req,16384));if(!body||Array.isArray(body)||typeof body!=='object')throw Error();}catch{res.setHeader('Connection','close');json({},422);return;}
+  if(!terminal.open()){json({},409);return;}
  }
  if(req.url==='/fixture-counts'&&req.method==='GET'){json({counts,state});return;}
  if(req.url==='/fixture-control'&&req.method==='POST'&&req.headers['x-fixture-nonce']===nonce){
@@ -105,7 +161,8 @@ const server=http.createServer(async(req,res)=>{
   if(state.authStatus!==200){fail('AUTH_REQUIRED',401);return;}
   if(state.httpStatus!==200){fail(state.httpStatus===401?'AUTH_REQUIRED':state.httpStatus===403?'AUTH_REQUEST_INVALID':'SERVICE_UNAVAILABLE',state.httpStatus);return;}
   if(req.method!=='GET'&&req.headers['x-csrf-token']!==nonce){fail('AUTH_REQUEST_INVALID',403);return;}
-  if(state.delay)await new Promise(resolve=>setTimeout(resolve,state.delay));
+  if(state.delay)await waitDelay(state.delay);
+  if(!terminal.open()){json({},409);return;}
   const owner=currentOwner(),root='/api/private/supervisor/core/';
   if(req.url===root+'preparations'&&req.method==='POST'){
    counts.preparePOST++;
@@ -143,18 +200,19 @@ const server=http.createServer(async(req,res)=>{
  }
  if(req.url==='/bundle.js'){res.writeHead(200,{'Content-Type':'text/javascript'});res.end(bundle);return;}
  if(req.url==='/chat.css'){res.writeHead(200,{'Content-Type':'text/css'});res.end(css);return;}
- if(req.url==='/'||req.url==='/research'){
+ if(research.kind==='research'){
   res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CF023 synthetic production chat</title><link rel="stylesheet" href="/chat.css"><div id="app"></div><script nonce="'+nonce+'" src="/bundle.js"></script>');return;
  }
  json({},404);
-});
-const deadline=setTimeout(()=>{expired=true;server.closeAllConnections();server.close(finish);},590000);
+}
+const deadline=setTimeout(()=>{void terminal.finish('timed_out').catch(error=>{terminalError=error;finish();});},590000);
 try{
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(cap.ports[0],'127.0.0.1',resolve);});
  fs.writeFileSync('cf019-ready.json',JSON.stringify({nonce,pid:process.pid,cwd:process.cwd(),port:cap.ports[0]}),{mode:0o600});
  await stopped;
- if(expired)throw Error('Core browser evidence incomplete');
- console.log('CF023_FIXTURE_CLOSED '+JSON.stringify(counts));
+ if(terminalError)throw terminalError;
+ if(!['completed','cancelled'].includes(terminal.phase))throw Error('Core browser evidence incomplete');
+ console.log('CF025_FIXTURE_CLOSED '+JSON.stringify({state:terminal.phase,counts,browser:browserNotExecuted()}));
 }finally{
  clearTimeout(deadline);server.closeAllConnections();
  if(server.listening)await new Promise(resolve=>server.close(resolve));

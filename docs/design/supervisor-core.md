@@ -37,3 +37,13 @@ scoped `chat.css`는 기존 인디고/슬레이트·흰 카드·라운드·폭/�
 첫 prepared confirm만 유효기간을 검사한다. 기존 binding replay는 TTL 때문에 잠그지 않는다. 서버가 first adoption을 명시적으로 거절한 경우만 해당 confirm pending을 해제하고 명시 재준비를 허용한다. 불명 응답은 terminal rejection으로 취급하지 않는다. 취소는 미채택 준비 원문 redaction이며 기존 Flow 취소가 아니다.
 
 실제 1440/390 레이아웃·포커스·React 클릭은 지원되는 격리 browser capability가 없어 미실행이다. fixture 제어와 helper/unit/source assertion은 이 수용을 대체하지 않는다.
+
+## CF-025 fixture 복구와 종료
+
+fixture는 부모의 `CF025_FIXTURE_URL`에 출력된 `http://127.0.0.1:<검증 port>/research`만 사용한다. `/research?supervisor_id=<UUID>` 복구는 동일 validator로 서버·초기 ID·navigate·popstate를 연결하고 내부 ID를 정규화한다. 빈/중복/미지 query·analysis_id·경로 encoding 우회는 거절하며 `/` 별도 alias는 없다. 생산 Session의 URL/owner/generation 무효화는 그대로다.
+
+대화형 fixture의 **fixture 완료 / fixture 취소** 버튼은 exact Host·Origin·현재 nonce를 요구하는 고정 terminal endpoint로 자기 수명주기만 끝낸다. complete는 UI 수용 완료가 아니고 cancel은 Flow 실행 취소가 아니다. 부모는 같은 자식의 immutable 영수증·정상 settlement·package/source/dependency postcheck·readiness/listener 제거를 함께 대조한다. ACK가 없으면 재전송하지 않고 영수증을 회수하되 ACK 불명을 보존한다. 받은 오류 ACK는 성공/불명으로 바꾸지 않는다. 590초 fixture·600초 worker 상한은 유지한다.
+
+보호 `core-browser-check`는 부모가 등록한 fixture와 HTTP probe sibling을 사용한다. complete와 cancel을 별도 root의 순차 인스턴스로 검사하며 probe는 요청당 절대5초/전체60초로 제한한다. HTML/bundle·합성 준비/확정·복구 URL·명시 outcome GET과 종료/정리 증거일 뿐, 실제 React mount/interaction/storage_navigation/visual_1440/visual_390/focus는 모두 `not_executed`다. 자동 probe가 브라우저 JS를 실행하거나 페이지 요청이 자동 GET을 수행했다고 주장하지 않는다.
+
+향후 수동 UI 검증은 사용자 확인을 받은 새 미로그인 전용 profile의 쿠키/storage 격리 또는 문서화된 격리 capability가 입증된 뒤 별도로 한다. 부모가 그 실행에서 출력한 주소만 사용하고, 임의 localhost/3200·새 tab을 격리로 간주하지 않는다. 명확화/후보·동의/취소·pending/401·늦은 응답·새 대화/뒤로가기·storage 복구·1440/390·키보드/focus를 실제 관측한 항목만 기록한다. 이번에는 browser/tab/profile·실제 Backend/모델을 실행하지 않았다. [직접 HTTP 결과와 한계](../work/CF-025-supervisor-browser-readiness.md)를 따른다.

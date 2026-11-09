@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {collectFixtureTerminal,validateTerminalReceipt} from '../tests/helpers/supervisor-fixture.mjs';
 import {spawn,execFileSync} from 'node:child_process';
 
-export const modes=['self-test','unit','local-http','build','type','lint','analysis-unit','analysis-lint','analysis-type','fundamental-unit','fundamental-type','fundamental-lint','flow-review-unit','flow-review-type','flow-review-lint','flow-review-browser','supervisor-unit','supervisor-type','supervisor-lint','supervisor-browser','core-unit','core-type','core-lint','core-browser'];
+export const modes=['self-test','unit','local-http','build','type','lint','analysis-unit','analysis-lint','analysis-type','fundamental-unit','fundamental-type','fundamental-lint','flow-review-unit','flow-review-type','flow-review-lint','flow-review-browser','supervisor-unit','supervisor-type','supervisor-lint','supervisor-browser','core-unit','core-type','core-lint','core-browser','core-browser-check','fixture-lint'];
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const repo=path.dirname(project);
 const unit=['unit/bff/disabled-routes.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs','unit/flow/observation.test.mjs','unit/flow/synthetic-demo.test.mjs'];
@@ -32,9 +33,11 @@ export function reactRecords(dependency,sourceRoot=project){
  });
 }
 const http=['integration/bff/disabled-http.test.mjs','integration/bff/session-http.test.mjs','integration/bff/ports-http.test.mjs','integration/bff/synthetic-demo-http.test.mjs'];
-const fixed=['tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts','package.json','package-lock.json','tsconfig.json','next.config.ts','postcss.config.mjs','eslint.config.mjs',
+export const fixtureSources=['scripts/check-local-ports.mjs','tests/integration/supervisor/chat-browser-fixture.mjs','tests/helpers/supervisor-fixture.mjs','tests/integration/supervisor/chat-http-readiness.test.mjs','tests/tooling/safe-checks.test.mjs'];
+const fixed=[...fixtureSources,'tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts','package.json','package-lock.json','tsconfig.json','next.config.ts','postcss.config.mjs','eslint.config.mjs',
  ...coreExact,...supervisorExact,...flowReviewExact,...unit.map(p=>'tests/'+p),...http.map(p=>'tests/'+p),'tests/helpers/safe-http.mjs','scripts/safe-checks-guard.cjs','scripts/check-local-ports.mjs'];
 const fresh=new Set(['scripts/safe-checks-guard.cjs','tests/helpers/safe-http.mjs','tests/tooling/safe-checks.test.mjs','tests/unit/flow/observation.test.mjs','tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts']);
+for(const file of fixtureSources)fresh.add(file);
 for(const file of ["src/app/fundamental/page.tsx", "src/app/page.tsx", "src/app/reports/fundamental/[reportId]/page.tsx", "src/features/fundamental/components/analysis-request.tsx", "src/features/fundamental/components/fundamental-report-view.tsx", "src/features/fundamental/components/fundamental-actions.tsx", "src/features/fundamental/lib/analysis-request.ts", "src/features/fundamental/api/reports.ts", "src/shared/server/fundamental-analysis-config.ts", "src/shared/server/session-proxy.ts", "src/app/api/private/[...path]/route.ts", "tests/unit/fundamental/analysis-request.test.mjs", "tests/unit/bff/session-proxy.test.mjs", "tests/unit/config/ports.test.mjs", "scripts/check-local-ports.mjs"])fresh.add(file);
 for(const file of ["src/shared/server/flow-demo-config.ts", "src/app/flow/demo/page.tsx", "src/features/flow/components/synthetic-demo.tsx", "src/features/flow/lib/synthetic-demo.ts", "tests/unit/flow/synthetic-demo.test.mjs", "tests/integration/bff/synthetic-demo-http.test.mjs"])fresh.add(file);
 for(const file of ['src/shared/server/flow-analysis-config.ts','src/features/flow/components/analysis-request.tsx','src/features/flow/lib/analysis-request.ts','tests/unit/flow/analysis-request.test.mjs'])fresh.add(file);
@@ -381,9 +384,24 @@ export async function stopAndSettleBrowserTask(task,stop){
  if(stopFailure)throw stopFailure;
  return settled;
 }
-async function execute(selected){
+function verifyFixtureListenerClosed(proof){
+ try{const output=execFileSync('/usr/sbin/lsof',['-nP','-a','-p',String(proof.pid),'-iTCP:'+proof.port,'-sTCP:LISTEN','-Fpn'],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'},timeout:2000,stdio:['ignore','pipe','pipe']});if(output.length)throw Error('Owned fixture listener survived');}
+ catch(error){if(error.status===1&&error.stdout?.length===0)return;throw error;}
+ throw Error('Fixture listener absence not confirmed');
+}
+export function readTerminal(root){
+ const filename=path.join(root,'cf025-terminal.json');
+ const before=fs.lstatSync(filename);
+ if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.uid!==process.getuid()||(before.mode&0o777)!==0o600||before.size>16384)throw Error('Fixture terminal file identity');
+ const fd=fs.openSync(filename,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+ try{const actual=fs.fstatSync(fd);if(actual.dev!==before.dev||actual.ino!==before.ino||actual.size!==before.size)throw Error('Fixture receipt changed');const value=JSON.parse(fs.readFileSync(fd,'utf8'));const after=fs.lstatSync(filename);if(after.ino!==before.ino||after.dev!==before.dev||after.mtimeMs!==before.mtimeMs||after.nlink!==1)throw Error('Fixture receipt drift');return value;}finally{fs.closeSync(fd);}
+}
+async function execute(selected,terminalAction){
+ const browserCheck=selected.length===1&&selected[0]==='core-browser-check';
+ const fixtureLint=selected.length===1&&selected[0]==='fixture-lint';
+ if(fixtureLint)selected=['lint'];
  const coreOnly=selected.length===1&&selected[0].startsWith('core-');
- const coreBrowser=coreOnly&&selected[0]==='core-browser';
+ const coreBrowser=coreOnly&&['core-browser','core-browser-check'].includes(selected[0]);
  const supervisorOnly=selected.length===1&&selected[0].startsWith('supervisor-');
  const supervisorBrowser=supervisorOnly&&selected[0]==='supervisor-browser';
  const flowReviewOnly=selected.length===1&&selected[0].startsWith('flow-review-');
@@ -415,13 +433,13 @@ async function execute(selected){
   fs.writeFileSync(capfile,JSON.stringify(cap),{mode:0o600});
   const env=environment(root,{NODE_OPTIONS:'--require='+guard,ST001_SAFE_CAP:capfile,NODE_ENV:'production'});
   const profile=path.join(root,'policy.sb');
-  const run=async(args,timeout)=>{if(aborted)throw Error('controller interrupted/expired');return checkedCommand({record:packageSnapshot,root,dependency,provenance,argv:['/usr/bin/sandbox-exec','-f',profile,node,...args],env,timeout,children,prepare(){cap.lifetime=Math.floor(timeout/1000);fs.writeFileSync(capfile,JSON.stringify(cap));}});};
+  const run=async(args,timeout)=>{if(aborted)throw Error('controller interrupted/expired');return checkedCommand({record:packageSnapshot,root,dependency,provenance,argv:['/usr/bin/sandbox-exec','-f',profile,node,...args],env,timeout,children,prepare(){cap.lifetime=browserOnly?600:Math.floor(timeout/1000);fs.writeFileSync(capfile,JSON.stringify(cap));}});};
   if(selected.includes('self-test')){const output=await run(['--test-reporter=tap','tests/tooling/safe-checks.test.mjs'],120000);validateTestOutput(output);console.log(output);}
   if(selected.includes('unit')&&!browserOnly)for(const file of (coreOnly?coreUnit:supervisorOnly?supervisorUnit:flowReviewOnly?flowReviewUnit:fundamentalOnly?fundamentalUnit:analysisOnly?analysisUnit:unit)){const output=await run(['--test-reporter=tap','tests/'+file],120000);validateTestOutput(output);console.log(output);}
   if(browserOnly){
    const {reservePair}=await import('../tests/helpers/safe-http.mjs');const reservations=await reservePair();let task,browserFailure;
    try{
-    cap.ports=reservations.ports;cap.cf020Planning=supervisorBrowser;cap.cf022Core=coreBrowser;cap.reactProduction=reactRecords(dependency);fs.writeFileSync(capfile,JSON.stringify(cap));fs.writeFileSync(profile,policy(root,dependency,node,cap.ports));await reservations.close();
+    cap.cf025Action=browserCheck?terminalAction:undefined;cap.ports=reservations.ports;cap.cf020Planning=supervisorBrowser;cap.cf022Core=coreBrowser;cap.reactProduction=reactRecords(dependency);fs.writeFileSync(capfile,JSON.stringify(cap));fs.writeFileSync(profile,policy(root,dependency,node,cap.ports));await reservations.close();
     task=run(['--test-reporter=tap',coreBrowser?'tests/integration/supervisor/chat-browser-fixture.mjs':'tests/integration/flow/report-browser-fixture.mjs'],600000);
     const proof=await browserReadiness(task,()=>{const file=path.join(root,'cf019-ready.json');return fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;});
     if(!proof||proof.nonce!==owned.nonce||proof.cwd!==root||proof.port!==cap.ports[0]||![...children].some(child=>child.pid===proof.pid&&child.st001OwnedRoot===root))throw Error('CF019 worker readiness ownership mismatch');
@@ -429,7 +447,26 @@ async function execute(selected){
     const cwd=execFileSync('/usr/sbin/lsof',['-a','-p',String(proof.pid),'-d','cwd','-Fn'],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'}}).toString().trim().split('\n');
     if(!listener.includes('p'+proof.pid)||!listener.includes('n127.0.0.1:'+proof.port)||!cwd.includes('n'+root))throw Error('CF019 listener/cwd identity mismatch');
     console.log('CF019_OWNED_READY '+JSON.stringify({port:proof.port,nonce:owned.nonce,pid:proof.pid,cwd:root}));
-    console.log(await task);
+    if(coreBrowser)console.log('CF025_FIXTURE_URL http://127.0.0.1:'+proof.port+'/research');
+    if(browserCheck){
+     const probe=run(['tests/integration/supervisor/chat-http-readiness.test.mjs'],60000);
+     const observation=probe.then(output=>{console.log(output);const line=output.split('\n').find(s=>s.startsWith('CF025_HTTP '));if(!line)throw Error('Probe evidence missing');return JSON.parse(line.slice(11));});
+     const result=await collectFixtureTerminal({probe:observation,child:task,proof,onReceipt:receipt=>console.log('CF025_TERMINAL_RECEIPT '+JSON.stringify(receipt)),stop:()=>abortOwned(children,stopChild),readReceipt:()=>readTerminal(root),postcheck:()=>{recheckPackage(packageSnapshot,root,dependency);recheckProvenance(provenance,root,dependency,packageSnapshot);}});
+     console.log('CF025_PARENT '+JSON.stringify(result));
+     if(fs.existsSync(path.join(root,'cf019-ready.json')))throw Error('Fixture readiness survived termination');
+     if(children.size!==0)throw Error('Fixture registered child survived settlement');
+     verifyFixtureListenerClosed(proof);
+     console.log('CF025_SETTLED '+JSON.stringify({action:terminalAction,registeredChildren:children.size,readinessRemoved:true,listenerClosed:true,browser:result.browser}));
+    }else{
+     console.log(await task);
+     if(coreBrowser){
+      const receipt=validateTerminalReceipt(readTerminal(root),proof);
+      recheckPackage(packageSnapshot,root,dependency);recheckProvenance(provenance,root,dependency,packageSnapshot);
+      if(children.size||fs.existsSync(path.join(root,'cf019-ready.json')))throw Error('Interactive fixture cleanup incomplete');
+      verifyFixtureListenerClosed(proof);
+      console.log('CF025_INTERACTIVE_TERMINAL '+JSON.stringify({ack:'not_observed',receipt,ui_acceptance:'not_executed'}));
+     }
+    }
    }catch(error){browserFailure=error;throw error;}finally{
     try{await reservations.close();}finally{
      if(task){
@@ -465,12 +502,13 @@ async function execute(selected){
    if(analysisOnly)fs.writeFileSync(path.join(root,'tsconfig.cf012.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts','src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts']}));
    console.log(await run(['node_modules/typescript/bin/tsc','--noEmit','--incremental','false',...(coreOnly?['-p','tsconfig.cf022.json']:supervisorOnly?['-p','tsconfig.cf020.json']:flowReviewOnly?['-p','tsconfig.cf019.json']:fundamentalOnly?['-p','tsconfig.cf015.json']:analysisOnly?['-p','tsconfig.cf012.json']:[])],180000));
   }
+  if(fixtureLint){console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',...fixtureSources],180000));}
   if(selected.includes('lint')&&(coreOnly||flowReviewOnly||supervisorOnly)){
    const report=path.join(root,'cf019-eslint.json');
    try{console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore','--format','json','--output-file',report,...(coreOnly?coreType:supervisorOnly?supervisorType:flowReviewType),...(coreOnly?coreUnit:supervisorOnly?supervisorUnit:flowReviewUnit).map(p=>'tests/'+p),...(coreOnly?['tests/integration/supervisor/chat-browser-fixture.mjs']:['tests/integration/flow/report-browser-fixture.mjs']),'scripts/check-local-ports.mjs'],180000));}
    finally{if(fs.existsSync(report)){const findings=JSON.parse(fs.readFileSync(report,'utf8')).flatMap(file=>file.messages.map(m=>({file:path.relative(root,file.filePath),line:m.line,rule:m.ruleId,severity:m.severity,message:m.message.split('\n')[0]})));console.log('CF019_LINT '+JSON.stringify(findings));}}
   }
-  if(selected.includes('lint')&&!flowReviewOnly&&!supervisorOnly&&!coreOnly)console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
+  if(selected.includes('lint')&&!fixtureLint&&!flowReviewOnly&&!supervisorOnly&&!coreOnly)console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
    ...(flowReviewOnly?[...flowReviewType,...flowReviewUnit.map(p=>'tests/'+p),'tests/integration/flow/report-browser-fixture.mjs','scripts/check-local-ports.mjs']:fundamentalOnly?fundamentalLint:analysisOnly?['src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts','tests/unit/flow/analysis-request.test.mjs','tests/unit/bff/session-proxy.test.mjs','tests/unit/config/ports.test.mjs','scripts/check-local-ports.mjs']:Object.values(relocationSources).filter(p=>/\.(ts|tsx)$/.test(p))),
    ...(flowReviewOnly||analysisOnly||fundamentalOnly?[]:[ 'src/features/technical/components/indicator-card.tsx',
    'src/shared/server/flow-demo-config.ts','src/app/flow/demo/page.tsx','src/features/flow/components/synthetic-demo.tsx','src/features/flow/lib/synthetic-demo.ts','src/app/api/private/[...path]/route.ts','src/proxy.ts','tests/unit/flow/synthetic-demo.test.mjs',
@@ -493,6 +531,6 @@ async function execute(selected){
 export async function main(args=process.argv.slice(2)){
  if(args.length===1&&['--help','list'].includes(args[0])){console.log('Modes: '+modes.join(', ')+'; default: all. env -i absolute Node required. OS preflight is mandatory.');return 0;}
  if(args.length>1||args.length===1&&!modes.includes(args[0])){console.error('Unsupported mode/extra args');return 2;}
- try{await execute(args.length?args:modes);return 0;}catch(error){console.error('SAFE_CHECK_BLOCKED: '+error.message);return 78;}
+ try{if(args[0]==='core-browser-check'){await execute(args,'complete');await execute(args,'cancel');}else await execute(args.length?args:modes);return 0;}catch(error){console.error('SAFE_CHECK_BLOCKED: '+error.message);return 78;}
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))process.exitCode=await main();

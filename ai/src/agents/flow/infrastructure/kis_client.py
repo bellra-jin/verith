@@ -109,13 +109,17 @@ def _load_credentials() -> tuple[str, str, str]:
 def _issue_token(client: httpx.Client, app_key: str, app_secret: str, *, execution_context=None) -> dict:
     """발급 JSON의 원형 token/TTL을 검증한다. 원문 예외·응답은 노출하지 않는다."""
     try:
+        kwargs={} if execution_context is None else {"timeout":execution_context.timeout("kis_token", _TIMEOUT)}
+        identity=execution_context.begin_call('kis','token') if execution_context is not None else None
         resp = client.post(
             _OAUTH_PATH,
             json={"grant_type": "client_credentials",
                   "appkey": app_key, "appsecret": app_secret},
-            **({} if execution_context is None else {"timeout":execution_context.timeout("kis_token", _TIMEOUT)}),
+            **kwargs,
         )
-        if execution_context is not None: execution_context.check('kis_token_result')
+        if execution_context is not None:
+            execution_context.http_observed(identity,resp.status_code)
+            execution_context.check('kis_token_result')
         if resp.status_code != 200:
             raise KisError("KIS 토큰 발급 실패.")
         body = resp.json()
@@ -170,8 +174,13 @@ def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what
     try:
         for attempt in (1, 2):
             kwargs = {} if execution_context is None else {"timeout":execution_context.timeout("kis_data", _TIMEOUT)}
+            action='supply' if path==_QUOTATIONS_PATH else 'quotes' if path==_DAILY_PRICE_PATH else None
+            if execution_context is not None and action is None:raise ValueError('Unknown KIS action')
+            identity=execution_context.begin_call('kis',action) if execution_context is not None else None
             resp = client.get(path, headers=headers, params=params, **kwargs)
-            if execution_context is not None: execution_context.check("kis_data_result")
+            if execution_context is not None:
+                execution_context.http_observed(identity,resp.status_code)
+                execution_context.check("kis_data_result")
             if resp.status_code == 200:
                 return resp.json()
             try:

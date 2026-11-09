@@ -12,6 +12,7 @@ from db.base import Base
 from db.models.auth.models import AuthUser, AuthIdentity, AuthSession
 
 # Common
+from db.models.common.analysis_usage import AnalysisUsagePeriod, AnalysisUsageReservation, AnalysisProviderCall
 from db.models.common.agent_report import AgentReport
 from db.models.common.stock import Stock
 from db.models.common.stock_alias import StockAlias
@@ -53,6 +54,9 @@ from db.models.flow.report_verification import FlowReportVerification
 from db.models.industry.industry_report import IndustryReport
 
 __all__ = [
+    "AnalysisUsagePeriod",
+    "AnalysisUsageReservation",
+    "AnalysisProviderCall",
     "AuthUser",
     "AuthIdentity",
     "AuthSession",

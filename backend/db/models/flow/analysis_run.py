@@ -1,7 +1,7 @@
 """Live analysis ledger. Synthetic/receipt tables remain unchanged."""
 from datetime import date,datetime
 from uuid import UUID
-from sqlalchemy import CheckConstraint,Date,DateTime,ForeignKey,LargeBinary,String,Text,UniqueConstraint
+from sqlalchemy import CheckConstraint,Date,DateTime,ForeignKey,ForeignKeyConstraint,LargeBinary,String,Text,UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped,mapped_column
 from db.base import Base
@@ -27,6 +27,7 @@ CHECKS={
 class FlowAnalysisRun(Base):
     __tablename__='flow_analysis_runs'
     id:Mapped[UUID]=uuid_pk()
+    budget_reservation_id:Mapped[UUID|None]=mapped_column(PGUUID(as_uuid=True))
     owner_user_id:Mapped[UUID]=mapped_column(PGUUID(as_uuid=True),ForeignKey('auth_users.id',ondelete='RESTRICT'),nullable=False)
     operation:Mapped[str]=mapped_column(Text,nullable=False)
     key_digest:Mapped[bytes]=mapped_column(LargeBinary,nullable=False)
@@ -50,7 +51,13 @@ class FlowAnalysisRun(Base):
     input_sha256:Mapped[str|None]=mapped_column(String(64))
     result_json:Mapped[str|None]=mapped_column(Text)
     result_sha256:Mapped[str|None]=mapped_column(String(64))
-    __table_args__=(UniqueConstraint('owner_user_id','operation','key_digest',name=KEY_CONSTRAINT),
+    __table_args__=(CheckConstraint('budget_reservation_id IS NULL OR budget_reservation_id=id',name='ck_flow_analysis_budget_id'),
+        UniqueConstraint('budget_reservation_id',name='uq_flow_analysis_budget'),
+        UniqueConstraint('id','owner_user_id','operation','attempt_id','claim_digest',name='uq_flow_analysis_budget_identity'),
+        ForeignKeyConstraint(['budget_reservation_id','owner_user_id','operation','attempt_id','claim_digest'],
+            ['analysis_usage_reservations.id','analysis_usage_reservations.owner_user_id','analysis_usage_reservations.operation','analysis_usage_reservations.attempt_id','analysis_usage_reservations.claim_digest'],
+            name='fk_flow_analysis_budget',deferrable=True,initially='DEFERRED',use_alter=True),
+        UniqueConstraint('owner_user_id','operation','key_digest',name=KEY_CONSTRAINT),
         UniqueConstraint('attempt_id',name='uq_flow_analysis_attempt'),
         UniqueConstraint('adopted_report_id',name='uq_flow_analysis_report'),
         *(CheckConstraint(value,name='ck_flow_analysis_'+key) for key,value in CHECKS.items()))

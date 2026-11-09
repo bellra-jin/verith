@@ -1,5 +1,6 @@
 """Flow public service facade over the shared fixed-profile coordinator."""
 from src.modules.analysis.application.coordinator import AnalysisCoordinator
+from src.modules.analysis.application.usage_service import FlowUsageControl
 from src.modules.analysis.application.ports import CoordinatorError
 from src.modules.flow.application.analysis_profile import FlowProfile
 # Keep the original class/module references for existing focused callers.
@@ -15,4 +16,4 @@ class AnalysisError(CoordinatorError):
 
 class AnalysisService(AnalysisCoordinator):
     def __init__(self,session,*,principal,client):
-        super().__init__(session,principal=principal,client=client,profile=FlowProfile(AnalysisError))
+        super().__init__(session,principal=principal,client=client,profile=FlowProfile(AnalysisError),usage_control=FlowUsageControl(session,AnalysisError))

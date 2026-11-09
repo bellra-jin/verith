@@ -310,3 +310,9 @@ DB clock 기준10초 deadline·finite시각·상태별 결과/hash/error/finishe
 ## CF-015 · owned Fundamental analysis
 
 `fundamental_analysis_runs` stores one immutable grant/request-context/result snapshot per owner/key. Unique attempt/report references and fenced state transitions prevent reuse after deletion. `fundamental_reports.owner_user_id` is nullable for legacy only. Owned readers require root + exactly one same-owner index + stored ledger; NULL legacy stays private.
+
+## CF-018 편입 Flow 비용 원장
+
+revision `c18001a7e0001`은 `analysis_usage_periods`(KST 기간·최초 한도 snapshot·횟수·held/추정 spend·blocked), `analysis_usage_reservations`(run/owner/attempt/grant·원 기간·고정 가격/상한·잔여 예약), `analysis_provider_calls`(유일한 provider/action/ordinal·UUID·attempted·nullable usage·정제 evidence hash)를 추가한다. 금액은 BIGINT 정수 nanoUSD이며 KIS 비용은 NULL이다. 원문·credential은 없다.
+
+`flow_analysis_runs.budget_reservation_id`는 legacy에 NULL을 유지한다. 새 INSERT는 run ID와 같은 nonnull 참조가 필요하고, 양방향 composite FK 및 deferred constraint trigger가 commit 때 run↔reservation·기간 scope/owner/통화/날짜 관계를 확인한다. 식별·기간 한도·가격 snapshot은 불변이다. attempted True 역행과 확정 증거 교체, 회계 이력 삭제를 거부한다. 기존 report/receipt/synthetic schema·행은 변경하지 않는다. [사용 한도 계약](../../docs/contracts/flow-usage-v1.md)을 따른다. 실제 적용 여부는 [작업 기록](../../docs/work/CF-018-flow-usage-limits.md)과 구분한다.

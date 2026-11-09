@@ -162,7 +162,7 @@ def kis(tmp_path,client=None):
     return extract('ai/src/agents/flow/infrastructure/kis_client.py',{'KisError','_issue_token','_get_token','_get_json'},
         dict(httpx=httpx,DeadlineExceeded=DeadlineExceeded,get_token=CACHE.get_token,TokenCacheError=CACHE.TokenCacheError,
              validate_issued_response=CACHE.validate_issued_response,_TOKEN_CACHE_PATH=tmp_path/'legacy.json',time=NS(time=lambda:1000,sleep=Mock()),
-             _OAUTH_PATH='/oauth2/tokenP',_TIMEOUT=15.,_RATE_LIMIT_MSG_CD='EGW00201',_RATE_LIMIT_RETRY_WAIT_SEC=.6))
+             _OAUTH_PATH='/oauth2/tokenP',_QUOTATIONS_PATH='/synthetic',_DAILY_PRICE_PATH='/synthetic-quotes',_TIMEOUT=15.,_RATE_LIMIT_MSG_CD='EGW00201',_RATE_LIMIT_RETRY_WAIT_SEC=.6))
 
 
 @pytest.mark.parametrize('error',[DeadlineExceeded(SECRET),httpx.ReadTimeout(SECRET),TimeoutError(SECRET)])
@@ -197,14 +197,14 @@ async def test_data_timeout_to_HTTP(enabled,tmp_path,error):
 
 
 def test_rate_limit_only_once_and_no_raw_error(tmp_path):
-    code=kis(tmp_path);wait=Mock();context=NS(timeout=lambda *args:15,check=Mock(),wait_allowed=wait)
+    code=kis(tmp_path);wait=Mock();context=NS(timeout=lambda *args:15,check=Mock(),wait_allowed=wait,begin_call=Mock(return_value='synthetic'),http_observed=Mock())
     limited=NS(status_code=500,json=lambda:{'msg_cd':'EGW00201','msg1':SECRET})
     client=NS(get=Mock(side_effect=[limited,limited]))
-    with pytest.raises(code['KisError']) as caught:code['_get_json'](client,'/fixed',{}, {},SECRET,execution_context=context)
+    with pytest.raises(code['KisError']) as caught:code['_get_json'](client,'/synthetic',{}, {},SECRET,execution_context=context)
     assert SECRET not in str(caught.value) and client.get.call_count==2
     code['time'].sleep.assert_called_once_with(.6);wait.assert_called_once_with(.6)
     context.wait_allowed=Mock(side_effect=DeadlineExceeded(SECRET));client.get.reset_mock();client.get.side_effect=[limited]
-    with pytest.raises(DeadlineExceeded):code['_get_json'](client,'/fixed',{}, {},'fixed',execution_context=context)
+    with pytest.raises(DeadlineExceeded):code['_get_json'](client,'/synthetic',{}, {},'fixed',execution_context=context)
     assert client.get.call_count==1
 
 
@@ -222,7 +222,7 @@ async def test_SDK_timeout_binding_to_HTTP(enabled,where):
         _ENV_FILE=None,_PROMPT_PATH=NS(read_text=lambda **kwargs:'{{facts}}'),_facts_to_text=lambda *args:'fixed verified facts',_MODEL='gpt-5.4-mini',_TEMPERATURE=.2))
     def engine(req,context):binding['explain']({},NS(passed=True),{},execution_context=context)
     assert (await call(flow_app(engine))).status_code==504
-    assert seen==[dict(model='gpt-5.4-mini',temperature=.2,timeout=seen[0]['timeout'],max_retries=0,max_completion_tokens=1000)]
+    assert seen==[dict(model='gpt-5.4-mini',temperature=.2,timeout=seen[0]['timeout'],max_retries=0,max_completion_tokens=1000,n=1,service_tier='default')]
 
 
 @pytest.mark.parametrize('stop',['timeout','cancel'])
@@ -276,7 +276,7 @@ async def test_existing_coordinator_state_mapping_synthetic_only(exception,state
 
 async def test_sentinel_logs_remain_empty(enabled,tmp_path,capsys,caplog):
     code=kis(tmp_path)
-    def engine(req,context):code['_get_json'](NS(get=Mock(return_value=NS(status_code=500,json=lambda:{'msg_cd':SECRET,'msg1':SECRET}))),'/fixed',{'secret':SECRET},{},SECRET,execution_context=context)
+    def engine(req,context):code['_get_json'](NS(get=Mock(return_value=NS(status_code=500,json=lambda:{'msg_cd':SECRET,'msg1':SECRET}))),'/synthetic',{'secret':SECRET},{},SECRET,execution_context=context)
     assert (await call(flow_app(engine))).status_code==503
     captured=capsys.readouterr();assert SECRET not in captured.out+captured.err+caplog.text
 

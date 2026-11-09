@@ -38,6 +38,16 @@ def flow_app(engine):
     return app
 
 
+def zero_call_usage(request):
+    """Explicit injected-engine fixture, never a provider execution receipt."""
+    from src.modules.analysis.domain.usage import SLOTS,PRICE_ID,call_id
+    return dict(schema_version=1,analysis_id=str(request.analysis_id),attempt_id=str(request.attempt_id),
+        admission_request_id=str(request.admission_request_id),fingerprint=request.fingerprint,price_id=PRICE_ID,complete=True,
+        calls=[dict(id=str(call_id(request.analysis_id,request.attempt_id,provider,action,ordinal)),provider=provider,action=action,
+            ordinal=ordinal,attempted=False,state='not_called',input_tokens=None,cached_tokens=None,output_tokens=None,
+            input_bytes=None,output_bytes=None,response_model=None,http_status=None) for provider,action,ordinal in SLOTS])
+
+
 def engine_result(request,context,*,report_id=None):
     """Deterministic synthetic observations, never presented as provider evidence."""
     from tests.fixtures.flow_payload import make_flow_payload
@@ -49,7 +59,7 @@ def engine_result(request,context,*,report_id=None):
     frames={name:[{key:day if key=='date' else 0 for key in units}] for name,units in UNITS.items()}
     return {'payload':payload,'input_snapshot':{'schema_version':1,'request':request.wire(),
         'source':'kis.boundary.frames.v1','observed_at':datetime.now(UTC).isoformat(),
-        'confirmed_date':day,'units':UNITS,'frames':frames}}
+        'confirmed_date':day,'units':UNITS,'frames':frames,**({'provider_usage':zero_call_usage(request)} if 'usage' in request.spec else {})}}
 
 
 def failure_locations(error):

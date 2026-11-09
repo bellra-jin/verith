@@ -1,0 +1,84 @@
+"""Core authentication/CSRF/private response boundary; no direct AI proxy."""
+import asyncio
+from contextlib import AsyncExitStack
+from uuid import UUID, uuid4
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.routing import APIRoute
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
+from starlette.responses import JSONResponse
+from db.session import get_session
+from src.shared.config import settings
+from src.shared.infrastructure.clients.ai_client import AIClient
+from src.modules.auth.api.router import request_principal
+from src.modules.auth.application.session_service import AuthenticationRequired
+from src.modules.flow.application.analysis_service import AnalysisError
+from src.modules.flow.api.run_schemas import PRIVATE, http_request_id
+from src.modules.supervisor.application.service import SupervisorService, CoreError
+from src.modules.supervisor.api.schemas import Confirm, Draft, PATH, PrepareResponse, RequestResponse
+
+def failure(scope, code, status):
+    known = {'INPUT_INVALID', 'AUTH_REQUIRED', 'AUTH_REQUEST_INVALID', 'FEATURE_UNAVAILABLE', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESULT_CONTRACT_INVALID', 'PLAN_STALE', 'IDEMPOTENCY_CONFLICT', 'RESOURCE_NOT_FOUND', 'HANDOFF_EXPIRED', 'USAGE_LIMIT_EXCEEDED'}
+    if code not in known:
+        code = 'SERVICE_UNAVAILABLE'
+        status = 503
+    return JSONResponse(dict(schema_version='supervisor.core.v1', request_id=str(http_request_id(scope)), trace_id=str(uuid4()), data=None, error=dict(code=code, message='Supervisor request unavailable')), status_code=status, headers=PRIVATE)
+
+class CoreRoute(APIRoute):
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def safe(request):
+            try:
+                prior = request.scope.get('fastapi_function_astack')
+                try:
+                    timeout = 140 if request.method == 'POST' and request.url.path.endswith('/requests') else 15
+                    async with asyncio.timeout_at(request.scope.get('state', {}).get('core_deadline', asyncio.get_running_loop().time() + timeout)):
+                        async with AsyncExitStack() as stack:
+                            request.scope['fastapi_function_astack'] = stack
+                            response = await handler(request)
+                finally:
+                    request.scope['fastapi_function_astack'] = prior
+                if len(response.body) > 65536:
+                    return failure(request.scope, 'RESULT_CONTRACT_INVALID', 502)
+                response.headers.update(PRIVATE)
+                return response
+            except CoreError as e:
+                return failure(request.scope, e.code, e.status)
+            except AnalysisError as e:
+                code = e.code.value if hasattr(e.code, 'value') else e.code
+                return failure(request.scope, code, {'RESOURCE_NOT_FOUND': 404, 'IDEMPOTENCY_CONFLICT': 409, 'USAGE_LIMIT_EXCEEDED': 429, 'FEATURE_UNAVAILABLE': 403}.get(code, 503))
+            except AuthenticationRequired:
+                return failure(request.scope, 'AUTH_REQUIRED', 401)
+            except RequestValidationError:
+                return failure(request.scope, 'INPUT_INVALID', 422)
+            except HTTPException as e:
+                return failure(request.scope, 'AUTH_REQUIRED' if e.status_code == 401 else 'AUTH_REQUEST_INVALID', 401 if e.status_code == 401 else 403)
+            except TimeoutError:
+                return failure(request.scope, 'DEADLINE_EXCEEDED', 504)
+            except Exception:
+                return failure(request.scope, 'SERVICE_UNAVAILABLE', 503)
+        return safe
+router = APIRouter(prefix=PATH, route_class=CoreRoute, tags=['supervisor-core'])
+
+async def service(request: Request, session=Depends(get_session, scope='function')):
+    principal = await request_principal(request, session, mutation=request.method == 'POST')
+    return SupervisorService(session, principal=principal, client=AIClient(settings.AI_SERVICE_URL, 125, service_token=settings.FLOW_SERVICE_TOKEN))
+
+def envelope(request, data):
+    return dict(schema_version='supervisor.core.v1', request_id=str(http_request_id(request.scope)), trace_id=str(uuid4()), data=data, error=None)
+
+@router.post('/prepare', response_model=PrepareResponse)
+async def prepare(request: Request, body: Draft, value=Depends(service)):
+    return envelope(request, (await value.prepare(body, http_request_id(request.scope))).model_dump(mode='json'))
+
+@router.post('/requests', response_model=RequestResponse)
+async def post(request: Request, body: Confirm, response: Response, value=Depends(service)):
+    result = await value.post(body, http_request_id(request.scope))
+    response.status_code = 202 if result['coverage'] == 'pending' else 200
+    return envelope(request, result)
+
+@router.get('/requests/{supervisor_id}', response_model=RequestResponse)
+async def get(request: Request, supervisor_id: UUID, value=Depends(service)):
+    return envelope(request, await value.get(supervisor_id))

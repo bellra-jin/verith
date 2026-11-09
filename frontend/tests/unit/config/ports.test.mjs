@@ -56,3 +56,8 @@ test('CF020 private planning keeps exact absolute config imports and the existin
  let calls=0;const handlers=load('src/app/api/private/[...path]/route.ts',{fetchSpy:async()=>{calls++;throw Error('must not send');}});
  const response=await handlers.POST(new Request('http://localhost:3200/api/private/flow/plans',{method:'POST'}),{params:Promise.resolve({path:['flow','plans']})});assert.equal(response.status,403);assert.equal(calls,0);
 });
+
+test('CF022 default-off private core never forwards or opens legacy Supervisor',async()=>{
+ let calls=0;const routes=load('src/app/api/private/[...path]/route.ts',{fetchSpy:async()=>{calls++;}});
+ const r=await routes.POST(new Request('http://localhost:3200/api/private/supervisor/core/prepare',{method:'POST'}),{params:Promise.resolve({path:['supervisor','core','prepare']})});assert.equal(r.status,403);assert.equal(calls,0);assert.equal((await r.json()).schema_version,'supervisor.core.v1');
+});

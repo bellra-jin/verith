@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-022 Supervisor core와 단일 채팅
+
+[core 계약](contracts/supervisor-core-v1.md)·[단일 채팅 디자인](design/supervisor-core.md)·[직접 검사/차단 기록](work/CF-022-supervisor-core.md)을 따른다. 원질문/조건·명확화·부분 범위 동의와 기존 owned Flow를 연결한다. production 의미 모델은 unavailable이다. Frontend caller의 metadata/source provenance 분리와 기존 strict worker 수용, self3/unit49·Frontend82/type/lint·소유 PG13그룹은 직접 통과했으며 실제 브라우저·모델 미검증과 원격 CI 대기는 구분한다. 후속 Technical·재무·멀티턴/운영 활성화를 이번 범위로 섞지 않는다.
+
 ## CF-020 Supervisor 자연어 준비와 Flow 연결
 
 [계획 계약](contracts/supervisor-flow-plan-v1.md)과 [source/검증/차단 기록](work/CF-020-supervisor-flow-orchestration.md)을 따른다. AI가 무비용 의도/계획을 소유하고 Backend가 canonical resolver·인증·owner·기존 usage/coordinator를 소유한다. 준비는 실행권이 아니며 News·미지원 관점을 Flow로 대신 실행하지 않는다. pending/known ID 복구와 admission snapshot은 보존한다. 이전 사용자 직접 Git 안내보다 이번 작업의 명시 위임이 우선하며 실제 최신 head/Ready CI·독립 검토·검증 범위를 구분한다.

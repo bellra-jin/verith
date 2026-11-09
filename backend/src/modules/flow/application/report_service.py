@@ -384,6 +384,9 @@ class FlowReportService:
             await self._session.flush()
         await flow_repo.delete_agent_index(self._session, report_id)
         deleted = await flow_repo.delete_root(self._session, report_id)
+        if analysis is not None:
+            from src.modules.supervisor.infrastructure.repository import redact_for_flow
+            await redact_for_flow(self._session, principal.user_id, analysis.key_digest)
         await self._session.commit()
         return deleted > 0
 

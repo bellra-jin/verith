@@ -167,3 +167,11 @@ test('CF020 planning streaming timeout begins before body read',async()=>{
  const stream=new ReadableStream({start(){}});const request=new Request('http://app.unit/api/private/flow/plans',{method:'POST',headers:{'content-type':'application/json'},body:stream,duplex:'half'});
  const result=proxy.sessionProxy(request,'/api/flow/plans');controller.abort();assert.equal((await result).status,504);assert.equal(calls,0);
 });
+
+test('CF022 exact core BFF keeps16KiB/64KiB bounds and prepare16s versus confirm145s with spoof0',async()=>{
+ const seen=[],timeouts=[];const options={env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout:n=>{timeouts.push(n);return new AbortController().signal;}}};
+ const proxy=load('src/shared/server/session-proxy.ts',async(url,init)=>{seen.push([url,init]);return Response.json({safe:true});},options);
+ for(const path of ['/api/supervisor/core/prepare','/api/supervisor/core/requests']){const response=await proxy.sessionProxy(new Request('https://app.unit'+path,{method:'POST',body:'{}',headers:{'Content-Type':'application/json',Cookie:'synthetic',Origin:'https://app.unit','X-CSRF-Token':'fresh','X-Flow-Service-Token':'spoof','X-User-ID':'spoof'}}),path);assert.equal(response.status,200);}
+ assert.deepEqual(timeouts,[16000,145000]);assert.equal(seen[0][1].headers.get('x-flow-service-token'),null);assert.equal(seen[0][1].headers.get('x-user-id'),null);assert.equal(seen[0][1].headers.get('x-csrf-token'),'fresh');
+ const oversized=await proxy.sessionProxy(new Request('https://app.unit/api/supervisor/core/prepare',{method:'POST',body:'x'.repeat(16385),headers:{'Content-Type':'application/json'}}),'/api/supervisor/core/prepare');assert.equal(oversized.status,422);assert.equal(seen.length,2);
+});

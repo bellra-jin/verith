@@ -91,3 +91,6 @@ __all__ = [
     "FlowReportVerification",
     "IndustryReport",
 ]
+
+# Supervisor confirmed plan bindings
+from db.models.supervisor.request_binding import SupervisorRequestBinding

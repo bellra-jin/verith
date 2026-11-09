@@ -726,6 +726,33 @@ class CF020Boundary(unittest.TestCase):
         for name in ('src.api.dependencies','pandas','redis','openai','langchain_openai','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 
+class CF022Boundary(unittest.TestCase):
+    def test_exact_inputs_and_collection(self):
+        import hashlib
+        from scripts import check_safe as c
+        self.assertEqual(len(c.CF022_INPUTS),28);self.assertEqual(c.CF022_TESTS,('tests/unit/test_cf022_supervisor_core.py',))
+        self.assertEqual({k:v for k,v in c.CF022_INPUTS.items() if k in c.CF020_INPUTS},c.CF020_INPUTS)
+        root=Path(__file__).resolve().parents[3]
+        for name,h in c.CF022_INPUTS.items():self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),h)
+        from unittest.mock import patch
+        indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):copied=c.selected_sources(root,core_only=True)
+        self.assertIn(c.CF022_FIXTURE,copied)
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF022_INPUTS))
+    def test_independent_modes(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        for mode in ('core-self','core-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0);self.assertTrue(run.call_args.kwargs['core_only']);self.assertFalse(run.call_args.kwargs['supervisor_only'])
+    def test_closed_loader_and_existing_origin_guard(self):
+        from scripts.cf022_supervisor_core_check import load_core
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        import sys
+        load_core();self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -736,6 +763,7 @@ if __name__ == "__main__":
     usage_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf018_self_only",False)
     display_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf019_self_only",False)
     supervisor_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf020_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    core_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf022_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

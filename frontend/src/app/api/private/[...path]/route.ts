@@ -1,10 +1,16 @@
 import { fundamentalAnalysisEnabled } from '@/shared/server/fundamental-analysis-config';
 import { flowAnalysisEnabled } from '@/shared/server/flow-analysis-config';
 import { flowDemoEnabled } from '@/shared/server/flow-demo-config';
-import { sessionProxy, demoProxyError, analysisProxyError } from '@/shared/server/session-proxy';
+import { sessionProxy, demoProxyError, analysisProxyError, coreProxyError } from '@/shared/server/session-proxy';
 async function handle(request: Request, context:{params:Promise<{path:string[]}>}) {
   const {path}=await context.params;
   const route=path.join('/');
+  if(route==='supervisor/core'||route.startsWith('supervisor/core/')){
+    if(!flowAnalysisEnabled())return coreProxyError('FEATURE_UNAVAILABLE',403);
+    const exact=request.method==='POST'&&['supervisor/core/prepare','supervisor/core/requests'].includes(route)||request.method==='GET'&&/^supervisor\/core\/requests\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(route);
+    if(!exact||new URL(request.url).search)return coreProxyError('INPUT_INVALID',422);
+    return sessionProxy(request,'/api/'+route);
+  }
   if(route==='fundamental'||route.startsWith('fundamental/')){
     if(!fundamentalAnalysisEnabled())return analysisProxyError('FEATURE_UNAVAILABLE',403);
     const url=new URL(request.url),id='[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}';

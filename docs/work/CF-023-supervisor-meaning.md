@@ -18,8 +18,8 @@
 
 | 선택 | 최종 결과 | 로그 이름 |
 |---|---|---|
-| 보호 `meaning-self` | 3통과, exit0 | `backend-self-2.log` |
-| 보호 `meaning-unit` 단일 신규 파일 | 44통과, guard 위반0, exit0 | `backend-unit-4.log` |
+| 보호 `meaning-self` | PR27 후속3통과, exit0 | `followup-pr27/backend-self-1.log` |
+| 보호 `meaning-unit` 단일 집중 파일 | PR27 후속72통과, guard 위반0, exit0 | `followup-pr27/backend-unit-1.log` |
 | Frontend 보호 `core-unit` | 93통과(37+14+6+36), exit0 | `frontend-unit-3.log` |
 | Frontend 보호 `core-type` | 오류0, exit0. 이후 TS 제품 변경0 | `frontend-type-2.log` |
 | Frontend 보호 `core-lint` | 오류0, exit0 | `frontend-lint-3.log` |
@@ -45,3 +45,16 @@ Backend는 clean env의 새 worktree 절대 Python `-I -S -B`와 `scripts/check_
 - **브라우저:** 문서화된 새 격리 context/profile API가 확인되지 않아 실제 React mount/controller click/storage/navigation·1440/390 레이아웃·focus 수용은 미실행이다. 이는 도구의 지원 capability 부족이며 접근 거절을 다른 경로로 우회하지 않았다. helper matrix/mock fetch/source assertion 및 fixture 구현은 mounted controller의 직접 검증을 대체하지 않는다. 새 서버/탭/개인 프로필을 사용하지 않았다.
 - 실제 Next SSR/BFF 전체 흐름·Google/KIS/Flow 공급자·기존 DB/운영 migration·한도 활성화·전체 build/과거 suite는 실행하지 않았다. 합성 ASGI/자기 PG는 운영 전체 E2E 완료가 아니다.
 - 원격 최신 exact-head CI/PR/병합은 조율 측 게시 이후 단계다. 로컬에서 stage/commit/push/PR를 실행하지 않았다. 최종 source/log SHA·NUL stage 목록과 공개 가능한 일반 PR 초안은 비공개 checkpoint로 인계한다.
+
+
+## PR27 병합 전 의미 경계 후속
+
+커밋 `13ddfda5c2e07609331f390bc6b2cd2e8319b9eb`의 일반 PR27 검토에서 발견한 세 경로를 같은 범위 안에서 보완했다.
+
+1. 종목 후보는 검증된 이름/code span과 명시 부정에만 coverage를 부여한다. 관점·금액/수량·기간·비교 수식어를 함께 담은 넓은 span은 거절하고 해당 조건/미해석 잔여를 보존한다. 이는 의미 후보 수용 결함의 수정이며 실제 잘못된 종목 실행이 재현됐다는 뜻이 아니다. 기존 Backend resolver와 continuation 장벽은 유지된다.
+2. typed views 답변 전체가 유한한 `<관점>만` 선택일 때만 suffix를 명시 범위 선택으로 처리한다. 원질문이나 금액·기간이 붙은 답변의 `만`을 global filler로 지우지 않으며, 원문의 제외 관점도 되살리지 않는다.
+3. 검증된 typed stock 답변은 원문에서 정확하고 경계가 맞는 동일 이름 span에만 연결한다. 인접 부정을 원문에서 다시 읽고 다른 종목·기간/조건을 남긴다. 임의 substring은 덮지 않는다. 같은 규칙을 fixed-frame 재구성에서도 적용한다.
+
+기존 단일 보호 선택에28개 회귀를 추가해 총72개가 통과했다. 과도한 span·정상 제한 이름·금액 잔여·정확한 views 답변·전역 suffix 부정 사례·stock 경계·원문 부정·기간·알려진/미인식 다른 종목·fixed-frame 변조를 검사했다. default gateway unavailable에서의 명확화 성공과 모델 후보 거절을 구분한다. 독립 정적 재검토에서도 이 세 보완의 새 blocker가 없음을 확인했다.
+
+이번 추가 변경은 순수 의미 정책·집중 회귀·정확한 source pin·이 기록뿐이다. 기존 Backend/DB/Frontend 제품·fixture·schema는 불변이므로 선행 PG10+3그룹과 Frontend93/type/lint를 반복하지 않았다. 이 결과들을 새 정책 source의 PG/브라우저 재실행으로 바꾸어 보고하지 않는다. live 모델/key 전송·실제 browser는 계속 미실행이며, 추가 커밋/원격 새 head CI/병합은 조율 측 단계다.

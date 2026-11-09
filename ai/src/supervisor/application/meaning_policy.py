@@ -24,10 +24,45 @@ PERIOD = re.compile(r'(?:최근|지난|과거)?\s*(?<![.\d+\-])\d+\s*(?:거래�
 TIME = re.compile(r'\d{4}-\d{2}-\d{2}|(?:19|20)\d{2}\s*년|어제|그저께|그제|지난주|지난달|작년|재작년|지난해|올해|내년|내일|오늘|이번주|이번달|요즘|현재|지금|최근|지난|과거|향후|앞으로|기준일|시점|기간')
 FILLERS = tuple(sorted(('알려주세요', '보여주세요', '분석해줘', '알려줘', '보여줘', '봐줘', '궁금해', '궁금합니다', '어때요', '어때', '어떻게', '리포트', '분석', '의', '을', '를', '은', '는', '이', '가', '와', '과', '좀'), key=len, reverse=True))
 SCOPE_SINGLE = {'선택한 한 종목만', '개별 종목만', '한 종목만'}
+# These suffixes describe bounded name shapes, never canonical stock identity.
+NAME_ENDINGS = {'전자', '하이닉스', '바이오', '자동차', '전기', '증권', '은행', '건설', '전력', '제약'}
+MENTION_MODIFIERS = re.compile(r'목표가|매집|저평가|고평가|매수|매도|이상|이하|초과|미만|보다|대비|조건|기준|이후|이전|부터|까지|없이|말고|제외|빼고|아닌|\b(?:buy|sell)\b', re.I)
+QUANTITY = re.compile(r'\d+(?:[.,]\d+)?\s*(?:[천만억조](?:원)?|원|%|배|주|거래일|개월|개년|년|일|달|시간)|(?:^|\s)\d+(?:[.,]\d+)?(?=$|\s)', re.I)
+NAME_CHARACTER = re.compile(r'[가-힣A-Za-z0-9.&_-]')
+STOCK_PARTICLE = re.compile(r'(?:은|는|을|를|이|가|와|과)(?=$|[^가-힣A-Za-z0-9.&_-])')
+
 
 
 def normalized(text):
     return re.sub(r'\s+', ' ', text.strip()).lower()
+
+
+def stock_name_shape(raw):
+    """A name span cannot claim coverage for views, amounts, periods or modifiers."""
+    if not raw or len(raw) > 256 or not re.fullmatch(r'[가-힣A-Za-z0-9 .&_-]+', raw):
+        return False
+    if re.fullmatch(r'[0-9]{6}', raw):
+        return True
+    semantic_words = [word for words in VIEW_WORDS.values() for word in words] + list(ACTORS)
+    if any(word in normalized(raw) for word in semantic_words) or MENTION_MODIFIERS.search(raw) or QUANTITY.search(raw) or PERIOD.search(raw) or TIME.search(raw):
+        return False
+    parts = raw.split()
+    if len(parts) == 1:
+        return bool(re.search(r'[가-힣A-Za-z]', raw))
+    # Multiword proper names have a bounded compound shape; arbitrary prose is not a name.
+    return len(parts) == 2 and (parts[-1] in NAME_ENDINGS or re.fullmatch(r'[A-Z]{1,8}', parts[0]) is not None)
+
+
+def exact_name_boundary(text, start, end):
+    if start and NAME_CHARACTER.fullmatch(text[start - 1]):
+        return False
+    if end == len(text) or not NAME_CHARACTER.fullmatch(text[end]):
+        return True
+    tail = text[end:]
+    if STOCK_PARTICLE.match(tail):
+        return True
+    negative = NEGATION.match(tail)
+    return bool(negative and (negative.end() == len(tail) or not NAME_CHARACTER.fullmatch(tail[negative.end()])))
 
 
 @dataclass(frozen=True)
@@ -76,7 +111,7 @@ class Grounding:
             return evidence.text, self.evidence(key, evidence.end + following.start(1), evidence.end + following.end(1)), False
         return evidence.text, None, False
 
-    def negation(self, evidence, supplied=None, *, proposal=False):
+    def negation(self, evidence, supplied=None, *, proposal=False, cover=True):
         positive, actual, embedded = self.positive_and_negation(evidence)
         if supplied is not None:
             self.validate(supplied)
@@ -84,25 +119,49 @@ class Grounding:
                 raise CoreInvalid()
         elif proposal and actual is not None and not embedded:
             raise CoreInvalid()
-        if actual is not None:
-            self.cover(actual)
-        self.cover(evidence)
+        if cover:
+            if actual is not None:
+                self.cover(actual)
+            self.cover(evidence)
         return normalized(positive), actual is not None
 
     def add_mention(self, evidence, supplied=None, *, proposal=False):
-        text, negative = self.negation(evidence, supplied, proposal=proposal)
-        raw, _, _ = self.positive_and_negation(evidence)
+        raw, actual, _ = self.positive_and_negation(evidence)
         raw = raw.strip()
-        if not raw or len(raw) > 256 or not re.fullmatch(r'[가-힣A-Za-z0-9 .&_-]+', raw) or re.search(r'목표가|매집|내년|거래일|말고|제외', raw):
+        if not stock_name_shape(raw):
             raise CoreInvalid()
+        _, negative = self.negation(evidence, supplied, proposal=proposal, cover=False)
         # Mention.text must still exactly match its source span.
         if raw != evidence.text:
             key, source = self.validate(evidence)
             offset = source.find(raw, evidence.start, evidence.end)
             evidence = self.evidence(key, offset, offset + len(raw))
+        # Only the validated name and its explicit negation receive name coverage.
+        # Condition/view coverage belongs to their own parsers, never a proposed whole question.
+        self.cover(evidence)
+        if actual is not None:
+            self.cover(actual)
         value = {'text': evidence.text, 'negated': negative, 'evidence': evidence.model_dump(mode='json')}
         if value not in self.mentions:
             self.mentions.append(value)
+
+    def connect_stock_answer(self, answer):
+        """Link only an exact, bounded original occurrence of a validated typed name."""
+        key = ('clarification_answer', answer.answer_id)
+        names = [mention['text'] for mention in self.mentions if mention['evidence']['answer_id'] == answer.answer_id]
+        original = self.draft.original_query
+        for name in names:
+            for match in re.finditer(re.escape(name), original):
+                if exact_name_boundary(original, *match.span()):
+                    # Re-read original adjacent negation; the answer cannot make it positive.
+                    self.add_mention(self.evidence(('original_query', None), *match.span()))
+
+    def cover_view_selection(self, key, text):
+        """Only a complete typed views answer may use the finite '<view>만' selection."""
+        answer = normalized(text)
+        choices = {normalized(word) + suffix for words in VIEW_WORDS.values() for word in words for suffix in ('만', ' 만')}
+        if answer in choices:
+            self.cover(self.evidence(key, 0, len(text)))
 
     def view_for(self, evidence):
         _, source = self.validate(evidence)
@@ -181,10 +240,20 @@ class Grounding:
         for key, text in self.sources.items():
             slot = self.slots.get(key)
             if slot == 'stock':
-                self.add_mention(self.evidence(key, 0, len(text)))
+                try:
+                    self.add_mention(self.evidence(key, 0, len(text)))
+                except CoreInvalid:
+                    # Invalid typed prose stays unrecognized rather than erasing its conditions.
+                    pass
+                else:
+                    answer = next(answer for answer in self.draft.answers if answer.answer_id == key[1])
+                    self.connect_stock_answer(answer)
             else:
                 for match in STOCK.finditer(text):
-                    self.add_mention(self.evidence(key, *match.span()))
+                    try:
+                        self.add_mention(self.evidence(key, *match.span()))
+                    except CoreInvalid:
+                        pass  # An overbroad heuristic match leaves meaningful text uncovered.
             for view, words in VIEW_WORDS.items():
                 for word in words:
                     for match in re.finditer(re.escape(word), text, re.I):
@@ -203,6 +272,8 @@ class Grounding:
                     parsed = self.parsed_condition(evidence)
                     if parsed is not None:
                         self.add_condition(*parsed, evidence)
+            if slot == 'views':
+                self.cover_view_selection(key, text)
             if slot == 'scope' and normalized(text) in {normalized(v) for v in SCOPE_SINGLE}:
                 self.cover(self.evidence(key, 0, len(text)))
 
@@ -244,7 +315,7 @@ class Grounding:
             requested = {view for view, negative, e in self.views if e.answer_id == last and not negative}
         requested -= negated
         mentions = list(self.mentions)
-        stock_answers = [a for a in self.draft.answers if a.slot == 'stock']
+        stock_answers = [a for a in self.draft.answers if a.slot == 'stock' and any(m['evidence']['answer_id'] == a.answer_id for m in self.mentions)]
         original_active = {m['text'] for m in mentions if not m['negated'] and m['evidence']['source_kind'] == 'original_query'}
         if stock_answers:
             last = stock_answers[-1].answer_id

@@ -294,3 +294,128 @@ async def test_canonical_alias_cannot_override_excluded_stock():
     with pytest.raises(PreparationConflict) as error:await service.resolve(B.Draft.model_validate(d.model_dump(mode='json')),B.MeaningFrame.model_validate(frame.model_dump(mode='json')),'005930')
     assert error.value.code=='INPUT_INVALID' and resolver.resolve.await_count==2
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize('name',[
+    '현대차 수급 3억원 이상', '현대차 3억원 이상', '현대차 최근 3주',
+    '현대차 3주', '현대차 외국인', '현대차보다', '현대차 기아', '가'*257,
+])
+async def test_overbroad_stock_candidate_cannot_cover_views_amount_period_or_modifiers(name):
+    q=name+' 수급'
+    candidate=proposal(mentions=[dict(evidence=ev(q,name),negation=None)])
+    gateway=NS(propose=AsyncMock(return_value=candidate))
+    frame,status=await S.understand_v2(draft(q),gateway,attempt_id=str(uuid4()))
+    gateway.propose.assert_awaited_once()
+    assert status=='rejected' and 'meaning' in frame.unresolved_slots
+    assert any(c.kind=='unrecognized' for c in frame.conditions)
+    if '3억원' in q:assert any('3억원' in c.value for c in frame.conditions)
+
+
+async def test_valid_narrow_name_does_not_cover_adjacent_amount_or_comparison():
+    q='현대차 수급 3억원 이상'
+    candidate=proposal(mentions=[dict(evidence=ev(q,'현대차'),negation=None)])
+    frame,status=await S.understand_v2(draft(q),NS(propose=AsyncMock(return_value=candidate)))
+    assert status=='incomplete' and 'meaning' in frame.unresolved_slots
+    assert any(c.value=='3억원' for c in frame.conditions)
+    assert any(c.value=='이상' for c in frame.conditions)
+    assert [m.text for m in frame.mentions]==['현대차']
+    assert G.validate_fixed_frame(draft(q),frame)==frame
+
+
+@pytest.mark.parametrize('name',['현대차','현대 건설','SK 하이닉스','삼성 전자','005930'])
+def test_bounded_name_shapes_accept_names_not_whole_question(name):
+    assert G.stock_name_shape(name)
+    grounding=G.Grounding(draft(name+' 수급'))
+    grounding.add_mention(M.Evidence.model_validate(ev(name+' 수급',name)),proposal=True)
+    assert grounding.remainder()  # Name coverage itself does not cover the separate view.
+
+
+@pytest.mark.parametrize('value',['수급만','수급 만','  수급만  '])
+async def test_typed_views_only_suffix_finishes_without_gateway_and_reconstructs(value):
+    d=draft('삼성전자 주식 정보',answers=[dict(answer_id=str(uuid4()),slot='views',value=value)])
+    gateway=NS(propose=AsyncMock(side_effect=AssertionError('Gateway must remain unused')))
+    first=await P.start_v2(d,gateway)
+    gateway.propose.assert_not_awaited()
+    assert first.action=='resolve_stock' and first.frame.requested_views==['flow']
+    assert not first.frame.unresolved_slots and first.frame.answers[-1].value==value
+    assert G.validate_fixed_frame(d,first.frame)==first.frame
+    assert P.continuation_v2(d,first.frame,resolution()).plan.status=='ready'
+
+
+@pytest.mark.parametrize('query,value',[
+    ('삼성전자 수급만',None),
+    ('삼성전자 주식 정보','수급만 3억원 이상'),
+    ('삼성전자 주식 정보','수급만 최근 3주'),
+])
+async def test_only_suffix_is_not_global_filler_and_cannot_erase_other_conditions(query,value):
+    answers=[] if value is None else [dict(answer_id=str(uuid4()),slot='views',value=value)]
+    first=await P.start_v2(draft(query,answers=answers))
+    assert first.action!='resolve_stock' and 'meaning' in first.frame.unresolved_slots
+    assert any(c.kind=='unrecognized' for c in first.frame.conditions)
+    if value and '3억원' in value:assert any('3억원' in c.value for c in first.frame.conditions)
+    if value and '3주' in value:assert any('3주' in c.value and c.kind=='period' for c in first.frame.conditions)
+
+
+async def test_views_only_answer_does_not_restore_explicitly_excluded_flow():
+    d=draft('삼성전자 수급 말고 차트',answers=[dict(answer_id=str(uuid4()),slot='views',value='수급만')])
+    first=await P.start_v2(d)
+    assert first.action!='resolve_stock' and 'flow' in first.frame.negated_views
+    assert 'flow' not in first.frame.requested_views
+    assert G.validate_fixed_frame(d,first.frame)==first.frame
+
+
+@pytest.mark.parametrize('query',['현대차 수급','현대차는 수급'])
+async def test_typed_stock_links_exact_original_span_without_gateway(query):
+    d=draft(query,answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+    gateway=NS(propose=AsyncMock(side_effect=AssertionError('Gateway must remain unused')))
+    first=await P.start_v2(d,gateway)
+    gateway.propose.assert_not_awaited()
+    assert first.action=='resolve_stock' and not first.frame.unresolved_slots
+    assert first.lookup=='현대차'
+    assert G.validate_fixed_frame(d,first.frame)==first.frame
+    plan=P.continuation_v2(d,first.frame,resolution()).plan
+    B.validate_plan(plan.model_dump(mode='json'),B.Draft.model_validate(d.model_dump(mode='json')))
+
+
+@pytest.mark.parametrize('query',['수현대차 수급','현대차량 수급','현대차이상 수급'])
+async def test_typed_stock_never_covers_arbitrary_substring(query):
+    d=draft(query,answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+    first=await P.start_v2(d)
+    assert first.action!='resolve_stock' and 'meaning' in first.frame.unresolved_slots
+    assert any(c.kind=='unrecognized' and c.evidence[0].source_kind=='original_query' for c in first.frame.conditions)
+
+
+async def test_typed_stock_keeps_original_negation_period_and_other_stock_evidence():
+    for q in ('현대차 말고 기아 수급','현대차말고 기관 수급'):
+        d=draft(q,answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+        first=await P.start_v2(d)
+        assert first.action!='resolve_stock' and 'scope' in first.frame.unresolved_slots
+        assert any(m.negated and m.text=='현대차' and m.evidence.source_kind=='original_query' for m in first.frame.mentions)
+        assert G.validate_fixed_frame(d,first.frame)==first.frame
+    d=draft('현대차 최근 3주 수급',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+    first=await P.start_v2(d)
+    assert first.action=='resolve_stock'
+    plan=P.continuation_v2(d,first.frame,resolution()).plan
+    assert plan.status=='scope_confirmation' and plan.partial and plan.required_waivers
+    assert any(c.kind=='period' and c.value=='최근 3주' for c in plan.frame.conditions)
+    d=draft('현대차와 SK하이닉스 수급',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+    first=await P.start_v2(d)
+    plan=P.continuation_v2(d,first.frame,resolution()).plan
+    assert plan.partial and plan.status=='scope_confirmation'
+    narrowing=next(c for c in plan.frame.conditions if '다중 종목' in c.value)
+    assert {e.text for e in narrowing.evidence}=={'현대차','SK하이닉스'}
+    d=draft('현대차와 기아 수급',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+    first=await P.start_v2(d)
+    assert first.action!='resolve_stock' and any(c.value=='기아' for c in first.frame.conditions)
+
+
+async def test_invalid_typed_stock_prose_stays_unrecognized_and_fixed_frame_rejects_widening():
+    d=draft('현대차 수급 3억원 이상',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차 수급 3억원 이상')])
+    first=await P.start_v2(d)
+    assert first.action!='resolve_stock' and 'meaning' in first.frame.unresolved_slots
+    d=draft('현대차 수급',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
+    frame=(await P.start_v2(d)).frame
+    changed=frame.model_dump(mode='json')
+    changed['mentions'].append(dict(text=d.original_query,negated=False,evidence=ev(d.original_query,d.original_query)))
+    altered=M.MeaningFrame.model_validate(changed)
+    with pytest.raises(M.CoreInvalid):G.validate_fixed_frame(d,altered)

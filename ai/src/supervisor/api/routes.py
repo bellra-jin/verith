@@ -71,7 +71,13 @@ def make_core_router(*,gateway=None,token=None,enabled=None):
                     if len(raw)+len(chunk)>16384:raise ValueError()
                     raw.extend(chunk)
                 from src.supervisor.domain.core_contracts import Envelope,InternalInput,decode,canonical
-                body=Envelope[InternalInput].model_validate(decode(raw))
+                decoded=decode(raw)
+                data=decoded.get('data') if isinstance(decoded,dict) else None
+                if isinstance(data,dict) and data.get('policy_version')=='supervisor.flow-core.2':
+                    from src.supervisor.domain.core_contracts import MeaningRunInput
+                    body=Envelope[MeaningRunInput].model_validate(decoded)
+                else:
+                    body=Envelope[InternalInput].model_validate(decoded)
                 if body.error is not None or body.data is None:raise ValueError()
                 from src.supervisor.application.runtime import run_core
                 result=await run_core(body.data,gateway=gateway)

@@ -66,7 +66,7 @@ export async function sessionProxy(request: Request, path: string, query = '') {
   let body: ArrayBuffer | undefined;
   if(guarded) {
     const idPattern='[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}';
-    const root=core?(path.startsWith('/api/supervisor/core/requests')?'/api/supervisor/core/requests':'/api/supervisor/core/prepare'):planning?'/api/flow/plans':fundamentalReports?'/api/fundamental/reports':analysis?currentAnalysisPath:demoPath;
+    const root=core?(path.startsWith('/api/supervisor/core/requests')?'/api/supervisor/core/requests':path.startsWith('/api/supervisor/core/preparations')?'/api/supervisor/core/preparations':'/api/supervisor/core/prepare'):planning?'/api/flow/plans':fundamentalReports?'/api/fundamental/reports':analysis?currentAnalysisPath:demoPath;
     const detail=new RegExp('^'+root+'/'+idPattern+'$').test(path);
     if(fundamentalReports){
       const params=new URLSearchParams(query.startsWith('?')?query.slice(1):query);
@@ -74,7 +74,7 @@ export async function sessionProxy(request: Request, path: string, query = '') {
       if(detail&&(query||new URL(request.url).search))return reject('INPUT_INVALID',422);
       if([...params.keys()].some(k=>!['stock_code','limit','offset'].includes(k)||params.getAll(k).length!==1))return reject('INPUT_INVALID',422);
       for(const [key,value] of params){if(!/^[0-9]+$/.test(value)||key==='stock_code'&&!/^[0-9]{6}$/.test(value)||key==='limit'&&(!Number.isSafeInteger(Number(value))||Number(value)<1||Number(value)>100)||key==='offset'&&!Number.isSafeInteger(Number(value)))return reject('INPUT_INVALID',422);}
-    }else if(query || new URL(request.url).search || !(request.method==='POST' && path===root || !planning && request.method==='GET' && detail))return reject('INPUT_INVALID',422);
+    }else if(query || new URL(request.url).search || !(request.method==='POST' && path===root || !planning && request.method==='GET' && detail || core && root==='/api/supervisor/core/preparations' && request.method==='DELETE' && detail))return reject('INPUT_INVALID',422);
     if(request.method==='POST') {
       const content=request.headers.get('content-type') ?? '';
       const length=request.headers.get('content-length');

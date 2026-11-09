@@ -1,5 +1,13 @@
 # veriθ Backend — 통합 PostgreSQL 스키마 (팀 공유 문서)
 
+## CF-023 추가: 고정 의미 준비와 한정 검증 epoch
+
+`c23001a7e0001`(parent `c22001a7e0001`)은 `supervisor_meaning_preparations`와 `supervisor_meaning_test_epochs`를 추가한다. 준비는 실행/결과 원장이 아니며 Flow 회계는 그대로다. 준비의 owner/key·request/draft/spec digest, immutable root/parent/depth(최대4 ancestor), attempt/state·plan hash·DB10분 TTL을 저장한다. 민감 draft/frame/초기 plan은 root에만 두고 child는 canonical 선택과 continuation만 갖는다. 같은 owner composite FK와 cycle/depth·상태/JSON/hash CHECK를 적용한다.
+
+binding의 nullable preparation_id는 legacy 행을 보존한다. 첫 채택은 root→leaf/같은 depth UUID 순서로 모든 ancestor를 잠그고 같은 transaction에서 하나의 승리 binding 참조로 소비·redact한다. sibling도 shared ancestor로 단일 소비되며 양방향 owner/소비 관계는 commit-time 검증한다. 기존 binding의 immutable/redaction guard를 보존한다. 준비 GET/DELETE·만료 정리·늦은 결과와 보고서 삭제도 같은 lineage 잠금/원문 비부활 경계를 사용한다.
+
+검증 epoch는 CF023 단위의 최대100,000,000 nanoUSD·attempt/count/generation 각2와 monotonic reservation/phase를 제한한다. count+generation 한 attempt는50,000,000 nanoUSD 예약을 공유한다. unknown/ACK 불명·usage 누락은 hold/blocked이며 TTL/삭제/재시작으로 환불/초기화하지 않는다. 공개 예산 API나 production 비용 활성화가 아니다. [공통 계약](../../docs/contracts/supervisor-core-v1.md)과 [이번 실행 상태](../../docs/work/CF-023-supervisor-meaning.md)를 따른다.
+
 ## CF-022 추가: Supervisor 확정 계획 binding
 
 `c22001a7e0001`(parent `c18001a7e0001`)의 `supervisor_request_bindings`는 실행 원장이 아닌 계획→고정 Flow 입력 연결 한 표다. [공통 계약](../../docs/contracts/supervisor-core-v1.md)을 따른다. UUID PK/owner FK RESTRICT, owner+client_key_digest32 UNIQUE, 확정 digest와 plan/Flow JSON/hash, 유일 Flow key digest, finite DB confirmed_at/handoff_before(+120초)/redacted_at을 둔다. JSON object/크기/hash·identity·불변 trigger를 적용하며 populated downgrade는 거절한다.

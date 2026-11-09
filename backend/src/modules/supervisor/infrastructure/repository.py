@@ -17,7 +17,11 @@ async def flow_run(session, binding):
     return await session.scalar(select(FlowAnalysisRun).where(FlowAnalysisRun.owner_user_id == binding.owner_user_id, FlowAnalysisRun.operation == 'flow.analysis.v1', FlowAnalysisRun.key_digest == binding.flow_key_digest))
 
 async def redact_for_flow(session, owner, key):
-    await session.execute(update(Binding).where(Binding.owner_user_id == owner, Binding.flow_key_digest == key, Binding.redacted_at.is_(None)).values(plan_json=None, flow_input_json=None, redacted_at=func.clock_timestamp()))
+    ids = list((await session.scalars(update(Binding).where(Binding.owner_user_id == owner, Binding.flow_key_digest == key, Binding.redacted_at.is_(None)).values(plan_json=None, flow_input_json=None, redacted_at=func.clock_timestamp()).returning(Binding.preparation_id))).all())
+    from src.modules.supervisor.infrastructure import preparation_repository as preparations
+    for id in sorted((value for value in ids if value is not None), key=str):
+        rows = await preparations.lineage(session, owner, id)
+        await preparations.redact(session, rows, await preparations.clock(session), allow_consumed=True)
 from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +36,7 @@ class Snapshot:
     flow_key_digest: bytes
     handoff_before: object
     redacted_at: object
+    preparation_id: object = None
 
 def snapshot(row):
     return Snapshot(**{k: getattr(row, k) for k in Snapshot.__dataclass_fields__})

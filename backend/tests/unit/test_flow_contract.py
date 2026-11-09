@@ -152,10 +152,43 @@ def project_cf015_exact_additions(api):
     stock['required']=True;stock['schema']={'type':'string','pattern':r'^\d{6}$','title':'Stock Code'}
 
 
+def project_cf023_exact_additions(api):
+    """Only the three preparation operations and explicitly reviewed schema deltas."""
+    from fastapi import FastAPI
+    from src.modules.supervisor.api.router import router
+    app=FastAPI();app.include_router(router);expected=app.openapi()
+    routes={'/api/supervisor/core/preparations':{'post'},'/api/supervisor/core/preparations/{preparation_id}':{'get','delete'}}
+    for path,methods in routes.items():
+        assert set(api['paths'][path])==methods
+        assert api['paths'][path]==expected['paths'][path]
+        del api['paths'][path]
+    schemas=api['components']['schemas']
+    names={'CorePreparationRequest','CorePreparationView','CoreEnvelope_CorePreparationView_'}
+    for name in names:
+        assert schemas[name]==expected['components']['schemas'][name]
+        del schemas[name]
+    assert set(expected['components']['schemas']['CorePreparationRequest']['properties'])=={'prepare_key','draft','parent_preparation_id'}
+    assert set(expected['components']['schemas']['CorePreparationView']['properties'])=={'preparation_id','state','plan','created_at','expires_at','meaning_status','consumed_binding_id'}
+    assert expected['components']['schemas']['CorePreparationRequest']['additionalProperties'] is False
+    assert expected['components']['schemas']['CorePreparationView']['additionalProperties'] is False
+    confirm=schemas['CoreConfirm']
+    field=confirm['properties'].pop('preparation_id')
+    assert field=={'anyOf':[{'type':'string','pattern':'^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$'},{'type':'null'}],'title':'Preparation Id'}
+    assert 'preparation_id' not in confirm.get('required',[])
+    policy=schemas['CorePlan']['properties']['policy_version']
+    assert policy=={'type':'string','enum':['supervisor.flow-core.1','supervisor.flow-core.2'],'title':'Policy Version'}
+    schemas['CorePlan']['properties']['policy_version']={'type':'string','const':'supervisor.flow-core.1','title':'Policy Version'}
+    codes=schemas['CoreSafeError']['properties']['code']['enum']
+    extra=['PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED','MEANING_LIMIT_EXCEEDED']
+    assert codes[-4:]==extra
+    del codes[-4:]
+
+
 def project_cf022_exact_additions(api):
     from fastapi import FastAPI
     from src.modules.supervisor.api.router import router
     isolated=FastAPI();isolated.include_router(router);expected=isolated.openapi()
+    project_cf023_exact_additions(expected)
     paths={'/api/supervisor/core/prepare','/api/supervisor/core/requests','/api/supervisor/core/requests/{supervisor_id}'}
     assert set(expected['paths'])==paths
     names={'CoreAnswer','CoreDraft','CoreEvidence','CoreMention','CoreCondition','CoreMeaningFrame','CoreStock','CoreCandidate','CoreResolution','CoreCapability','CorePlan','CoreConsent','CoreConfirm','CoreViewOutcome','CoreFlowReference','CoreEffectiveScope','CoreOutcome','CoreSafeError','CoreEnvelope_CorePlan_','CoreEnvelope_CoreOutcome_'}
@@ -199,6 +232,7 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf023_exact_additions(api)
     project_cf022_exact_additions(api)
     project_cf020_exact_additions(api)
     project_cf015_exact_additions(api)

@@ -102,3 +102,30 @@ async def understand(draft, gateway=None):
         return proposed
     except (MeaningUnavailable, CoreInvalid, ValueError, TypeError):
         return frame.model_copy(update={'interpretation_source': 'unavailable'})
+
+
+async def understand_v2(draft, gateway=None, *, attempt_id=None):
+    # New modules are deliberately lazy: policy1 loaders require no policy2 inputs.
+    from src.supervisor.application.meaning_policy import assess
+    from src.supervisor.infrastructure.meaning_gateway import UnavailableCandidateGateway, CounterUnavailable
+    base = assess(draft)
+    if not base.needs_supplement:
+        status = 'unsupported' if base.hard_meaning else 'incomplete' if base.frame.unresolved_slots else 'deterministic'
+        return base.frame, status
+    try:
+        async with asyncio.timeout(5):
+            proposal = await (gateway or UnavailableCandidateGateway()).propose(draft, attempt_id=attempt_id)
+        supplemented = assess(draft, proposal, source='model_assisted')
+        status = 'incomplete' if supplemented.frame.unresolved_slots else 'supplemented'
+        return supplemented.frame, status
+    except CounterUnavailable:
+        return base.frame.model_copy(update={'interpretation_source': 'unavailable'}), 'counter_unavailable'
+    except MeaningUnavailable:
+        return base.frame.model_copy(update={'interpretation_source': 'unavailable'}), 'unavailable'
+    except (CoreInvalid, ValueError, TypeError):
+        return base.frame.model_copy(update={'interpretation_source': 'unavailable'}), 'rejected'
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # The verifier gateway retains unknown usage/hold independently of this frame.
+        return base.frame.model_copy(update={'interpretation_source': 'unavailable'}), 'unavailable'

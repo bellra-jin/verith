@@ -43,3 +43,13 @@ Flow 보고서 삭제의 기존 transaction/잠금 순서(session→analysis→r
 기본 `/research`는 단일 SupervisorChat이다. 기존 `analysis_id` 및 owner별 Flow pending은 원래 AnalysisEntry로 복구하고, Sup pending은 별도 schema/owner 저장소를 쓴다. direct supervisor URL에 고정 pending이 없으면 GET-only다. session401/계정·URL·visibility/generation 변경은 비공개 표시/동의를 무효화한다. 원입력과 key는 보존한다.
 
 [디자인/상태 기준](../design/supervisor-core.md)과 [실행 기록](../work/CF-022-supervisor-core.md)은 실제 증거 수준을 구분한다. Backend 합성 HTTP/소유 PG는 실제 모델·브라우저·운영 배포의 검증이 아니다.
+
+## CF-023: meaning policy2와 고정 준비
+
+transport `supervisor.core.v1`과 기존 policy1/plan hash/Confirm digest·binding replay는 보존한다. 새 `supervisor.meaning.v1` 후보는 정확 span의 mention/view/negation/typed 조건만 제안하며 canonical stock·권한·disposition·실행 동의는 제안하지 못한다. `supervisor.flow-core.2` 서버 정책이 값·단위·영역·부정 scope를 유한 규칙으로 검증하고 충분성/미인식 잔여를 판단한다. 충분한 명시 입력은 model0, 보완은 최대1회다. production gateway는 unavailable이다.
+
+새 POST `/api/supervisor/core/preparations`와 GET/DELETE `/api/supervisor/core/preparations/{preparation_id}`는 owner/key에 고정한 짧은 준비 저장본이다. DB10분 TTL은 첫 채택만 제한하며 claim/usage를 되돌리는 기한이 아니다. ACK 불명·pending/unknown은 새 추출로 reclaim하지 않는다. child 후보 선택은 원 root frame/원질문을 재사용하며 model0·parent 이하 TTL이고 민감 JSON을 복제하지 않는다.
+
+Confirm의 optional preparation_id가 없으면 legacy 필드 집합으로만 digest한다. 있으면 저장한 plan/draft/선택·동의·owner·현재 canonical을 검증하고 root→leaf 모든 ancestor를 원자적으로 소비·redact하여 승리 binding에 연결한다. 기존 binding replay가 preparation 잠금·TTL보다 우선한다. sibling/parent-child는 shared ancestor에 의해 하나의 binding만 채택한다. 미소비 sibling도 consumed/deleted/expired ancestor 뒤 plan/원문을 노출하거나 재사용하지 않는다.
+
+준비 삭제는 child ID여도 실제 root 원문까지 redact한다. consumed lineage는 보고서 삭제 경로를 사용하고, 만료 미소비 원문 삭제는 허용한다. 운영 purge/미접근 만료행의 물리 잔류 정리 전체는 보장하지 않는다. 실제 OpenAI credential/전송과 전체 입력/계수 요금 증빙은 별도 pending이며 한정 verifier 외에서 호출을 열지 않는다.

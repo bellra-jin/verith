@@ -126,7 +126,7 @@ class MeaningFrame(Strict):
         sources = {a.answer_id: a.value for a in self.answers}
         for e in [m.evidence for m in self.mentions] + [e for c in self.conditions for e in c.evidence]:
             text = self.original_query if e.source_kind == 'original_query' and e.answer_id is None else sources.get(e.answer_id) if e.source_kind == 'clarification_answer' else None
-            if text is None or text[e.start:e.end] != e.text:
+            if text is None or not 0 <= e.start < e.end <= len(text) or text[e.start:e.end] != e.text:
                 raise CoreInvalid()
         if any((m.text != m.evidence.text for m in self.mentions)):
             raise CoreInvalid()

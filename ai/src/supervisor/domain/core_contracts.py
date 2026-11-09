@@ -47,7 +47,7 @@ class Capability(Strict):
 
 class Plan(Strict):
     schema_version: Literal['supervisor.core.v1']
-    policy_version: Literal['supervisor.flow-core.1']
+    policy_version: Literal['supervisor.flow-core.1', 'supervisor.flow-core.2']
     frame: MeaningFrame
     resolution: Resolution | None
     candidate_ref: str | None = Field(pattern='^[0-9a-f]{64}$')
@@ -134,13 +134,23 @@ class InternalOutput(Strict):
 def semantic_plan_hash(value):
     return sha({k: v for (k, v) in value.items() if k != 'plan_hash'})
 
-def candidate_ref(draft, resolution):
+def candidate_ref(draft, resolution, *, policy_version=POLICY):
     value = resolution.model_dump(mode='json') if isinstance(resolution, Resolution) else resolution
     value = {**value, 'candidates': sorted(value['candidates'], key=lambda c: c['stock_code'])}
-    return sha(dict(policy=POLICY, draft=draft.model_dump(mode='json', exclude={'selected_ticker', 'candidate_ref'}), resolution=value))
+    return sha(dict(policy=policy_version, draft=draft.model_dump(mode='json', exclude={'selected_ticker', 'candidate_ref'}), resolution=value))
 
 def validate_plan(value, draft):
     plan = Plan.model_validate(value)
     if plan.frame.original_query != draft.original_query or plan.frame.answers != draft.answers or plan.frame.revision != draft.revision or (semantic_plan_hash(value) != plan.plan_hash) or (plan.requested_views != plan.frame.requested_views):
         raise CoreInvalid()
     return plan
+
+
+class MeaningRunInput(InternalInput):
+    policy_version: Literal['supervisor.flow-core.2']
+    attempt_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+
+
+class MeaningRunOutput(InternalOutput):
+    meaning_status: Literal['deterministic', 'supplemented', 'unavailable', 'rejected', 'incomplete', 'unsupported', 'counter_unavailable']
+    semantic_spec_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')

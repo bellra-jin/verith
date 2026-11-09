@@ -47,6 +47,7 @@ def cf003_failure_diagnostic(error, stage):
         str(_BACKEND / "scripts/cf018_usage_check.py"): "usage_checker",
         str(_BACKEND / "scripts/cf020_supervisor_check.py"): "supervisor_checker",
         str(_BACKEND / "scripts/cf022_supervisor_core_check.py"): "core_checker",
+        str(_BACKEND / "scripts/cf023_supervisor_meaning_check.py"): "meaning_checker",
     }
     functions = {"create", "verify_metadata", "call", "inspect", "verify", "sql",
                  "preflight", "attest_connection", "main", "migrate_owned",
@@ -490,6 +491,7 @@ def main():
     mode.add_argument("--verify-flow-usage-db", action="store_true")
     mode.add_argument("--verify-supervisor-flow-db", action="store_true")
     mode.add_argument("--verify-supervisor-core-db", action="store_true")
+    mode.add_argument("--verify-supervisor-meaning-db", action="store_true")
     mode.add_argument("--verify-flow-analysis-db", action="store_true")
     mode.add_argument("--verify-analysis-adapter-db", action="store_true")
     mode.add_argument("--verify-fundamental-analysis-db", action="store_true")
@@ -522,7 +524,7 @@ def main():
     for signum in (signal.SIGINT, signal.SIGTERM):
         old_handlers[signum] = signal.signal(signum, stop)
     try:
-        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db):
+        if not (args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db):
             ensure_local_ports_free()
         docker = LocalDocker()
         if args.verify_flow_admission_db:
@@ -537,7 +539,7 @@ def main():
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
-        elif args.verify_flow_synthetic_demo_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+        elif args.verify_flow_synthetic_demo_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
@@ -546,7 +548,7 @@ def main():
         cf003_stage = "owned_creation"
         proof = owner.create()
         receipt_output = proof.safe_receipt()
-        if args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+        if args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
             # The original nonce belongs only to private cleanup evidence.
             receipt_output = {key: receipt_output[key] for key in (
                 "resource_id", "container_id", "created_at", "host", "port", "persistent_mounts", "cleanup_owner")}
@@ -625,6 +627,12 @@ def main():
             cf003_stage = "admission_check"
             result = asyncio.run(asyncio.wait_for(verify_synthetic_demo(proof), timeout=180))
             safe_print({"phase": "flow_synthetic_demo_db_check", **result})
+            return
+        if args.verify_supervisor_meaning_db:
+            from scripts.cf023_supervisor_meaning_check import verify_meaning
+            cf003_stage='admission_check'
+            result=asyncio.run(asyncio.wait_for(verify_meaning(proof),timeout=300))
+            safe_print({'phase':'supervisor_meaning_db_check',**result})
             return
         if args.verify_supervisor_core_db:
             from scripts.cf022_supervisor_core_check import verify_core
@@ -791,9 +799,9 @@ def main():
         interrupted = True
         safe_print({"phase": "interrupted", "status": "cleaning_owned_resources"})
     except Exception as error:
-        if args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+        if args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
             detail = cf003_failure_diagnostic(error, cf003_stage)
-            detail["phase"] = "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
+            detail["phase"] = "cf023_failure_diagnostic" if args.verify_supervisor_meaning_db else "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
             if owner is not None:
                 detail["metadata_failures"] = list(owner.metadata_failures)
             if owner is not None and owner.cleanup_receipt_path is not None:
@@ -854,7 +862,7 @@ def main():
             try:
                 receipt_observed = owner.receipt is not None
                 owner.cleanup()
-                if args.verify_supervisor_core_db and not receipt_observed:
+                if (args.verify_supervisor_meaning_db or args.verify_supervisor_core_db) and not receipt_observed:
                     cleanup_failed = True
                     safe_print({"phase": "owned_db_cleanup_unverified",
                                 "reason": "creation_receipt_missing",
@@ -863,9 +871,9 @@ def main():
                     safe_print({"phase": "owned_db_removed", "resource_id": owner.resource_id})
             except BaseException as error:
                 cleanup_failed = True
-                if args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+                if args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
                     detail = cf003_failure_diagnostic(error, "cleanup")
-                    detail["phase"] = "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
+                    detail["phase"] = "cf023_failure_diagnostic" if args.verify_supervisor_meaning_db else "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
                     detail["metadata_failures"] = list(owner.metadata_failures)
                     if owner.cleanup_receipt_path is not None:
                         detail["cleanup_receipt_file"] = str(owner.cleanup_receipt_path)

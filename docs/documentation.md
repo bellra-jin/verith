@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-024 Supervisor private 검증 조립
+
+[조립 계약](contracts/supervisor-core-v1.md#cf-024-private-검증-조립)·[직접 검증과 남은 경계](work/CF-024-supervisor-live-verifier.md)를 따른다. 실제 Principal/준비/CF023 epoch를 기존 gateway·ASGI·durable budget에 조립하는 무키 합성 단계다. 실제 key 전송·계수 수수료 근거·live 모델/브라우저·운영 인수는 별도로 남는다.
+
 ## CF-023 근거 있는 의미 보완과 고정 준비
 
 [정책/준비 계약](contracts/supervisor-core-v1.md)·[production 채팅 디자인](design/supervisor-core.md)·[직접 검사와 한계](work/CF-023-supervisor-meaning.md)를 따른다. 새 policy2는 원문/답변 span의 닫힌 의미 대응·잔여를 검증하고, 한 번 준비한 계획을 저장해 기존 owned Flow binding에 단일 소비한다. policy1 hash/replay와 기존 Flow 회계는 유지한다. 실제 OpenAI key 전송 및 계수 요금 상한 증거는 pending이며 production gateway는 닫혀 있다. 합성 보호 검사/소유 PG와 실제 모델 품질·1440/390 브라우저 수용·원격 CI를 구분한다.

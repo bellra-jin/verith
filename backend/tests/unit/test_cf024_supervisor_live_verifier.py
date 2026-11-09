@@ -1,0 +1,418 @@
+"""Fixed CF024 collection: callback simulations, no actual provider/DB or credentials."""
+import asyncio
+import ast
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone, timedelta
+import hashlib
+import importlib.abc
+from pathlib import Path
+import sys
+from types import SimpleNamespace as NS
+from unittest.mock import AsyncMock, Mock, patch
+from uuid import UUID,uuid4
+
+import httpx
+import pytest
+
+IMPORTS=[]
+class ImportGuard(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {'dotenv','src.supervisor.config','src.api.dependencies','openai','langchain_openai','redis','langgraph'} or fullname.startswith(('src.agents.technical','src.agents.news','src.agents.fundamental','src.supervisor.application.execution','src.supervisor.application.planning.rewrite')):
+            IMPORTS.append(fullname)
+            raise AssertionError('Forbidden assembly import')
+GUARD=ImportGuard();sys.meta_path.insert(0,GUARD)
+from scripts import cf023_supervisor_meaning_check as C
+C.load_meaning()
+O=sys.modules['src.supervisor.infrastructure.openai_meaning_gateway']
+M=sys.modules['src.supervisor.domain.meaning']
+T=sys.modules['src.supervisor.domain.meaning_proposals']
+from src.modules.supervisor.domain import contracts as B
+from src.modules.auth.application.session_service import Principal,AuthenticationRequired
+from src.supervisor.infrastructure.meaning_gateway import CounterUnavailable,MeaningUnavailable
+ROOT=Path(__file__).resolve().parents[3]
+PRIVATE='cf024-private-sentinel-never-in-result'
+
+
+def draft():return M.Draft(original_query='현대건설 수급',answers=[],revision=0)
+def agreement():return O.CounterAgreement(O.COUNT_DOCUMENTATION,C.SYNTHETIC_MAPPING_SHA,O.INPUT_FIELDS,1)
+def body():return B.PreparationRequest(prepare_key=str(uuid4()),draft=B.Draft.model_validate(draft().model_dump(mode='json')),parent_preparation_id=None)
+def principal():return Principal(uuid4(),uuid4(),datetime.now(timezone.utc)+timedelta(hours=1),b'x'*32)
+def candidate():return {'schema_version':'supervisor.meaning.v1','mentions':[{'evidence':{'source_kind':'original_query','answer_id':None,'start':0,'end':4,'text':'현대건설'},'negation':None}],'views':[],'conditions':[]}
+def response(*,usage=True,model=None):return {'model':model or T.MODEL,'status':'completed','service_tier':'default','error':None,'usage':{'input_tokens':100,'output_tokens':10,'total_tokens':110,'input_tokens_details':{'cached_tokens':0}} if usage else None,'output':[{'type':'message','role':'assistant','status':'completed','content':[{'type':'output_text','text':M.canonical(candidate())}]}]}
+
+
+class Ledger:
+    def __init__(self):self.rows={};self.blocked=False;self.active=None;self.reserved=0
+
+
+class CallbackBudget:
+    """Explicit simulation, not a PostgreSQL receipt/role or actual durable ACK."""
+    def __init__(self, ledger=None, fail=None):
+        self.ledger=ledger or Ledger();self.fail=fail;self.events=[];self.deadline=float('inf')
+    async def authorize(self, attempt, phase, request, projection, evidence):
+        self.events.append(phase+'_entered')
+        if self.fail==phase+'_before':raise OSError(PRIVATE)
+        if self.ledger.blocked:return False
+        if phase=='count':
+            if self.ledger.active is not None or attempt in self.ledger.rows or len(self.ledger.rows)>=2:return False
+            self.ledger.rows[attempt]={'count':True,'generation':False,'observation':None};self.ledger.active=attempt;self.ledger.reserved+=50000000
+        else:
+            row=self.ledger.rows.get(attempt)
+            if row is None or row['generation'] or self.ledger.active!=attempt:return False
+            assert evidence.request_sha256==request and evidence.projection_sha256==projection
+            row['generation']=True
+        self.events.append(phase+'_ACK')
+        if self.fail==phase+'_after':raise OSError(PRIVATE)
+        if self.fail==phase+'_expires':self.deadline=asyncio.get_running_loop().time()-1
+        return True
+    async def finish(self, attempt, observation, *, blocked):
+        self.events.append('finish_entered')
+        row=self.ledger.rows.get(attempt)
+        if row is not None:
+            row['observation']=observation
+            self.ledger.blocked|=blocked
+            if not self.ledger.blocked:self.ledger.active=None
+        if self.fail=='finish_after':raise OSError(PRIVATE)
+        self.events.append('finish_ACK')
+
+
+def gateway(*,budget=None,supplier=None,value=None,send=None,deadline=None,preflight=None):
+    budget=budget or CallbackBudget();requests=[]
+    async def supply():
+        budget.events.append('supplier');return 'synthetic-key'
+    async def provider(request):
+        requests.append(request)
+        budget.events.append('count_send' if request.url.path==O.COUNT_PATH else 'generation_send')
+        if send is not None:return await send(request)
+        return httpx.Response(200,json={'object':'response.input_tokens','input_tokens':100} if request.url.path==O.COUNT_PATH else value or response())
+    instance=O.OpenAIMeaningGateway(key_supplier=supplier or supply,budget=budget,counter_agreement=agreement(),transport=httpx.MockTransport(provider),deadline=deadline,preflight=preflight)
+    return instance,budget,requests
+
+
+async def test_default_live_closed_without_supplier_or_epoch_initialization(monkeypatch):
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    initialize=AsyncMock(side_effect=AssertionError('Live must never initialize'))
+    monkeypatch.setattr(repo,'verifier_epoch',initialize)
+    supplier=AsyncMock(side_effect=AssertionError('Must not read key'))
+    with pytest.raises(CounterUnavailable):await C.verify_live(key_supplier=supplier,counter_agreement=agreement())
+    supplier.assert_not_awaited();initialize.assert_not_awaited();assert not IMPORTS
+
+
+async def test_count_ACK_precedes_one_supplier_and_same_key_generation():
+    instance,budget,requests=gateway()
+    result=await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert result==T.MeaningProposal.model_validate(candidate())
+    assert budget.events==['count_entered','count_ACK','supplier','count_send','generation_entered','generation_ACK','generation_send','finish_entered','finish_ACK']
+    assert [str(r.url) for r in requests]==[O.ORIGIN+O.COUNT_PATH,O.ORIGIN+O.GENERATE_PATH]
+    assert [r.headers['authorization'] for r in requests]==['Bearer synthetic-key']*2
+    count,generation=[M.decode(r.content) for r in requests]
+    assert count=={k:generation[k] for k in O.INPUT_FIELDS}
+    assert not {'max_output_tokens','service_tier','store','stream'}&count.keys()
+    assert budget.ledger.reserved==50000000 and len(budget.ledger.rows)==1
+    assert instance._key is None and instance._key_supplier is None
+    with pytest.raises(CounterUnavailable):await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert budget.events.count('supplier')==1
+
+
+@pytest.mark.parametrize('phase',['count','generation'])
+@pytest.mark.parametrize('when',['before','after'])
+async def test_reservation_ACK_simulations_hold_without_later_key_or_send(phase,when):
+    instance,budget,requests=gateway(budget=CallbackBudget(fail=phase+'_'+when))
+    with pytest.raises(OSError) as error:await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert PRIVATE not in str(error.value)
+    assert budget.events.count('supplier')==(0 if phase=='count' else 1)
+    assert len(requests)==(0 if phase=='count' else 1)
+    if budget.ledger.rows:assert budget.ledger.blocked and budget.ledger.reserved==50000000
+    assert instance._key is None and instance._key_supplier is None
+
+
+@pytest.mark.parametrize('phase',['count','generation'])
+async def test_expiry_shortened_during_reservation_ACK_blocks_send_immediately(phase):
+    instance,budget,requests=gateway(budget=CallbackBudget(fail=phase+'_expires'))
+    with pytest.raises(TimeoutError):await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert len(requests)==(0 if phase=='count' else 1)
+    assert budget.events.count('supplier')==(0 if phase=='count' else 1)
+    assert instance.settlement_uncertain and not instance.block_confirmed
+
+
+@pytest.mark.parametrize('bad',[None,'',True,'bad\ncredential','x'*513])
+async def test_invalid_supplier_result_holds_and_sends_zero(bad):
+    supplier=AsyncMock(return_value=bad)
+    instance,budget,requests=gateway(supplier=supplier)
+    with pytest.raises(MeaningUnavailable):await instance.propose(draft(),attempt_id=str(uuid4()))
+    supplier.assert_awaited_once();assert not requests and budget.ledger.blocked
+    assert instance._key is None and instance._key_supplier is None
+
+
+async def test_supplier_failure_never_exposes_raw_message_or_retries():
+    supplier=AsyncMock(side_effect=ValueError(PRIVATE))
+    instance,budget,requests=gateway(supplier=supplier)
+    with pytest.raises(MeaningUnavailable) as error:await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert PRIVATE not in str(error.value) and not requests and budget.ledger.blocked
+    supplier.assert_awaited_once()
+
+
+async def test_missing_or_invalid_count_evidence_has_supplier_zero_send_zero():
+    for evidence in (None,O.CounterAgreement(O.COUNT_DOCUMENTATION,'a'*64,(),1),O.CounterAgreement(O.COUNT_DOCUMENTATION,'a'*64,O.INPUT_FIELDS,28496001)):
+        supplier=AsyncMock(return_value=PRIVATE);send=AsyncMock()
+        instance=O.OpenAIMeaningGateway(key_supplier=supplier,budget=CallbackBudget(),counter_agreement=evidence,transport=httpx.MockTransport(send))
+        with pytest.raises(CounterUnavailable):await instance.propose(draft(),attempt_id=str(uuid4()))
+        supplier.assert_not_awaited();send.assert_not_awaited()
+
+
+@pytest.mark.parametrize('kind',['missing_usage','model','malformed','overflow_input','overflow_count','timeout'])
+async def test_provider_failures_preserve_unknown_hold_and_bounded_fixed_error(kind):
+    async def send(req):
+        if req.url.path==O.COUNT_PATH:
+            if kind=='overflow_count':return httpx.Response(200,content=b'x'*8193)
+            return httpx.Response(200,json={'object':'response.input_tokens','input_tokens':16385 if kind=='overflow_input' else 100})
+        if kind=='timeout':raise httpx.ReadTimeout(PRIVATE)
+        if kind=='malformed':return httpx.Response(200,content=b'{')
+        return httpx.Response(200,json=response(usage=kind!='missing_usage',model='different-model' if kind=='model' else None))
+    instance,budget,requests=gateway(send=send)
+    with pytest.raises(Exception) as error:await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert PRIVATE not in str(error.value) and budget.ledger.blocked and budget.ledger.reserved==50000000
+    assert instance._key is None and instance._key_supplier is None
+
+
+async def test_one_simulated_epoch_success_unknown_restart_cannot_reset_two_reservations():
+    ledger=Ledger()
+    first,_,_=gateway(budget=CallbackBudget(ledger));await first.propose(draft(),attempt_id=str(uuid4()))
+    second,_,_=gateway(budget=CallbackBudget(ledger),value=response(usage=False))
+    with pytest.raises(MeaningUnavailable):await second.propose(draft(),attempt_id=str(uuid4()))
+    restart,budget,requests=gateway(budget=CallbackBudget(ledger))
+    with pytest.raises(CounterUnavailable):await restart.propose(draft(),attempt_id=str(uuid4()))
+    assert not requests and budget.events.count('supplier')==0
+    assert ledger.blocked and ledger.reserved==100000000 and len(ledger.rows)==2
+
+
+async def test_settlement_ACK_unknown_never_returns_success_candidate():
+    instance,budget,_=gateway(budget=CallbackBudget(fail='finish_after'))
+    with pytest.raises(OSError):await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert instance.settlement_uncertain and budget.ledger.blocked
+
+
+async def test_settlement_wait_uses_original_deadline_no_background_task():
+    budget=CallbackBudget();entered=asyncio.Event()
+    async def finish(*args,**kw):entered.set();await asyncio.Event().wait()
+    budget.finish=finish
+    before=asyncio.get_running_loop().time()
+    instance,_,_=gateway(budget=budget,deadline=before+.04)
+    with pytest.raises(TimeoutError):await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert entered.is_set() and asyncio.get_running_loop().time()-before<.3
+    assert instance.settlement_uncertain and not instance.block_confirmed
+
+
+@pytest.mark.parametrize('stage',['supplier','settlement'])
+async def test_cancellation_propagates_and_key_references_clear(stage):
+    entered=asyncio.Event();budget=CallbackBudget()
+    async def blocked(*args,**kw):entered.set();await asyncio.Event().wait()
+    supplier=blocked if stage=='supplier' else None
+    if stage=='settlement':budget.finish=blocked
+    instance,_,_=gateway(budget=budget,supplier=supplier,deadline=asyncio.get_running_loop().time()+.08)
+    task=asyncio.create_task(instance.propose(draft(),attempt_id=str(uuid4())))
+    await entered.wait();task.cancel()
+    with pytest.raises(asyncio.CancelledError):await task
+    assert instance._key is None and instance._key_supplier is None
+
+
+def epoch_row():
+    return NS(id=uuid4(),created_at=datetime.now(timezone.utc),unit_id='CF023',currency='USD',semantic_sha256=B.MEANING_SPEC_SHA256,price_sha256=B.sha(B.MEANING_SPEC['price']),max_nano=100000000,attempt_reserve_nano=50000000,max_attempts=2,reserved_nano=0,count_requests=0,generation_requests=0,blocked=False,active_attempt_id=None,attempts_json={})
+
+
+@pytest.mark.parametrize('change',['missing','created','unit','spec','price','blocked','totals','snapshot'])
+async def test_live_epoch_is_SELECT_only_and_missing_replacement_or_state_drift_closes(change):
+    row=epoch_row();binding=C.OwnedEpochBinding(object(),object(),row.id,row.created_at,B.sha(C.epoch_state(row)),'live')
+    if change=='created':row.created_at+=timedelta(seconds=1)
+    elif change=='unit':row.unit_id='CF024'
+    elif change=='spec':row.semantic_sha256='a'*64
+    elif change=='price':row.price_sha256='b'*64
+    elif change=='blocked':row.blocked=True
+    elif change=='totals':row.reserved_nano=1
+    elif change=='snapshot':row.attempts_json={'unexpected':{}}
+    calls=[]
+    async def scalar(statement):calls.append(statement);return None if change=='missing' else row
+    with pytest.raises(CounterUnavailable):await C.existing_epoch(NS(scalar=scalar),binding,initial=True)
+    assert len(calls)==1 and calls[0].is_select
+
+
+def test_replaced_original_proof_or_receipt_never_re_adopts_same_epoch_UUID():
+    from scripts.runner_owned_database import RunnerOwnedDatabase
+    proof=object.__new__(RunnerOwnedDatabase);proof._owner=NS(receipt=object());proof.verify_ownership=Mock()
+    binding=C.OwnedEpochBinding(proof,proof._owner.receipt,uuid4(),datetime.now(timezone.utc),'a'*64,'live')
+    other=object.__new__(RunnerOwnedDatabase);other._owner=proof._owner
+    with pytest.raises(CounterUnavailable):C.proof_identity(other,binding,'live')
+    proof._owner.receipt=object()
+    with pytest.raises(CounterUnavailable):C.proof_identity(proof,binding,'live')
+    proof.verify_ownership.assert_not_called()
+
+
+def phase_scope():
+    p=principal();request=body();epoch=uuid4();attempt=str(uuid4());now=datetime.now(timezone.utc)
+    source=C.DeferredKeySource(AsyncMock(return_value=PRIVATE),object())
+    scope=C.PhaseBudget(proof=None,binding=C.OwnedEpochBinding(None,None,epoch,now,'a'*64,'synthetic'),principal=p,body=request,authority=C.SyntheticAuthority(now+timedelta(seconds=30),source),agreement=agreement(),key_source=source,deadline=asyncio.get_running_loop().time()+30,stages=[])
+    row=NS(id=uuid4(),attempt_id=UUID(attempt),owner_user_id=p.user_id,epoch_id=epoch,parent_id=None,state='pending',redacted_at=None,expires_at=now+timedelta(minutes=10),semantic_sha256=B.MEANING_SPEC_SHA256,semantic_json=B.canonical(B.MEANING_SPEC),prepare_key_digest=hashlib.sha256(request.prepare_key.encode()).digest(),request_digest=B.sha(request.model_dump(mode='json')),draft_digest=B.sha(request.draft.model_dump(mode='json',exclude={'selected_ticker','candidate_ref'})),draft_json=B.canonical(request.draft.model_dump(mode='json')))
+    row.root_id=row.id
+    return scope,row,attempt,now
+
+
+@pytest.mark.parametrize('change',['owner','attempt','epoch','spec','draft','expired','deleted','revoked'])
+async def test_each_phase_revalidates_real_principal_and_exact_preparation_shape(change,monkeypatch):
+    from src.modules.auth.application import session_service
+    scope,row,attempt,now=phase_scope()
+    if change=='owner':row.owner_user_id=uuid4()
+    elif change=='attempt':row.attempt_id=uuid4()
+    elif change=='epoch':row.epoch_id=uuid4()
+    elif change=='spec':row.semantic_sha256='a'*64
+    elif change=='draft':row.draft_json='{}'
+    elif change=='expired':row.expires_at=now-timedelta(seconds=1)
+    elif change=='deleted':row.redacted_at=now
+    auth=AsyncMock(side_effect=AuthenticationRequired() if change=='revoked' else None);monkeypatch.setattr(session_service,'validate_principal',auth)
+    session=NS(scalar=AsyncMock(side_effect=[row,now]))
+    with pytest.raises((CounterUnavailable,AuthenticationRequired)):await scope.validate_preparation(session,attempt,lock=True)
+    auth.assert_awaited_once()
+
+
+async def test_wrong_rendered_request_projection_is_rejected_before_claim_or_supplier():
+    scope,_,attempt,_=phase_scope()
+    with pytest.raises(CounterUnavailable):await scope.preflight(draft(),attempt,'a'*64,'b'*64,deadline=scope.deadline)
+    scope.key_source.supplier.assert_not_awaited()
+
+
+async def test_supplier_source_capability_is_in_authority_scope_before_reservation():
+    scope,_,_,_=phase_scope();approved=scope.key_source
+    other=C.DeferredKeySource(AsyncMock(return_value=PRIVATE),object());scope.key_source=other
+    with pytest.raises(CounterUnavailable):await scope.lease('count')
+    other.supplier.assert_not_awaited();approved.supplier.assert_not_awaited()
+    scope.key_source=approved
+    await scope.lease('count')
+    approved.supplier.assert_not_awaited()
+
+
+async def test_driver_lock_serializes_two_proofs_and_restores_on_cancellation(monkeypatch):
+    from scripts.runner_owned_database import RunnerOwnedDatabase
+    driver=NS()
+    # A normal object is a weak-referenceable driver, matching LocalDocker's identity behavior.
+    class Driver:
+        def call(self,*args,**kwargs):return kwargs.get('timeout')
+    driver=Driver();original=driver.call
+    one=object.__new__(RunnerOwnedDatabase);one._owner=NS(docker=driver)
+    two=object.__new__(RunnerOwnedDatabase);two._owner=NS(docker=driver)
+    entered=asyncio.Event();second=asyncio.Event();order=[]
+    async def exercise(*,proof,deadline,**scope):
+        order.append(proof)
+        if proof is one:
+            entered.set();await asyncio.Event().wait()
+        second.set();assert 0<driver.call('synthetic',timeout=15)<=15
+        return 'done'
+    monkeypatch.setattr(C,'_run_meaning_assembly',exercise)
+    first=asyncio.create_task(C.run_meaning_assembly(proof=one));await entered.wait()
+    later=asyncio.create_task(C.run_meaning_assembly(proof=two));await asyncio.sleep(0)
+    assert not second.is_set()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):await first
+    assert await later=='done' and order==[one,two]
+    assert driver.call==original
+
+
+@pytest.mark.parametrize('committed',[False,True])
+async def test_actual_preparation_claim_ACK_uncertain_starts_no_gateway(committed,monkeypatch):
+    from src.modules.supervisor.application.preparation_service import PreparationService
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    request=body();now=datetime.now(timezone.utc);owner=principal();row=NS(id=uuid4())
+    session=NS(rollback=AsyncMock(),commit=AsyncMock(side_effect=OSError(PRIVATE)))
+    service=PreparationService(session,principal=owner,client=NS(plan_supervisor_core=AsyncMock()),epoch_id=uuid4())
+    service.auth=AsyncMock();service.build=AsyncMock()
+    monkeypatch.setattr(repo,'by_key',AsyncMock(return_value=None));monkeypatch.setattr(repo,'cleanup_owner',AsyncMock());monkeypatch.setattr(repo,'clock',AsyncMock(return_value=now));insert=AsyncMock(return_value=row);monkeypatch.setattr(repo,'admit',insert)
+    # Both callback simulations raise at the same uncertain ACK boundary; neither grants send permission.
+    row.synthetic_commit_observed=committed
+    with pytest.raises(OSError):await service.post(request,uuid4())
+    insert.assert_awaited_once();service.build.assert_not_awaited();service.client.plan_supervisor_core.assert_not_awaited()
+
+
+def test_live_source_contains_no_epoch_initialization_or_key_discovery_and_production_stays_unavailable():
+    source=(ROOT/'backend/scripts/cf023_supervisor_meaning_check.py').read_text();tree=ast.parse(source)
+    live=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='verify_live')
+    assembly=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='_run_meaning_assembly')
+    assert 'verifier_epoch' not in ast.unparse(live)+ast.unparse(assembly)
+    gateway_source=(ROOT/'ai/src/supervisor/infrastructure/openai_meaning_gateway.py').read_text()
+    assert 'getenv' not in gateway_source and 'load_dotenv' not in gateway_source
+    assert not IMPORTS
+
+
+@pytest.mark.parametrize('change',['revoked','expired','draft','approval'])
+async def test_count_then_fresh_generation_scope_failure_keeps_prior_count_but_sends_no_generation(change,monkeypatch):
+    """Same production phase wrapper, with explicit session/delegate simulations (not real DB)."""
+    from contextlib import nullcontext
+    from scripts import cf002_interactive_login as runner
+    from src.modules.auth.application import session_service
+    from src.modules.supervisor.infrastructure import preparation_repository
+    scope,row,attempt,now=phase_scope();revoked=False;requests=[];sessions=[];holds=[]
+    async def validate(session,p,**kw):
+        if revoked:raise AuthenticationRequired()
+    monkeypatch.setattr(session_service,'validate_principal',validate)
+    session=NS(commit=AsyncMock())
+    async def scalar(statement):return datetime.now(timezone.utc) if 'clock_timestamp' in str(statement) else row
+    session.scalar=scalar
+    @asynccontextmanager
+    async def owned(proof):sessions.append(session);yield session
+    monkeypatch.setattr(runner,'owned_session',owned)
+    monkeypatch.setattr(C,'proof_identity',lambda *args:None)
+    monkeypatch.setattr(C,'bounded_owned_calls',lambda *args:nullcontext())
+    monkeypatch.setattr(C,'existing_epoch',AsyncMock(return_value=epoch_row()))
+    class Delegate:
+        def __init__(self,sessions,**kw):self.sessions=sessions
+        async def authorize(self,*args):
+            async with self.sessions() as actual:
+                assert actual is session
+                await actual.commit()
+                return True
+        async def finish(self,*args,blocked):
+            async with self.sessions() as actual:
+                holds.append(blocked);await actual.commit()
+    monkeypatch.setattr(preparation_repository,'DurableMeaningBudget',Delegate)
+    async def send(request):
+        nonlocal revoked
+        requests.append(request.url.path)
+        if change=='revoked':revoked=True
+        elif change=='expired':row.expires_at=now-timedelta(seconds=1)
+        elif change=='draft':row.draft_json='{}'
+        else:scope.authority.expires_at=now-timedelta(seconds=1)
+        return httpx.Response(200,json={'object':'response.input_tokens','input_tokens':100})
+    instance=O.OpenAIMeaningGateway(key_supplier=scope.key_source,budget=scope,counter_agreement=agreement(),transport=httpx.MockTransport(send),preflight=scope.preflight)
+    with pytest.raises(Exception):await instance.propose(draft(),attempt_id=attempt)
+    assert requests==[O.COUNT_PATH] and scope.key_source.supplier.await_count==1
+    assert scope.phases==['count'] and scope.uncertain
+    assert 'generation_reservation_ACK' not in scope.stages
+    assert instance._key is None and instance._key_supplier is None
+
+
+@pytest.mark.parametrize('injected',['authority','counter_agreement','key_supplier','transport'])
+async def test_synthetic_factory_rejects_external_supplier_agreement_or_transport_before_IO(injected,monkeypatch):
+    from scripts import cf002_interactive_login as runner
+    scope,_,_,_=phase_scope();supplier=AsyncMock(return_value=PRIVATE)
+    monkeypatch.setattr(C,'proof_identity',lambda *args:None)
+    forbidden=Mock(side_effect=AssertionError('No owned DB access for invalid synthetic injection'))
+    monkeypatch.setattr(runner,'owned_session',forbidden)
+    value={'authority':object(),'counter_agreement':agreement(),'key_supplier':supplier,'transport':httpx.MockTransport(lambda request:(_ for _ in ()).throw(AssertionError('No send')))}[injected]
+    with pytest.raises(CounterUnavailable):
+        await C._run_meaning_assembly(mode='synthetic',proof=None,binding=scope.binding,principal=scope.principal,prepare_body=scope.body,deadline=scope.deadline,**{injected:value})
+    supplier.assert_not_awaited();forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize('invalid',['fake_agreement','synthetic_authority','expired_approval','unknown_fee'])
+async def test_live_preflight_cannot_promote_fake_or_expired_scope_to_key_read(invalid,monkeypatch):
+    from scripts import cf002_interactive_login as runner
+    scope,_,_,_=phase_scope();source=scope.key_source
+    binding=C.OwnedEpochBinding(None,None,uuid4(),datetime.now(timezone.utc),'a'*64,'live')
+    authority=NS(verify=AsyncMock(return_value=datetime.now(timezone.utc)-timedelta(seconds=1)))
+    agreed=O.CounterAgreement(O.COUNT_DOCUMENTATION,'a'*64,O.INPUT_FIELDS,1)
+    if invalid=='fake_agreement':agreed=agreement()
+    elif invalid=='synthetic_authority':authority=scope.authority
+    elif invalid=='unknown_fee':agreed=O.CounterAgreement(O.COUNT_DOCUMENTATION,'a'*64,O.INPUT_FIELDS,-1)
+    monkeypatch.setattr(C,'proof_identity',lambda *args:None)
+    forbidden=Mock(side_effect=AssertionError('Rejected approval cannot reach DB or epoch initialization'))
+    monkeypatch.setattr(runner,'owned_session',forbidden)
+    with pytest.raises(CounterUnavailable):
+        await C._run_meaning_assembly(mode='live',proof=None,binding=binding,principal=scope.principal,prepare_body=scope.body,deadline=scope.deadline,authority=authority,counter_agreement=agreed,key_supplier=source)
+    source.supplier.assert_not_awaited();forbidden.assert_not_called()

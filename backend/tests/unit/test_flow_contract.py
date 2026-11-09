@@ -152,6 +152,18 @@ def project_cf015_exact_additions(api):
     stock['required']=True;stock['schema']={'type':'string','pattern':r'^\d{6}$','title':'Stock Code'}
 
 
+def project_cf022_exact_additions(api):
+    from fastapi import FastAPI
+    from src.modules.supervisor.api.router import router
+    isolated=FastAPI();isolated.include_router(router);expected=isolated.openapi()
+    paths={'/api/supervisor/core/prepare','/api/supervisor/core/requests','/api/supervisor/core/requests/{supervisor_id}'}
+    assert set(expected['paths'])==paths
+    names={'CoreAnswer','CoreDraft','CoreEvidence','CoreMention','CoreCondition','CoreMeaningFrame','CoreStock','CoreCandidate','CoreResolution','CoreCapability','CorePlan','CoreConsent','CoreConfirm','CoreViewOutcome','CoreFlowReference','CoreEffectiveScope','CoreOutcome','CoreSafeError','CoreEnvelope_CorePlan_','CoreEnvelope_CoreOutcome_'}
+    assert set(expected['components']['schemas'])-{'HTTPValidationError','ValidationError'}==names
+    for path in paths:assert api['paths'][path]==expected['paths'][path];del api['paths'][path]
+    for name in names:assert api['components']['schemas'][name]==expected['components']['schemas'][name];del api['components']['schemas'][name]
+
+
 def project_cf020_exact_additions(api):
     """Validate this one path and exact model definitions before projection."""
     from src.modules.flow.api.query_plan_schemas import QueryPlanRequest,QueryPlanResponse
@@ -187,6 +199,7 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf022_exact_additions(api)
     project_cf020_exact_additions(api)
     project_cf015_exact_additions(api)
     from src.modules.fundamental.api.analysis_schemas import FundamentalAnalysisResponse

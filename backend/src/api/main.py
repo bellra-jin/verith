@@ -121,3 +121,6 @@ app.include_router(stocks.router)
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "backend"}
+
+from src.modules.supervisor.api.router import router as supervisor_core_router
+app.include_router(supervisor_core_router)

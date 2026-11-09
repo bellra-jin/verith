@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function Home({ searchParams }: { searchParams: Promise<ArchiveSearchParams> }) {
   const page = archivePagination(await searchParams);
   const fundamentalLink=fundamentalAnalysisEnabled() && <Link href="/fundamental">재무 분석·본인 결과</Link>;
-  const analysisLink=flowAnalysisEnabled() && <Link href="/research">Flow 분석 요청</Link>;
+  const analysisLink=flowAnalysisEnabled() && <Link href="/research">Supervisor 리서치 대화</Link>;
   const demoLink=flowDemoEnabled() && <Link href="/flow/demo">합성 데모</Link>;
   let sessionResponse: Response | null = null;
   try { sessionResponse = await sessionBackendFetch("/api/auth/session"); } catch { /* safe closed screen */ }

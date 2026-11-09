@@ -60,6 +60,34 @@ class AIClient:
         self._flow_token = service_token
         self._fundamental_token = service_token
 
+    async def plan_supervisor_core(self,payload:dict)->dict:
+        from urllib.parse import urlsplit
+        from src.modules.supervisor.domain.contracts import canonical,decode
+        try:
+            target=urlsplit(self._base_url);httpx.URL(self._base_url);token=self._flow_token.encode('ascii')
+            if target.scheme not in {'http','https'} or not target.hostname or target.port==0 or target.username or target.password or target.path not in {'','/'} or target.query or target.fragment or len(token)<32 or any(c<32 or c>126 for c in token):raise ValueError()
+            body=canonical(payload).encode('utf8')
+            if len(body)>16384:raise ValueError()
+        except (ValueError,TypeError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Supervisor request unavailable') from None
+        try:
+            async with asyncio.timeout(8):
+                async with httpx.AsyncClient(timeout=8,transport=self._transport,trust_env=False,follow_redirects=False) as client:
+                    async with client.stream('POST',self._base_url+'/internal/supervisor/core/plan',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Flow-Service-Token':token.decode('ascii')}) as response:
+                        if response.status_code==504:raise AITimeoutError('Supervisor request unavailable')
+                        if response.status_code!=200:raise AIUnavailableError('Supervisor request unavailable')
+                        if response.headers.get('content-encoding','identity').lower()!='identity':raise AIContractError('Supervisor request unavailable')
+                        raw=bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(raw)+len(chunk)>65536:raise AIContractError('Supervisor request unavailable')
+                            raw.extend(chunk)
+                        try:
+                            value=decode(raw)
+                            if type(value) is not dict:raise ValueError()
+                            return value
+                        except (ValueError,TypeError,UnicodeError,RecursionError):raise AIContractError('Supervisor request unavailable') from None
+        except (TimeoutError,httpx.TimeoutException):raise AITimeoutError('Supervisor request unavailable') from None
+        except (httpx.HTTPError,httpx.InvalidURL):raise AIUnavailableError('Supervisor request unavailable') from None
+
     async def plan_flow(self,payload:dict)->dict:
         """One 3s/32KiB decoded planning exchange, fixed origin/path/header; retry0."""
         from urllib.parse import urlsplit

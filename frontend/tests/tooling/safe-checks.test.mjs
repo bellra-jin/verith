@@ -535,3 +535,63 @@ test('CF020 exact planning sources/modes reuse the existing protected worker and
  const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8');assert.match(source,/cap.cf020Planning=supervisorBrowser/);assert.match(source,/workload:selected.length===1/);
  assert.equal(c.reactProductionFiles.length,5);
 });
+
+test('CF022 core modes keep fixed unit/source selection, existing guard and same production fixture inputs',async()=>{
+ const c=await import('../../scripts/check-local-ports.mjs');assert.deepEqual(c.coreUnit,['unit/supervisor/core.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.ok(c.modes.includes('core-type')&&c.modes.includes('core-browser'));assert.equal(c.reactProductionFiles.length,5);
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8');assert.ok(source.includes('cap.cf022Core=coreBrowser'));assert.ok(source.includes("coreOnly?['-p','tsconfig.cf022.json']"));
+});
+
+test('CF022 split metadata retains pinned code provenance and strict worker snapshot',async()=>{
+ const {packageRecord,manifestIdentity,sourceProvenance,recheckProvenance,checkedCommand,diagnosticCopySources,metadataRootFor}=await import('../../scripts/check-local-ports.mjs');
+ const guard=require('../../scripts/safe-checks-guard.cjs');
+ const packageBytes=fs.readFileSync(path.join(process.cwd(),'package.json'));
+ const lockBytes=fs.readFileSync(path.join(process.cwd(),'package-lock.json'));
+ const {createHash}=await import('node:crypto');
+ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+ async function fixture(change=()=>{},failure=false){
+  const base=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'cf022-provenance-')));
+  const codeRoot=path.join(base,'code'),metadataRoot=path.join(base,'metadata'),dependency=path.join(metadataRoot,'node_modules'),root=path.join(base,'owned');
+  for(const p of [codeRoot,dependency,root])fs.mkdirSync(p,{recursive:true});
+  fs.symlinkSync(dependency,path.join(codeRoot,'node_modules'));
+  const hashes={};
+  for(const [relative,bytes] of [['package.json',packageBytes],['package-lock.json',lockBytes],['src/core.ts',Buffer.from('export const value=1;')],['tests/unit/fundamental/analysis-request.test.mjs',Buffer.from('// exact pre-existing fresh input')]]){
+   for(const parent of [codeRoot,root]){const file=path.join(parent,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,bytes);}
+   hashes[relative]=sha(bytes);
+  }
+  fs.writeFileSync(path.join(metadataRoot,'package.json'),packageBytes);
+  fs.writeFileSync(path.join(root,'source-hashes.json'),JSON.stringify(hashes),{mode:0o600});
+  const record=packageRecord(root,dependency,packageBytes,manifestIdentity(path.join(metadataRoot,'package.json')),metadataRoot);
+  const provenance=sourceProvenance(root,dependency,record,hashes,codeRoot);
+  let metadataOpens=0;
+  const io={...fs,openSync(file,...args){if(file===record.literal){metadataOpens++;throw Error('original literal open');}return fs.openSync(file,...args);}};
+  try{
+   assert.deepEqual(guard.loadPackageSnapshot({root,dependency,packageSnapshot:record},io),packageBytes);assert.equal(metadataOpens,0);
+   assert.deepEqual(diagnosticCopySources(codeRoot,metadataRoot,['src/core.ts']),[]);
+   assert.deepEqual(diagnosticCopySources(codeRoot,codeRoot,['src/core.ts']),['src/core.ts']);
+   assert.equal(provenance.codeRoot,codeRoot);assert.equal(record.sourceRoot,metadataRoot);
+   assert.throws(()=>metadataRootFor(codeRoot,dependency),/unreviewed metadata root/);
+   recheckProvenance(provenance,root,dependency,record);
+   const state={codeRoot,metadataRoot,root,dependency,record};
+   if(failure){
+    let postchecked=0;const original=fs.openSync;
+    fs.openSync=function(file,...args){if(file===path.join(codeRoot,'package-lock.json'))postchecked++;return original.call(this,file,...args);};
+    try{await assert.rejects(checkedCommand({record,root,dependency,provenance,argv:[],env:{},timeout:1,children:new Set(),invoke:async()=>{throw Error('synthetic child failure');}}),/synthetic child failure/);assert.ok(postchecked>=2);}finally{fs.openSync=original;}
+   }else change(state);
+   if(change!==noop)assert.throws(()=>{guard.loadPackageSnapshot({root,dependency,packageSnapshot:record},io);recheckProvenance(provenance,root,dependency,record);});
+  }finally{fs.rmSync(base,{recursive:true});}
+ }
+ function noop(){}
+ await fixture(noop);await fixture(noop,true);
+ for(const [which,relative] of [['codeRoot','package.json'],['codeRoot','package-lock.json'],['codeRoot','src/core.ts'],['metadataRoot','package.json'],['root','package.json'],['root','src/core.ts'],['root','source-hashes.json']])await fixture(state=>fs.appendFileSync(path.join(state[which],relative),' '));
+ await fixture(({codeRoot,dependency})=>{fs.unlinkSync(path.join(codeRoot,'node_modules'));fs.mkdirSync(path.join(codeRoot,'node_modules'));assert.notEqual(fs.realpathSync(path.join(codeRoot,'node_modules')),dependency);});
+ await fixture(({record,metadataRoot})=>{fs.unlinkSync(record.literal);fs.symlinkSync(path.join(metadataRoot,'node_modules'),record.literal);});
+ await fixture(({record,metadataRoot})=>fs.linkSync(record.literal,path.join(metadataRoot,'second-link')));
+ const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
+ assert.throws(()=>guard.loadPackageSnapshot({...cap,packageSnapshot:{...cap.packageSnapshot,extra:true}}),/SAFE_CHECK_DENIED/);
+ const provenance=JSON.parse(fs.readFileSync(path.join(process.cwd(),'source-provenance.json'),'utf8'));
+ for(const sourceRoot of new Set([provenance.codeRoot,cap.packageSnapshot.sourceRoot]))guard.expected(()=>fs.readFileSync(path.join(sourceRoot,'src/adjacent.ts')));
+ const diagnostics=guard.createDiagnostics({root:process.cwd(),dependency:cap.dependency,sourceRoot:cap.packageSnapshot.sourceRoot,runtime:cap.runtime,workerRole:'entry-worker',workload:'unit',diagnostics:{key:'a'.repeat(64),run:'b'.repeat(24),copySources:[]}});
+ const observation=diagnostics.describe({lexical:path.join(cap.packageSnapshot.sourceRoot,'src/core.ts'),canonical:path.join(cap.packageSnapshot.sourceRoot,'src/core.ts')});
+ assert.equal(observation.knownCopy,false);
+});

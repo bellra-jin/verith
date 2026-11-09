@@ -1,6 +1,8 @@
-# Supervisor Flow preparation
+# Supervisor core와 Flow 준비
 
-Current entry is authenticated `POST /internal/supervisor/plan`. It is a bounded, free, deterministic plan protocol: start returns an unsupported/clarification result or one `resolve_stock` tool request; Backend supplies a fresh canonical union to one continuation. Existing planner/interpret/policy/models/runtime are the active planning implementation.
+현재 단일 채팅의 내부 entry는 `POST /internal/supervisor/core/plan`이다. MeaningFrame/typed 조건→필요한 canonical resolve→bounded continuation→명시 범위 동의를 [core 계약](../../../docs/contracts/supervisor-core-v1.md)으로 표현한다. production meaning gateway는 unavailable이며 실제 SDK/키/env를 읽지 않는다. 이전 `/internal/supervisor/plan`의 CF020 제한 계약은 호환 경로로 보존한다.
+
+새 core도 gate/token 선행·lazy import 경계이며 전체 AI main의 무부작용을 주장하지 않는다. 원문/부정·기간/주체 조건과 requested/capability/selected를 분리하고, 미지원 조건은 명시 동의 없이 Flow로 대체하지 않는다. 실행·usage·owner·저장/삭제는 Backend의 기존 owned Flow가 맡는다. Technical/재무/거시/News 실행이나 실제 모델 품질·전체 멀티턴은 이번 범위가 아니다.
 
 Planning imports no agent, Technical dependency factory, Redis, trace sink, fallback, rewrite or LLM/model runtime. The router checks the existing Flow gate and exactly one matching printable service token before planning imports/body processing. Standard AI main still has unrelated agent imports; this router does not make the entire AI app import-safe.
 

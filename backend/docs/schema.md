@@ -1,5 +1,11 @@
 # veriθ Backend — 통합 PostgreSQL 스키마 (팀 공유 문서)
 
+## CF-022 추가: Supervisor 확정 계획 binding
+
+`c22001a7e0001`(parent `c18001a7e0001`)의 `supervisor_request_bindings`는 실행 원장이 아닌 계획→고정 Flow 입력 연결 한 표다. [공통 계약](../../docs/contracts/supervisor-core-v1.md)을 따른다. UUID PK/owner FK RESTRICT, owner+client_key_digest32 UNIQUE, 확정 digest와 plan/Flow JSON/hash, 유일 Flow key digest, finite DB confirmed_at/handoff_before(+120초)/redacted_at을 둔다. JSON object/크기/hash·identity·불변 trigger를 적용하며 populated downgrade는 거절한다.
+
+binding ACK 확인 뒤 바깥 transaction을 끝내고 기존 AnalysisService/FlowUsageControl을 호출한다. 실행/claim/usage/result는 기존 Flow 원장만이 권위다. 삭제는 기존 session→analysis→root 잠금 순서 뒤 같은 transaction에서 연결 plan/Flow JSON을 null로 redact하며 hash/owner/key/usage를 보존한다. 표 누락 fallback은 없고 운영 적용은 migration 선행조건이다. 소유 PG 검사와 실제 운영 DB 적용 여부는 [작업 기록](../../docs/work/CF-022-supervisor-core.md)에서 구분한다.
+
 ## CF-003 추가: receipt-only Flow 접수
 
 `flow_runs`는 `c3001a7e0001`에서 추가하는 접수 전용 테이블이다. 기존 결과 테이블을 재사용하거나

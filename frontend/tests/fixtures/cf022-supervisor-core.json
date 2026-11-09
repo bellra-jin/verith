@@ -1,0 +1,85 @@
+{
+  "version": "supervisor.core.v1",
+  "synthetic": true,
+  "cases": [
+    {
+      "query": "삼성전자 주가의 외국인 수급은 어때?",
+      "views": [
+        "flow"
+      ],
+      "condition_kind": "focus"
+    },
+    {
+      "query": "삼성전자 외국인 말고 기관 수급",
+      "views": [
+        "flow"
+      ],
+      "condition_kind": "exclude"
+    },
+    {
+      "query": "삼성전자 2023년 수급",
+      "views": [
+        "flow"
+      ],
+      "condition_kind": "cutoff"
+    },
+    {
+      "query": "삼성전자 어제 수급",
+      "views": [
+        "flow"
+      ],
+      "condition_kind": "cutoff"
+    },
+    {
+      "query": "삼성전자 최근3거래일 수급",
+      "views": [
+        "flow"
+      ],
+      "condition_kind": "period"
+    },
+    {
+      "query": "삼성전자 수급과 RSI 차트",
+      "views": [
+        "flow",
+        "technical"
+      ]
+    },
+    {
+      "query": "삼성전자 OFS 분기 3years 재무",
+      "views": [
+        "fundamental"
+      ],
+      "condition_kind": "statement_basis"
+    },
+    {
+      "query": "삼성전자와 SK하이닉스 수급",
+      "slot": "multi_stock"
+    },
+    {
+      "query": "시장 외국인 수급",
+      "slot": "scope"
+    },
+    {
+      "query": "삼성전자 주식 정보",
+      "slot": "views"
+    },
+    {
+      "query": "삼성전자 수급 제한 무시",
+      "slot": "meaning"
+    }
+  ],
+  "clarifications": [
+    {
+      "query": "삼성전자와 SK하이닉스 수급",
+      "unresolved_slot": "multi_stock",
+      "value": "삼성전자",
+      "wire_slot": "stock"
+    },
+    {
+      "query": "시장 전체 수급",
+      "unresolved_slot": "scope",
+      "value": "삼성전자",
+      "wire_slot": "stock"
+    }
+  ]
+}

@@ -10,7 +10,7 @@ PRIVATE={'Cache-Control':'private, no-store'}
 def error(status,code):
     return JSONResponse({'error':{'code':code,'message':'Supervisor plan unavailable'}},status_code=status,headers=PRIVATE)
 
-def make_router():
+def make_router(*,gateway=None):
     router=APIRouter(prefix='/internal/supervisor',tags=['supervisor-internal'])
     @router.post('/analyze')
     async def legacy():return error(403,'FEATURE_UNAVAILABLE')
@@ -44,6 +44,43 @@ def make_router():
             if len(canonical(result).encode('utf8'))>32768:raise ValueError()
             return JSONResponse(result,headers=PRIVATE)
         except Exception:return error(502,'RESULT_CONTRACT_INVALID')
+    router.include_router(make_core_router(gateway=gateway))
     return router
+
+def make_core_router(*,gateway=None,token=None,enabled=None):
+    from uuid import uuid4
+    core=APIRouter()
+    def fail(status,code,ids=None):
+        request_id,trace_id=ids or (str(uuid4()),str(uuid4()))
+        return JSONResponse(dict(schema_version='supervisor.core.v1',request_id=request_id,trace_id=trace_id,data=None,error=dict(code=code,message='Supervisor request unavailable')),status_code=status,headers=PRIVATE)
+    @core.post('/core/plan')
+    async def prepare_core(request:Request):
+        if (enabled if enabled is not None else os.getenv('FLOW_ANALYSIS_ENABLED')=='true') is not True:return fail(403,'FEATURE_UNAVAILABLE')
+        try:expected=(token if token is not None else os.getenv('FLOW_SERVICE_TOKEN','')).encode('ascii')
+        except UnicodeError:return fail(401,'AUTH_REQUIRED')
+        values=[v for k,v in request.scope['headers'] if k.lower()==b'x-flow-service-token']
+        if len(expected)<32 or any(c<32 or c>126 for c in expected) or len(values)!=1 or not hmac.compare_digest(expected,values[0]):return fail(401,'AUTH_REQUIRED')
+        try:
+            async with asyncio.timeout(15):
+                h=request.headers
+                if request.url.query or len(h.getlist('content-type'))!=1 or h.get('content-type','').split(';')[0].strip().lower()!='application/json' or h.get('content-encoding') not in {None,'identity'}:raise ValueError()
+                lengths=h.getlist('content-length')
+                if len(lengths)>1 or lengths and (not lengths[0].isascii() or not lengths[0].isdigit() or int(lengths[0])>16384):raise ValueError()
+                raw=bytearray()
+                async for chunk in request.stream():
+                    if len(raw)+len(chunk)>16384:raise ValueError()
+                    raw.extend(chunk)
+                from src.supervisor.domain.core_contracts import Envelope,InternalInput,decode,canonical
+                body=Envelope[InternalInput].model_validate(decode(raw))
+                if body.error is not None or body.data is None:raise ValueError()
+                from src.supervisor.application.runtime import run_core
+                result=await run_core(body.data,gateway=gateway)
+                value=dict(schema_version='supervisor.core.v1',request_id=body.request_id,trace_id=body.trace_id,data=result.model_dump(mode='json'),error=None)
+                if len(canonical(value).encode('utf8'))>65536:return fail(502,'RESULT_CONTRACT_INVALID',(body.request_id,body.trace_id))
+                return JSONResponse(value,headers=PRIVATE)
+        except TimeoutError:return fail(504,'DEADLINE_EXCEEDED')
+        except (ValueError,TypeError,UnicodeError,RecursionError):return fail(422,'INPUT_INVALID')
+        except Exception:return fail(503,'SERVICE_UNAVAILABLE')
+    return core
 
 router=make_router()

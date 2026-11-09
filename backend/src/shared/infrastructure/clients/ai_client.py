@@ -64,13 +64,15 @@ class AIClient:
         """One bounded internal Flow request. No redirect, environment proxy or retry."""
         from urllib.parse import urlsplit
         from src.modules.flow.domain.analysis import canonical, decode
-        target=urlsplit(self._base_url)
-        try:token=self._flow_token.encode('utf8')
-        except UnicodeError:raise AIValidationError('Flow service is unavailable') from None
-        if (target.scheme not in {'http','https'} or not target.hostname or target.username or target.password
-                or target.path not in {'','/'} or target.query or target.fragment
-                or len(token)<32 or any(value<32 or value==127 for value in token)):
-            raise AIValidationError('Flow service is unavailable')
+        try:
+            target=urlsplit(self._base_url)
+            httpx.URL(self._base_url)  # Parse with the transport's own grammar before any send.
+            token=self._flow_token.encode('utf8')
+            valid=(target.scheme in {'http','https'} and target.hostname and not target.username and not target.password
+                   and target.port != 0 and target.path in {'','/'} and not target.query and not target.fragment
+                   and len(token)>=32 and not any(value<32 or value==127 for value in token))
+        except (ValueError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Flow service is unavailable') from None
+        if not valid:raise AIUnavailableError('Flow service is unavailable')
         try:
             data=canonical(payload).encode('utf8')
             if len(data)>8192:raise AIValidationError('Flow request is invalid')
@@ -80,7 +82,9 @@ class AIClient:
                         headers=[(b'Content-Type',b'application/json'),(b'X-Flow-Service-Token',token)]) as response:
                         raw=bytearray()
                         async for part in response.aiter_bytes():
-                            if len(raw)+len(part)>2097152:raise AIContractError('Flow result is invalid')
+                            if len(raw)+len(part)>2097152:
+                                if response.status_code==200:raise AIContractError('Flow result is invalid')
+                                raise AIUnavailableError('Flow engine unavailable')
                             raw.extend(part)
                         if response.status_code==200:
                             try:
@@ -88,13 +92,18 @@ class AIClient:
                                 if not isinstance(value,dict):raise ValueError()
                                 return value
                             except Exception:raise AIContractError('Flow result is invalid') from None
-                        if response.status_code in {400,401,403,409,422}:raise AIValidationError('Flow engine declined the request')
+                        if response.status_code in {400,409,422}:raise AIValidationError('Flow engine declined the request')
+                        if response.status_code==502:
+                            try:error=decode(bytes(raw).decode('utf8'))
+                            except (ValueError,UnicodeError,RecursionError):error=None
+                            if isinstance(error,dict) and isinstance(error.get('error'),dict) and error['error'].get('code')=='RESULT_CONTRACT_INVALID':
+                                raise AIContractError('Flow result is invalid')
                         if response.status_code==504:raise AITimeoutError('Flow engine timeout')
                         raise AIUnavailableError('Flow engine unavailable')
             async with asyncio.timeout(125):
                 return await exchange()
         except (httpx.TimeoutException,TimeoutError):raise AITimeoutError('Flow engine timeout') from None
-        except httpx.HTTPError:raise AIUnavailableError('Flow engine unavailable') from None
+        except (httpx.HTTPError,httpx.InvalidURL):raise AIUnavailableError('Flow engine unavailable') from None
 
     async def analyze_technical(self, payload: dict) -> dict:
         """`/internal/technical/analyze` 호출 → 응답 JSON(dict) 반환.

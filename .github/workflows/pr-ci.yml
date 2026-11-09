@@ -140,3 +140,9 @@ jobs:
       - name: Protected coordinator and Fundamental unit
         run: |
           env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" fundamental-unit
+      - name: Protected Flow error classification self
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" flow-errors-self
+      - name: Protected Flow error classification unit
+        run: |
+          env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" flow-errors-unit

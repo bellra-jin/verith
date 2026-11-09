@@ -29,6 +29,8 @@ import httpx
 import pandas as pd
 from dotenv import load_dotenv
 
+from src.shared.runtime.deadline import DeadlineExceeded
+
 from .token_cache import TokenCacheError, get_token, validate_issued_response
 
 from ..domain.signals import COL_CHANGE, COL_CHANGE_RATE, COL_CLOSE, COL_FORE, COL_FORE_QTY, COL_INDI, COL_INST, COL_INST_QTY, COL_OWNERSHIP, COL_VALUE, COL_VOLUME, INST_DETAIL
@@ -99,8 +101,8 @@ def _load_credentials() -> tuple[str, str, str]:
         ("KIS_BASE_URL", base_url),
     ) if not value]
     if missing:
-        # 어떤 키가 비었는지만 알리고 값은 노출하지 않는다.
-        raise KisError(f".env에 다음 KIS 설정이 없습니다: {missing}")
+        # 설정 값과 누락 항목은 오류 문구에 포함하지 않는다.
+        raise KisError("KIS 설정이 없습니다.")
     return app_key, app_secret, base_url.rstrip("/")
 
 
@@ -119,6 +121,8 @@ def _issue_token(client: httpx.Client, app_key: str, app_secret: str, *, executi
         body = resp.json()
         validate_issued_response(body)
         return body
+    except (DeadlineExceeded, httpx.TimeoutException, TimeoutError):
+        raise DeadlineExceeded("KIS deadline exceeded") from None
     except Exception:
         raise KisError("KIS 토큰 발급 실패.") from None
 
@@ -129,10 +133,18 @@ _TOKEN_CACHE_PATH = Path.home() / ".cache" / "verith" / "kis_token.json"
 
 def _get_token(client: httpx.Client, app_key: str, app_secret: str, base_url: str, *, execution_context=None) -> str:
     """서버/자격 문맥별 캐시. 실발급 single-flight나 반응형 재발급은 보장하지 않는다."""
+    timed_out = False
+    def issue():
+        nonlocal timed_out
+        try:
+            return _issue_token(client, app_key, app_secret, execution_context=execution_context)
+        except (DeadlineExceeded, httpx.TimeoutException, TimeoutError):
+            timed_out = True
+            raise DeadlineExceeded("KIS deadline exceeded") from None
     try:
-        return get_token(_TOKEN_CACHE_PATH, base_url, app_key, app_secret, time.time(),
-                         lambda: _issue_token(client, app_key, app_secret, **({} if execution_context is None else {"execution_context":execution_context})))
+        return get_token(_TOKEN_CACHE_PATH, base_url, app_key, app_secret, time.time(), issue)
     except TokenCacheError:
+        if timed_out:raise DeadlineExceeded("KIS deadline exceeded") from None
         raise KisError("KIS 토큰 캐시 처리 실패.") from None
 
 
@@ -153,27 +165,29 @@ def _get_json(client: httpx.Client, path: str, headers: dict, params: dict, what
 
     유일한 재시도: KIS 유량 제어 신호(HTTP 500 + EGW00201)에 한해 0.6초 대기 후
     딱 1회. 문서화된 흐름 제어에 대한 규정된 대응이지, 원인 불명 실패의 연쇄
-    시도가 아니다 — 그 외 모든 실패는 즉시 KisError(규약 유지). 에러 메시지에
-    msg_cd·msg1 을 담아 원인이 바로 보이게 한다(상태코드만으론 진단 불가 교훈).
+    시도가 아니다 — 그 외 모든 실패는 즉시 고정 오류로 닫고 원문은 내보내지 않는다.
     """
-    for attempt in (1, 2):
-        kwargs = {} if execution_context is None else {"timeout":execution_context.timeout("kis_data", _TIMEOUT)}
-        resp = client.get(path, headers=headers, params=params, **kwargs)
-        if execution_context is not None: execution_context.check("kis_data_result")
-        if resp.status_code == 200:
-            return resp.json()
-        try:
-            body = resp.json()
-            msg_cd, msg1 = body.get("msg_cd"), body.get("msg1")
-        except ValueError:
-            msg_cd, msg1 = None, None
-        if attempt == 1 and resp.status_code == 500 and msg_cd == _RATE_LIMIT_MSG_CD:
-            if execution_context is not None: execution_context.wait_allowed(_RATE_LIMIT_RETRY_WAIT_SEC)
-            time.sleep(_RATE_LIMIT_RETRY_WAIT_SEC)
-            continue
-        raise KisError(
-            f"KIS {what} 조회 실패 (HTTP {resp.status_code}, msg_cd={msg_cd}, msg1={msg1})."
-        )
+    try:
+        for attempt in (1, 2):
+            kwargs = {} if execution_context is None else {"timeout":execution_context.timeout("kis_data", _TIMEOUT)}
+            resp = client.get(path, headers=headers, params=params, **kwargs)
+            if execution_context is not None: execution_context.check("kis_data_result")
+            if resp.status_code == 200:
+                return resp.json()
+            try:
+                body = resp.json()
+                msg_cd = body.get("msg_cd") if isinstance(body,dict) else None
+            except ValueError:
+                msg_cd = None
+            if attempt == 1 and resp.status_code == 500 and msg_cd == _RATE_LIMIT_MSG_CD:
+                if execution_context is not None: execution_context.wait_allowed(_RATE_LIMIT_RETRY_WAIT_SEC)
+                time.sleep(_RATE_LIMIT_RETRY_WAIT_SEC)
+                continue
+            raise KisError("KIS 조회 실패.")
+    except (DeadlineExceeded, httpx.TimeoutException, TimeoutError):
+        raise DeadlineExceeded("KIS deadline exceeded") from None
+    except Exception:
+        raise KisError("KIS 조회 실패.") from None
     raise AssertionError("unreachable")
 
 
@@ -222,14 +236,11 @@ def fetch_supply_demand(
         )
 
     if body.get("rt_cd") != "0":
-        # KIS 업무 에러: 코드/메시지 그대로 보여주고 멈춘다(임의 재시도 금지).
-        raise KisError(
-            f"KIS 조회 에러 rt_cd={body.get('rt_cd')} "
-            f"msg_cd={body.get('msg_cd')} msg1={body.get('msg1')}"
-        )
+        # 업무 실패도 원문/종목/날짜를 내보내지 않고 멈춘다(재시도 없음).
+        raise KisError("KIS 투자자매매동향 조회 실패.")
     rows = body.get("output2") or []
     if not rows:
-        raise KisError(f"KIS output2가 비어있습니다 (ticker={ticker}, date={date_str}).")
+        raise KisError("KIS 투자자매매동향 결과가 없습니다.")
 
     market = (body.get("output1") or {}).get("rprs_mrkt_kor_name") or None
     return _to_signals_frame(rows), market
@@ -302,13 +313,10 @@ def fetch_daily_quotes(
         )
 
     if body.get("rt_cd") != "0":
-        raise KisError(
-            f"KIS 일자별 시세 에러 rt_cd={body.get('rt_cd')} "
-            f"msg_cd={body.get('msg_cd')} msg1={body.get('msg1')}"
-        )
+        raise KisError("KIS 일자별 시세 조회 실패.")
     rows = body.get("output") or []          # 주의: 이 API는 output2가 아니라 output
     if not rows:
-        raise KisError(f"KIS output이 비어있습니다 (ticker={ticker}, date={date_str}).")
+        raise KisError("KIS 일자별 시세 결과가 없습니다.")
 
     field_to_col = {
         _CLOSE_FIELD: COL_CLOSE, _CHANGE_FIELD: COL_CHANGE, _RATE_FIELD: COL_CHANGE_RATE,
@@ -325,7 +333,7 @@ def fetch_daily_quotes(
     # (3) base_date 이후 절단 — 장중(미확정) 행이 리포트에 섞이는 것을 구조로 차단.
     quotes = quotes.loc[: pd.to_datetime(date_str, format="%Y%m%d")]
     if quotes.empty:
-        raise KisError(f"base_date({date_str}) 이전 시세 데이터가 없습니다.")
+        raise KisError("KIS 기준일 이전 시세 결과가 없습니다.")
     return quotes
 
 

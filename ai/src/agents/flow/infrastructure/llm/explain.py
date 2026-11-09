@@ -10,6 +10,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from openai import APITimeoutError
+from src.shared.runtime.deadline import DeadlineExceeded
 
 from ... import config
 from ...domain.models import GateResult
@@ -48,7 +50,10 @@ def explain(signals: dict, gate2: GateResult, meta: dict, *, bank=None, executio
     prompt = template.replace("{{facts}}", _facts_to_text(signals, meta, bank))
 
     kwargs = {} if execution_context is None else {'timeout':execution_context.timeout('openai'), 'max_retries':0, 'max_completion_tokens':1000}
-    llm = ChatOpenAI(model=_MODEL, temperature=_TEMPERATURE, **kwargs)
-    response = llm.invoke(prompt)
+    try:
+        llm = ChatOpenAI(model=_MODEL, temperature=_TEMPERATURE, **kwargs)
+        response = llm.invoke(prompt)
+    except APITimeoutError:
+        raise DeadlineExceeded("OpenAI deadline exceeded") from None
     if execution_context is not None: execution_context.check('openai_result')
     return response.content

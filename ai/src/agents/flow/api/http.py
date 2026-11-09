@@ -6,7 +6,7 @@ from fastapi import APIRouter,Request
 from fastapi.routing import APIRoute
 from starlette.responses import JSONResponse,Response
 from .schemas import FlowAnalysisInput,canonical,decode
-from ..application.execution_runtime import FlowExecutionRuntime,EngineUnavailable
+from ..application.execution_runtime import FlowExecutionRuntime,EngineUnavailable,ResultContractError
 from src.shared.runtime.deadline import DeadlineExceeded
 
 
@@ -34,11 +34,12 @@ def make_router(engine=None):
                         raw.extend(part)
                         if len(raw)>8192:raise ValueError()
                     request.state.flow_input=FlowAnalysisInput.model_validate(decode(bytes(raw)))
-                    return await handler(request)
-                except (asyncio.TimeoutError,DeadlineExceeded):return error(504,'DEADLINE_EXCEEDED')
-                except EngineUnavailable:return error(503,'SERVICE_UNAVAILABLE')
                 except (ValueError,RecursionError):return error(422,'INPUT_INVALID')
-                except Exception:return error(502,'RESULT_CONTRACT_INVALID')
+                try:
+                    return await handler(request)
+                except (TimeoutError,DeadlineExceeded):return error(504,'DEADLINE_EXCEEDED')
+                except ResultContractError:return error(502,'RESULT_CONTRACT_INVALID')
+                except Exception:return error(503,'SERVICE_UNAVAILABLE')
             return checked
     router=APIRouter(route_class=StrictRoute)
     @router.post('/internal/flow/analyze')

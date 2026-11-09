@@ -43,7 +43,8 @@ jobs:
           # uv 0.13.7 embeds this exact CPython 3.12.10 arm64 artifact:
           # 20250529/cpython-3.12.10%2B20250529-aarch64-apple-darwin-install_only_stripped.tar.gz
           # SHA256 2579c9ffcbb0a745f1de3d645612c7466269eb9a23316a54ece49d50c1c9122f
-          env -i LANG=en_US.UTF-8 TZ=UTC HOME="$cf014_root/home" TMPDIR="$cf014_root/tmp" UV_PYTHON_INSTALL_MIRROR=https://github.com/astral-sh/python-build-standalone/releases/download "${{ steps.uv.outputs.uv-path }}" --no-cache --no-config python install --install-dir "$cf014_root/runtime" --no-bin cpython-3.12.10-macos-aarch64-none
+          # Official Astral mirror; same artifact and uv digest verification.
+          env -i LANG=en_US.UTF-8 TZ=UTC HOME="$cf014_root/home" TMPDIR="$cf014_root/tmp" UV_PYTHON_INSTALL_MIRROR=https://releases.astral.sh/github/python-build-standalone/releases/download "${{ steps.uv.outputs.uv-path }}" --no-cache --no-config python install --install-dir "$cf014_root/runtime" --no-bin cpython-3.12.10-macos-aarch64-none
           # The setup-python interpreter only inspects files here; protected tests
           # exclusively use the verified, isolated installation below.
           "$pythonLocation/bin/python" -I -S - "$cf014_root" "$GITHUB_ENV" <<'PY'

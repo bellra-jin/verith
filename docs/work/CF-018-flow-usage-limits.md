@@ -45,3 +45,14 @@ Flow 새 실행에 인증 사용자·서비스 일일 횟수/보수적 비용 �
 
 상세 기록: `docs/work/CF-018-flow-usage-limits.md`.
 <!-- CF018_PR_BODY_END -->
+
+
+## PR #23 CI 다운로드 경로 후속
+
+후속 기준은 `feat/flow-usage-limits`의 사용자 commit `cd29c3bf5d418554b6e2d3ed014fce8e15ef3c05`다. 전달된 [CI42567516423](https://github.com/bellra-jin/verith/actions/runs/42567516423) attempt1·2는 `Install digest-verified owned Python`에서 같은 GitHub artifact HTTP504로 중단됐고 검사 단계는 skipped다. attempt2의 job128999349220은 2026-11-09 14:36:20 KST(05:36:20 UTC)에3회 retry/19.4초 실패를 기록했다. 이는 기능 테스트 실패나 새 head CI 성공이 아니다.
+
+[공식 환경변수 문서](https://docs.astral.sh/uv/reference/environment/#uv_python_install_mirror)는 `UV_PYTHON_INSTALL_MIRROR`가0.2.35부터 CPython 배포 base를 대체한다고 명시한다. [uv merged PR18207](https://github.com/astral-sh/uv/pull/18207)·[PBS merged PR988](https://github.com/astral-sh/python-build-standalone/pull/988)은 Astral 공식 mirror 배포를 설명하며 checksum 불일치는 성공/fallback으로 처리하지 않는다. workflow의 해당 변수만 `https://releases.astral.sh/github/python-build-standalone/releases/download`로 바꿨다. Python3.12.10/uv0.13.7/action SHA·uv checksum·artifact pin, owned root/owner/mode/link/정확 runtime·기존 guard·검사 단계는 그대로다. toolcache fallback이나 새 retry를 추가하지 않았다.
+
+2026-11-09 14:40:43~14:40:44 KST(05:40:43~05:40:44 UTC), 자기 임시 디렉터리에서 공식 mirror의 exact `20250529/cpython-3.12.10%2B20250529-aarch64-apple-darwin-install_only_stripped.tar.gz` 본문을 무실행 다운로드했다. HTTP200·15,600,165bytes·SHA256 `2579c9ffcbb0a745f1de3d645612c7466269eb9a23316a54ece49d50c1c9122f`가 기존 pin과 일치했다. 압축 해제/설치/실행 없이 다운로드 파일과 자기 root를 제거했다. uv0.13.7 tag source의 이번 웹 조회는404여서 재확인되지 않았으며, 공식 문서·merged PR과 exact artifact bytes 확인을 구분한다. GitHub 원본을 새로 내려받아 두 서버를 직접 비교한 것은 아니다.
+
+이 후속의 검증은 변경2파일·URL 한 곳 교체·나머지 workflow 보존, YAML 및 내장 shell/Python 구문·공식 artifact checksum·diffcheck에 한정한다. 기존 unit/PG/FE/공급자 검사를 반복하지 않았다. 새 runtime 설치나 CI 재실행·Git 게시도 하지 않았다. 사용자 push 후 새 head의 실제 CI에서 다운로드/설치/보호 self/unit까지 성공하는지 확인해야 한다. 이 무실행 로컬 checksum 성공을 원격 runner의 성공으로 대신하지 않는다. integration의 rerun_failed403은 우회하지 않았고 원격 재실행은 여전히 사용자 권한 단계다.

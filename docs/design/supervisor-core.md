@@ -63,3 +63,26 @@ CF027 종료 전 조율 측의 실제 Chrome에서는30초 뒤 클릭 없는 고
 
 
 이후 최종 동일 소스를 고정한 조율 측 브라우저 회차에서 클릭 없는 deadline 실패 화면·잠금·Session 해제·commit ACK와 ACK 미수신의 `commit_unconfirmed`·정리를 관측했다. 별도 정상 회차는 completed receipt/parent0, 1440 질문 focus·Tab/Return과390 production 카드 배치를 확인했다. 정확390 keyboard traversal·긴 오류·일시 재확인 disabled 상태는 미검증이며 fixture 진단 JSON overflow와 실제 실패 회차 receipt 미회수 한계가 남는다. 의도된 실패 회차의 child1/parent78을 정상 전체 수용으로 바꾸지 않는다. 상세 증거 경계는 [최신 CF-027 브라우저 기록](../work/CF-027-supervisor-reauth-lifecycle.md#2026-11-10-재개-후-동일-소스-브라우저-관측과-게시-범위)을 따른다.
+
+
+## CF-028 GET 재확인과 계획 포커스
+
+Conversation의 GET 재확인은 동기 token을 선점한 뒤에만 timer·abort·generation을 바꾼다. 같은 검증 중의 재확인은 아무 작업도 하지 않으며, 정상 화면과 오류 화면 모두 **상태 확인 중 · 실행 없음** 및 비활성 버튼/aria-busy로 표시한다. 준비/확정·same-key 게시·편집/후보/동의·준비 취소·새 요청은 이 동안 UI와 handler 양쪽에서 잠근다. 보관함/보고서 navigation은 유지하고 기존 URL/owner/visibility/unmount 무효화로 늦은 응답을 차단한다. 같은 token의 settlement만 pending을 해제하며, 기존 15초 제한과 상위 재인증 latch·fixed recovery를 유지한다. 일시 오류는 명시 재시도로 회복하고 이후 성공은 이전 오류를 지운다. 완료된 GET token과 다음 자동 관측의 generation predicate를 분리해 기존 유한 관측을 보존한다.
+
+명시 질문·typed 답변·후보 선택의 검증된 새 계획만 request generation/owner/URL과 origin focus를 연결한다. Tab·pointer·다른 focus·window blur·페이지 이탈/취소는 의도를 폐기한다. 자기 pending commit이 제출 control을 disabled/제거하여 body로 이동시킨 경우만 별도로 기록하며, body라는 이유만으로 focus 자격을 만들지 않는다. plan commit 때 실제 document focus/visibility·현재 plan identity·요청 세대를 다시 확인하고 heading(tabIndex=-1)에 한 번만 preventScroll focus한다. 불명한 경우 현재 focus를 유지하며 기존 polite thread 안내를 사용한다. GET/reload/동일 계획 rerender에는 의도가 없고 동의·POST를 만들지 않는다.
+
+실제 production 함수/closure의 주입식 단위 회귀와 DOM 연결 source assertion은 mounted/키보드 증거가 아니다. 새 fixture 시나리오는 get-verification/plan-focus이며 기존 15초 hold 자동 해제·30초 시나리오·590초 fixture·600초 worker와 strict 종료 ACK를 유지한다. focus label은 DOM의 tag/계획 heading 관측만 표시하며 private 내용이나 production 내부 token을 노출하지 않는다. 최종 1440/390 및 키보드 관측은 동결 source로 조율 측에서 별도 수행한다. 직접 검사/남은 범위는 [CF-028 작업 기록](../work/CF-028-supervisor-verification-focus.md)을 따른다.
+
+
+CF028 추가 진단은 fixture에만 public DOM 상태를 남긴다. pending/plan commit의 activeElement tag/disabled/connected·document.hasFocus/visibility와 제한된 focusin/window blur/focus 기록을 수집한다. origin/token/owner/원문은 읽거나 출력하지 않으며 focus를 바꾸지 않는다. MutationObserver와 event listener는 cleanup한다. fixed deleted outcome은 원문/계획/Flow 없이 기존 validator를 통과하며 삭제된 결과의 재확인 pending을 검사하기 위한 합성 제어다. 1440 native 키보드에서 계획 채택 뒤 heading 이동이 관측되지 않은 조율 측 결과는 남아 있으며 HTML AX root를 DOM body 증거로 사용하지 않는다. 진단 전후 production focus 조건은 같고 원인은 아직 미확정이다.
+
+
+조율 측의 후속1440 진단은 pending commit의 BUTTON disabled=true에서 다음 BODY/plan commit으로 이동했고 hasFocus/visible은 유지됐음을 보여줬다. 따라서 pending commit 때 origin이 실제 disabled/removed이고 current가 origin 또는 BODY인 경우만 근거를 보존해 늦은 silent BODY blur를 허용한다. HTML은 허용하지 않는다. Tab/pointer/다른 focus/window blur·URL/owner/generation/plan 무효화와 한 번 소비 조건은 유지한다. 주입식 정확 경로 회귀는 통과했으며 수정 후 실제 키보드 수용은 별도다.
+
+
+고정 fixture-owned mounted GET case는 stored/error-retry/deleted3개만 있다. 실제 준비·명시 동의·확정으로 저장된 known-ID 대화와 nonce/failure-watch 등록이 선행 조건이다. 임의 storage/binding 생성이나 handler 직접 호출 없이 보이는 유일한 production GET 버튼을 DOM click한다.20초 전체 bound·유한 poll/read·동기 fixture lock·abort/unmount cleanup으로 각 case를 독립30초 안에 수집한다. held acknowledgement와 pending/disabled를 확인한 뒤 disabled DOM click에서 추가 session/core0을 대조하고, fresh held 확인·클릭 후3초 안에서만 one-shot release한다. 불명/만료면 재전송하지 않고 fail-closed한다. POST/DELETE·모델/provider 추가0을 대조한다.503은 실제 오류 화면 후200 명시 retry, deleted는 실제 valid deleted GET 뒤 재확인을 검사한다. disabled DOM click은 UI 억제 검사이고 handler 동기 guard 증거는 별도 production unit이다. 이 programmatic mounted 시나리오는 native 키보드 수용과도 구분한다.
+
+
+최종 동결 source의 조율 측 실제 Chrome 검증에서 세 고정 programmatic mounted GET case(stored, 503 오류 뒤 200 명시 retry, deleted)가 모두 수집됐다. held 상태의 pending/disabled와 session +1/core +0, disabled DOM click의 추가 HTTP 0, settlement의 재활성·session +3/core +1 및 오류 해제를 확인했다. 각 case의 POST/DELETE는 0이며, deleted는 원문·계획·결과를 숨겼다. 이 결과는 production handler를 직접 호출한 시험이 아니다.
+
+별도 native 1440/390의 Return → heading → 첫 실제 control, 390 동의 순서와 활성 실행 버튼 접근·레이아웃, 지연 중 사용자 Tab 이동의 focus 보존도 확인됐다. 실제 Flow 실행·폰/Safari/screen reader·Backend/provider 수용은 아니다. 마지막 GET 회차의 completed receipt와 parent 0·정리를 확인했으나 receipt ACK는 not_observed이며 commit ACK를 주장하지 않는다. 과거 timeout/focus 실패와 최종 동일 source 성공은 작업 기록에서 구분한다.

@@ -53,3 +53,14 @@ AI28·고정cross-root9 입력은 현재 source/pin과 대조했다. 기존 Supe
 ## 게시 전 독립 검토
 
 조율 측의 최종 읽기 검토가 동결27파일·AI28/고정9 pin·원본WIP15·branch/HEAD/빈index·증거hash를 대조하고 미해결 finding 없이 통과했다. 이는 독립 재실행이 아니며 위 self/unit 수를 더하지 않는다. 제품/시험은 그대로 두고 이 완료 기록만 추가해 Draft PR을 준비한다. 이후 CF028/CF029 merge와 shared caller/tooling 정합화·영향 보호 검사·최신 exact-head/Ready CI 및 독립 delta 검토를 별도로 거친다. 현재 검토를 미래 integration 승인으로 확대하지 않는다.
+
+
+## CF028 정상 병합 후 통합 검증
+
+CF028 PR33의 merge `db2fc82df1f1c0177d543fb7f7be2c60a107df0d`를 정상 merge 방식으로 통합했다. caller와 tooling 두 충돌만 해결했으며, core·verification·Technical의 정확한 세 sibling 및 유일한 기존 dependency root를 보존한다. 두 작업의 회귀를 모두 유지하고 실제 보호 invocation의 유한 root assertion에도 Technical을 추가했다. 임의 prefix·환경/CLI 경로 입력과 fallback은 추가하지 않았다.
+
+첫 unit 시도는 미해결 index stage 때문에 worker 0의 `unsupported index source`로 중단됐다. 임시 root 제거와 위반 0을 확인한 뒤 두 충돌 파일을 정상 stage 처리했다. 같은 보호 입구의 재검사에서는 unit 67개(preview 15 + tooling 52), type 오류 0, lint 오류·경고 0, 각각 parent exit 0과 소유 root 제거를 확인했다. 예상 보호 거절 16개와 예상 밖 위반 0, diagnostic failure 0을 구분한다. guard 및 package/lock은 불변이다.
+
+Backend·AI·기존 AI28/고정9 입력과 CI는 기존 동결 bytes와 같으므로 Backend 검사를 반복하지 않았다. CF028의 나머지 제품·fixture·문서는 병합된 develop bytes를 그대로 사용했다. CF029 미게시 변경은 입력이나 게시 대상이 아니며 Technical의 선행 조건이 아니다. 이전 문단의 CF029 병합 대기는 당시 계획 이력이다. 이번 통합의 독립 delta 검토 및 새 exact-head/Ready CI는 별도로 확인한다. 실제 engine/provider·owner 저장·공개 Technical·차트 rendering 미검증은 그대로다.
+
+독립 delta 읽기 검토는 미해결 finding 없이 완료됐다. 두 충돌 파일의 실제 hash와 staged bytes, 비충돌 CF028 6파일의 develop 일치, Backend/AI 17개 및 AI28·고정9 pin 불변과 unit67/type0/lint0·정리 로그를 대조했다. 독립 재실행 수로 집계하지 않는다. 새 commit의 원격 exact-head CI와 Ready CI는 게시 뒤 확인한다.

@@ -142,3 +142,27 @@ tests. Backend self/unit and Frontend type/lint results are also retained as
 explicit original-tool-output extraction artifacts, not separate original stdout
 hashes or new executions. The implementation source remained frozen throughout
 review. Latest-develop integration and its delta checks remain separate.
+
+## Latest develop integration and impact checks
+
+After CF021 merged normally, develop `74b31eddf7ebd3700d3c6a2374556d45e59686bc`
+was integrated with a normal merge. Only the shared Frontend caller and tooling
+files conflicted. The resolved caller retains exactly core, verification,
+Technical and Technical-read sibling roots with the existing single dependency
+root and all provenance/identity checks. All CF021, CF028 and CF031 tooling cases
+remain. No denied CF029 source was copied or published.
+
+The integrated protected read unit passed 100 tests (decoder 46 + tooling 54);
+type and lint returned exit 0 with no findings. Each parent exited 0 and removed
+its own temporary root. The unit reported 16 expected negative probes and zero
+unexpected violations or diagnostic failures. The independent original Backend
+self 3/unit 47 evidence applies to unchanged Backend/AI/checker/fixture bytes;
+these tests were not repeated locally. Latest exact-head/Ready CI and the
+integration delta review are separate publication gates. No actual engine,
+provider, authentication, ownership persistence or chart rendering was tested.
+
+The independent integration delta review completed with no unresolved actionable
+findings. It compared the resolved caller/tooling staged bytes, all three task
+test groups, unchanged Backend/AI/CI and AI28/fixed9 inputs, unchanged CF028
+non-conflicting files and the 100-test/type/lint cleanup evidence. It did not
+rerun tests or certify any future remote head.

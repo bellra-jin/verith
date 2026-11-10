@@ -85,3 +85,40 @@ blank latch 명시 확인은 parent/child session2회·core0이다. 위 session 
 - 마지막 실제 deadline 사례에서 추가 클릭 없이 고정 실패 안내, 모든 제어 disabled, Session 해제, `commit-acknowledged`를 관측했다. 그러나 실행 중 마지막 source 보완과 겹쳐 부모의 command/package postcheck는 exit 78로 실패했다. guard violation 0과 소유 임시 root 정리는 확인했다. 이 관측을 최종 exact-source 검증 통과로 간주하지 않는다.
 - 최종 fixture SHA256: `f55fcb5345340d9f3a74f32df0c0bf1dea4ec32d0e9388eadbbc6265dc1ac355`. production Session과 guard는 이번 마지막 fixture 보완에서 불변이다.
 - 최종 동일 소스의 deadline/ACK 미수신 회귀와 전체 시각·focus 검증은 남아 있다. Draft PR로 게시하고 CI/merge를 기다리거나 실행하지 않는다. 실제 Backend/auth/PG/provider/모델 검증은 이번 게시 범위에 없으며 모델·provider 호출과 비용은 0이다. CF026/OpenAI 후속 작업은 중단했다.
+
+## 2026-11-10 재개: 최종 동일 소스 집중 검증
+
+이 절은 위 종료 전 미검증 상태 이후의 직접 실행 결과다. 재개 HEAD는 `bb9682b1879e0941b9ce9ae3161f1aabf4e9c08b`, 같은 `feat/supervisor-reauth-lifecycle`의 clean 상태에서 시작했다. PR30 Draft 및 해당 head의 원격 CI 성공은 조율 측 전달 근거이며 이번 개발 측 원격 조회/게시 결과가 아니다.
+
+마지막 ACK 예외 보완의 실제 fixture terminal callbacks·`bounded`·`receiptFile`과 기존 `createFixtureTerminal`을 실행하는 회귀4개를 추가했다. missing commit과 commit timeout은 `commit_unconfirmed`를 남기고 failed 영수증을 mode0600으로 저장한 뒤 close/settled로 이어진다. 정상 ACK는 unconfirmed를 기록하지 않는다. handler settlement 실패는 성공 영수증으로 바꾸지 않고 실패를 전파하며 close한다. 영수증 임시파일과 검사 소유 디렉터리 제거도 확인했다. 서버/타이머 IO 일부는 주입한 단위 검사이며 실제 listener/React/브라우저 실행이 아니다.
+
+첫 보호 unit130(62+14+6+48)·type·lint는 통과했다. 이후 독립 검토에서 collect가 서버30초 전에 성공해 timer를 취소했지만 응답 전 client deadline이 만료되는 race를 확인했다. 유효한 failure commit을 받아도 서버가 기록/응답만 하고590초까지 남을 수 있었다. 기존 strict ACK control 안에서 열린 terminal만 failed 종료를 요청하도록 수정했다. ACK handler는 terminal 종료 완료를 await하지 않으며 자신의 응답/settlement 뒤 drain이 진행된다. 이미 닫히는 terminal은 다시 시작하지 않는다. 서버 collect→client deadline→commit ACK→handler settlement→failed receipt/close 순서의 실제 함수 회귀1개를 추가했다. 새 endpoint/helper/runner나 권한 확대는 없다.
+
+수정 뒤 같은 최종 제품/검사 소스로 다음 한 회차를 실행했다. 모든 실행은 clean env(`LANG=en_US.UTF-8`, `TZ=UTC`, `OPENSSL_CONF=/dev/null`)·고정 Node22.7.0·기존 보호 `frontend/scripts/check-local-ports.mjs` 입구와 정식 `require_escalated` 심사를 사용했다.
+
+| 선택 | 최종 결과 | 비공개 checkpoint 로그 |
+|---|---|---|
+| `core-unit` | 131통과 = core63 + BFF14 + config6 + tooling48; fail/skip/cancel0, parent exit0 | `core-unit-2.log` |
+| `core-type` | 오류0, parent exit0 | `core-type-2.log` |
+| `core-lint` | 대상 오류0, parent exit0 | `core-lint-2.log` |
+
+최종 실행 시각은09:41:35–09:42:13 UTC다. unit worker4/exitRecords4, type·lint 각1/1이며 예상 밖 violation·diagnosticFailure·original raw dispatch0이다. tooling의16 denial은 기존 expected negatives다. 각 parent는 자기 temporary root 제거를 확인했다. JS journal 범위의 계측이며 native 전체 관측/모든 원본 읽기 부재 증명으로 확대하지 않는다. 현재 source·명령·Node/의존성·로그 SHA와 전후 불변 대조는 비공개 checkpoint의 `final-source.json`, `validation-evidence.json`, `handoff.md`에 보존한다.
+
+production Session SHA `b5ef8618f552e8e77399b478f5327c2e2137bf857f823893fc8394f9770c9b44`와 guard SHA `3a9cb45bc865d560612ccd5876f060c69aa0abe5ff635576888781d9efe7d3ee`는 재개 HEAD와 동일하다. runner/helper/package/lock·설치 의존성·Backend/AI/DB/CI도 변경하지 않았다. 최종 검증 뒤에는 이 결과 문서만 갱신했다.
+
+이번 재개에서 브라우저 서버/프로필/탭·Backend/DB/provider/Google·키/.env·CF026/OpenAI·Git 쓰기는 실행하지 않았다. denied/uncertain 작업은 없다. 수정 후 최종 source의 실제 mounted deadline·1440/390·focus는 조율 측 검증 pending이다. 의도된 failed 시나리오의 child1/parent78은 UI acceptance pass가 아니다. 현 runner는 child 실패 시 일반 terminal summary 전에 빠지므로 실제 실패 회차의 디스크 receipt 회수는 지원된 소유 증거 경로가 확보됐을 때만 보고하고, 로그/화면 관측만으로 receipt 읽기 완료를 주장하지 않는다. 보호 runner를 바꾸거나 다른 경로로 우회하지 않는다.
+
+
+## 2026-11-10 재개 후 동일 소스 브라우저 관측과 게시 범위
+
+아래는 조율 측이 새 미로그인 전용 테스트 프로필에서 최종 fixture SHA256 `76c094ac4832beef556c77c08b61485fdbf9ed9c41f47dd8b7dc3748ca6dabf0`와 unit SHA256 `871ec8a7291be1626504619b73d9f717ec85cb8cd445317f704fd94499fbe773`를 고정한 뒤 수행해 전달한 세 회차다. 위의 source drift 실패와 미실행 기록을 대체해 삭제하지 않으며, 이전 lifecycle 관측을 이번 세 회차에서 전부 재실행한 것으로 합산하지 않는다. 이번 게시 담당은 manifest·불변 입력과 전달된 결과를 대조했고 브라우저를 직접 재실행하지 않았다.
+
+1. **mounted deadline:** 시나리오를 arm한 뒤 추가 행동 없이 고정 실패 안내, 모든 fixture 제어 disabled, Session/질문 제거와 `commit-acknowledged`를 AX와 화면에서 관측했다. 서버 단계는 body written → commit received → response written이었다. attempts2/session2/core0/POST0, 의도된 child1/parent78이며 source 불변·guard violation0·소유 root/listener 부재를 확인했다. 이는 실패 전달·정리 회귀 관측이며 정상 UI 전체 수용이나 parent exit0이 아니다.
+2. **정상 화면·focus:** fixture UI complete로 종료해 parent0, completed receipt 검증, 소유 root/listener 부재·violation0을 확인했다. sessionGET9/preparePOST2, 다른 core counter와 provider/model은0이었다. 1440에서 빈 질문의 focus ring, Tab으로 활성 `질문 확인` 이동, Return으로 plan/동의 표시를 관측했다. 명시적인 계정 B 재확인으로 A plan이 제거됐고 B 질문으로 새 plan을 만들었다. 390 화면에서 인증 카드·질문·plan·동의·action과 하단 버튼이 production 카드 안에 적절히 쌓여 표시됐다. fixture의 raw 진단 JSON만 가로 page overflow를 만들었다. 비에뮬레이션 native keyboard에서 동의 후 Tab으로 활성 Flow action에 focus가 이동했으며 Flow 실행은 하지 않았다. 에뮬레이션 AX pointer로 pending을 누르려던 시도는 계정 B에 닿았으므로 pending 성공 사례로 세지 않는다. 이후 native keyboard/비에뮬레이션 조작으로 전환했다.
+3. **ACK 미수신:** watch 등록 → arm → 같은 소유 탭의 about:blank 이동 후 `closed_before_body`, active0, commitAcks0, `SCENARIO_DEADLINE`, `commit_unconfirmed`를 기록했다. attempts2/session2/core0/POST0, 의도된 child1/parent78이며 소유 root/listener 부재·violation0을 확인했다. 실제 실패 회차의 디스크 receipt는 독립 회수하지 못했다. 변경하지 않은 parent가 정상 summary 전에 예외로 끝난 뒤 root를 정리하므로 로그만으로 failed receipt 검증 성공을 주장하지 않는다. 앞 절의 실제 함수 추출·주입 timer/server·실제 파일 IO 회귀와 실제 HTTP-process 영수증 증거는 구분한다.
+
+OS process 조회는 차단돼 재시도하지 않았다. 정리는 소유 runner settlement 기록 및 root/listener 확인에 근거하며 native-wide process 부재 증명은 아니다. 화면은 native 브라우저 작업자의 inline 관측 증거이며 저장된 screenshot 파일을 제공한 것은 아니다. 모든 runner는 종료됐고 테스트 프로필은 about:blank·emulation off로 남았다. 실제 Backend/auth/DB/provider/model·credential 접근은 없었다.
+
+독립 read-only 검토에서 collect 응답/client deadline race를 찾아 보완했고 위 정확 fixture/unit hash의 재검토에는 추가 조치가 필요한 잔여 지적이 없었다는 전달 결과다. 최종 보호 unit131·type·lint 통과 이후 제품/검사 입력은 불변이며 이번 게시 보완은 이 기록과 디자인의 검증 상태뿐이다.
+
+정확390 keyboard traversal, 긴 오류 layout, 일시적인 재확인 disabled 상태는 여전히 미검증이다. fixture 진단 JSON overflow와 실패 회차 receipt 회수 한계도 남긴다. 실제 인증·Backend/DB·provider/모델 및 전체 브라우저 수용을 완료로 선언하지 않는다. 기존 [Draft PR #30](https://github.com/bellra-jin/verith/pull/30)의 같은 branch에 게시하며 Ready·merge·auto-merge·배포는 하지 않는다. 새 head의 원격 CI는 PR에서 별도로 확인하며 이전 head의 성공을 새 head 결과로 사용하지 않는다.

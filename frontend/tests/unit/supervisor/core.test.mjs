@@ -312,3 +312,101 @@ test('CF027 actual scenario cannot arm without a ready active watch and client a
  assert.match(source,/if\(value.scenario==='collect'\)scenarioClock.current.clear\(\)/);assert.match(source,/return\(\)=>scenarioClock.current.clear\(\)/);assert.match(source,/res.flushHeaders\(\)/);
  assert.match(source,/x-fixture-watch-ack/);assert.match(source,/phase:'commit_unconfirmed'/);assert.doesNotMatch(source,/react_mount:'passed'|interaction:'passed'/);
 });
+
+for(const kind of ['missing-commit','commit-timeout','acknowledged','handler-failure'])test('CF027 actual failed terminal drain/receipt/close: '+kind,async()=>{
+ const source=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8');
+ const tree=ts.createSourceFile('fixture.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const declarations=tree.statements.filter(ts.isVariableStatement).flatMap(node=>[...node.declarationList.declarations]);
+ const terminalNode=declarations.find(node=>node.name.getText(tree)==='terminal');
+ const boundedNode=declarations.find(node=>node.name.getText(tree)==='bounded');
+ const helperSource=fs.readFileSync('tests/helpers/supervisor-fixture.mjs','utf8');
+ const helperTree=ts.createSourceFile('helper.mjs',helperSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const helper=helperTree.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='createFixtureTerminal');
+ const owned=fs.mkdtempSync('cf027-receipt-'),events=[],logs=[],timers=new Map();let sequence=0;
+ const record={ready:true,commitWritten:kind==='acknowledged',waiters:[]};
+ const context={
+  Promise,Date:{now:()=>1000},expires:590000,closeDeadline:Infinity,
+  setTimeout(fn,ms){assert.ok(ms>0&&ms<=5000);const id=++sequence;timers.set(id,fn);return id;},
+  clearTimeout(id){timers.delete(id);},
+  console:{log:value=>logs.push(value)},scenario:{status:'failed',reason:'SCENARIO_DEADLINE'},
+  scenarioTimer:null,holdNextSession:false,heldSession:null,delays:new Map(),
+  active:new Set(kind==='handler-failure'?[Promise.reject(Error('Handler settlement failed'))]:[]),
+  watchRecords:new Map([[1,record]]),failureTargets:new Set(kind==='missing-commit'?[]:[1]),
+  notifyFailureWatchers(){events.push('stop');},fixtureObservations:()=>({}),
+  terminalResponse:null,server:{listening:true,closeAllConnections(){events.push('connections-closed');},close(done){this.listening=false;events.push('listener-closed');done();}},
+  nonce:'synthetic',process:{pid:1,cwd:()=>owned},cap:{ports:[1]},counts:{model:0,provider:0},browserNotExecuted:()=>({react_mount:'not_executed'}),
+  fs:{...fs,existsSync:file=>fs.existsSync(owned+'/'+file),openSync:(file,...args)=>fs.openSync(owned+'/'+file,...args),renameSync:(from,to)=>fs.renameSync(owned+'/'+from,owned+'/'+to)},
+  finish(){events.push('settled');},
+ };
+ try{
+  context.waitForFailureCommit=fixtureFunction('waitForFailureCommit',context);
+  context.receiptFile=fixtureFunction('receiptFile',context);
+  context.bounded=vm.runInNewContext('('+boundedNode.initializer.getText(tree)+')',context,{timeout:100});
+  const create=vm.runInNewContext(helper.getText(helperTree).replace(/^export /,'')+';createFixtureTerminal;',{}, {timeout:100});
+  const callbacks=vm.runInNewContext('('+terminalNode.initializer.arguments[0].getText(tree)+')',context,{timeout:100});
+  const terminal=create(callbacks),task=terminal.finish('failed');
+  if(kind==='commit-timeout'){
+   for(let turn=0;turn<12&&!record.waiters.length;turn++)await Promise.resolve();
+   assert.equal(record.waiters.length,1);assert.equal(timers.size,1);
+   [...timers.values()][0]();
+  }
+  if(kind==='handler-failure'){
+   await assert.rejects(task,/Handler settlement failed/);
+   assert.equal(fs.existsSync(owned+'/cf025-terminal.json'),false);
+   assert.equal(events.includes('settled'),false);
+  }else{
+   const receipt=await task;
+   assert.equal(receipt.state,'failed');assert.equal(receipt.action,'failed');
+   assert.equal(JSON.parse(fs.readFileSync(owned+'/cf025-terminal.json','utf8')).state,'failed');
+   assert.equal(fs.statSync(owned+'/cf025-terminal.json').mode&0o777,0o600);
+   assert.equal(fs.existsSync(owned+'/cf025-terminal.json.tmp'),false);
+   assert.equal(logs.some(value=>value.includes('commit_unconfirmed')),kind!=='acknowledged');
+   assert.equal(events.at(-1),'settled');
+  }
+  assert.equal(terminal.phase,'failed');assert.equal(context.server.listening,false);
+  assert.ok(events.includes('connections-closed'));assert.ok(events.includes('listener-closed'));
+  assert.equal(timers.size,0);
+ }finally{fs.rmSync(owned,{recursive:true,force:true});assert.equal(fs.existsSync(owned),false);}
+});
+
+test('CF027 collected server observation followed by client deadline commits failure and settles its ACK before drain',async()=>{
+ const helperSource=fs.readFileSync('tests/helpers/supervisor-fixture.mjs','utf8');
+ const helperTree=ts.createSourceFile('helper.mjs',helperSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const declaration=helperTree.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='createFixtureTerminal');
+ const create=vm.runInNewContext(declaration.getText(helperTree).replace(/^export /,'')+';createFixtureTerminal;',{}, {timeout:100});
+ const record={id:1,ready:true,sent:false,disconnected:false,commitReceived:false,commitWritten:false,waiters:[]};
+ let now=29999,clientFailure=null,releaseWrite,settleTerminal;const events=[],active=new Set();
+ const stopped=new Promise(resolve=>{settleTerminal=resolve;});
+ const context={
+  scenario:{status:'armed',name:'rerender',baseline:{},reason:null},attempts:{},scenarioTimer:1,
+  clearTimeout(){events.push('server-timer-cleared');},console:{log(){}},
+  watchRecords:new Map([[1,record]]),failureTargets:new Set([1]),
+  failureDelivery:{readyAcks:1,commitAcks:0,commitResponseWritten:0},
+  bounded:task=>task,terminalError:null,finish:()=>settleTerminal(),
+ };
+ assert.equal(fixtureFunction('controlScenario',context)('collect'),true);
+ assert.equal(context.scenario.status,'collected');assert.ok(events.includes('server-timer-cleared'));
+ const clock=fixtureFunction('createClientScenarioDeadline',{})(reason=>{clientFailure=reason??'CLIENT_SCENARIO_DEADLINE';},()=>now,()=>1,()=>{});
+ assert.equal(clock.arm(0),true);now=30000;assert.equal(clock.expired(),true);assert.equal(clientFailure,'CLIENT_SCENARIO_DEADLINE');
+ context.terminal=create({
+  stopWork(){events.push('stop');},async drain(){events.push('drain');await Promise.all([...active]);await fixtureFunction('waitForFailureCommit',context)();},
+  async writeReceipt(value){events.push(value.state+'-receipt');return value;},async ack(){},async close(){events.push('close');},settled:()=>settleTerminal(),
+ });
+ context.failScenario=fixtureFunction('failScenario',{...context,notifyFailureWatchers(){}});
+ context.writeFixtureWatchAck=fixtureFunction('writeFixtureWatchAck',context);
+ fixtureFunction('acknowledgeFixtureWatch',context)({watch_id:1,action:'commit',reason:clientFailure},true);
+ const response={writeHead:status=>assert.equal(status,200),end:(_body,done)=>{releaseWrite=done;}};
+ let releaseHandler;const handlerSettlement=new Promise(resolve=>{releaseHandler=resolve;});active.add(handlerSettlement);
+ const task=fixtureFunction('respondFixtureWatchAck',context)(response,record,'commit');
+ void task.then(()=>{events.push('ack-settled');active.delete(handlerSettlement);releaseHandler();});
+ assert.equal(context.scenario.status,'failed');assert.equal(context.scenario.reason,'SCENARIO_DEADLINE');
+ assert.equal(context.terminal.phase,'closing');assert.equal(record.commitWritten,false);
+ releaseWrite();await task;await stopped;
+ assert.equal(context.terminal.phase,'failed');assert.equal(context.terminalError,null);
+ assert.ok(events.indexOf('ack-settled')<events.indexOf('failed-receipt'));
+ assert.ok(events.indexOf('failed-receipt')<events.indexOf('close'));
+ // A closing/closed terminal is never restarted by an otherwise valid ACK.
+ let restarted=0;
+ await fixtureFunction('respondFixtureWatchAck',{terminal:{open:()=>false},failScenario(){restarted++;},bounded:task=>task,writeFixtureWatchAck:async()=>{}})({},record,'commit');
+ assert.equal(restarted,0);
+});

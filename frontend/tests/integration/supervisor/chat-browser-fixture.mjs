@@ -76,6 +76,12 @@ function writeFixtureWatchAck(res,record,action){
   resolve();
  }));
 }
+async function respondFixtureWatchAck(res,record,action){
+ // A collected server observation cannot overrule the client's expired deadline.
+ // Start failure without awaiting drain: this ACK handler must settle first.
+ if(action==='commit'&&terminal.open())failScenario(record.commitReason==='CLIENT_SCENARIO_DEADLINE'?'SCENARIO_DEADLINE':'CLIENT_FAILURE');
+ await bounded(writeFixtureWatchAck(res,record,action),5000);
+}
 async function waitForFailureCommit(){
  const records=[...failureTargets].map(id=>watchRecords.get(id));
  if(!records.length||records.some(record=>!record?.ready))throw Error('Fixture failure commit unconfirmed');
@@ -131,7 +137,7 @@ async function watchFixtureFailure(signal,nonce,onFailure,onStatus=()=>{}){
   const raw=await response.text();if(signal.aborted||failed)return;
   if(Date.now()>=receiveBefore||raw.length>1024)throw Error('Fixture failure message invalid');
   const value=JSON.parse(raw);
-  if(!value||Object.keys(value).sort().join()!=='failed,reason,terminal'||typeof value.failed!=='boolean'||value.terminal!==true||value.failed&&!['SCENARIO_DEADLINE','REQUEST_ATTEMPT_LIMIT','FIXTURE_DEADLINE','WATCH_READY_UNCONFIRMED'].includes(value.reason)||!value.failed&&value.reason!==null)throw Error('Fixture failure message invalid');
+  if(!value||Object.keys(value).sort().join()!=='failed,reason,terminal'||typeof value.failed!=='boolean'||value.terminal!==true||value.failed&&!['SCENARIO_DEADLINE','REQUEST_ATTEMPT_LIMIT','FIXTURE_DEADLINE','WATCH_READY_UNCONFIRMED','CLIENT_FAILURE'].includes(value.reason)||!value.failed&&value.reason!==null)throw Error('Fixture failure message invalid');
   onStatus('received');
   if(value.failed)fail('SERVER_FAILURE');else onStatus('closed');
  }catch{fail();}finally{clearTimeout(timer);signal.removeEventListener('abort',abort);}
@@ -306,7 +312,7 @@ async function handle(req,res){
   if(req.headers['x-fixture-watch-ack']!=='1'||req.headers.origin!==origin||req.headers['x-fixture-nonce']!==nonce){json({},403);return;}
   if(req.headers['content-type']!=='application/json'){json({},422);return;}
   let body,record;try{body=parseFixtureWatchAck(await readBody(req,1024));record=acknowledgeFixtureWatch(body,terminal.open());}catch{json({},409);return;}
-  await bounded(writeFixtureWatchAck(res,record,body.action),5000);return;
+  await respondFixtureWatchAck(res,record,body.action);return;
  }
  if(!terminal.open()){json({},409);return;}
  if(research.status===422){json({},422);return;}

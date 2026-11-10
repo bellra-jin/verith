@@ -813,6 +813,42 @@ class CF024Boundary(unittest.TestCase):
         with self.assertRaises(sys.modules['src.supervisor.infrastructure.meaning_gateway'].CounterUnavailable):asyncio.run(verify_live())
         self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
 
+class CF026Boundary(unittest.TestCase):
+    def test_exact_new_inputs_and_existing_pins(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root = Path(__file__).resolve().parents[3]
+        self.assertEqual(c.CF026_TESTS, ('tests/unit/test_cf026_supervisor_live_controller.py',))
+        self.assertEqual(len(c.CF023_INPUTS), 32)
+        for name, value in c.CF023_INPUTS.items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root, name)).hexdigest(), value)
+        indexed = c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/' + u for u in c.UNIT}
+        raw = b''.join(('100644 ' + '0'*40 + ' 0\t' + p + '\0').encode() for p in sorted(indexed))
+        with patch.object(c.subprocess, 'check_output', return_value=raw):
+            copied = c.selected_sources(root, controller_only=True)
+        self.assertEqual({p for p in copied if p.startswith('ai/')}, set(c.CF023_INPUTS))
+        self.assertIn('backend/scripts/cf026_supervisor_live_controller.py', copied)
+        self.assertIn('backend/tests/unit/test_cf026_supervisor_live_controller.py', copied)
+
+    def test_fixed_selection_keeps_existing_worker(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('live-controller-self', 'live-controller-unit'):
+            with patch.object(c, 'execute') as run:
+                self.assertEqual(c.main([mode]), 0)
+                self.assertTrue(run.call_args.kwargs['controller_only'])
+                self.assertFalse(run.call_args.kwargs['assembly_only'])
+
+    def test_controller_import_and_default_have_no_runtime_actions(self):
+        import asyncio
+        from scripts import cf026_supervisor_live_controller as controller
+        with self.assertRaisesRegex(controller.ControllerError, 'LIVE_GATE_CLOSED'):
+            asyncio.run(controller.run_controller(None))
+        import sys
+        for name in ('scripts.runner_owned_database', 'src.shared.config', 'openai', 'src.api.main'):
+            self.assertNotIn(name, sys.modules)
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -826,6 +862,7 @@ if __name__ == "__main__":
     core_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf022_self_only",False)
     meaning_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf023_self_only",False)
     assembly_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf024_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    controller_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf026_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

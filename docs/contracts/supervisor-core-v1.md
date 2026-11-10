@@ -63,3 +63,199 @@ live 모드의 초기화는 원본 owned proof/CreationReceipt object identity·
 각 count/generation phase는 동일 proof의 fresh session에서 Principal·준비 owner/key/draft/spec/attempt/epoch·상태를 검증한 뒤 같은 session scope의 기존 durable 승인으로 위임한다. count 예약 commit ACK 이후에만 key supplier를 최대1회 호출한다. 키 결과는 attempt의 지역 참조로만 사용하며 종료 시 instance 참조를 제거한다. 문자열의 완전한 메모리 소거를 보장하지 않는다.
 
 provider5초·verifier60초·승인 만료 중 가장 이른 절대 deadline을 공급/HTTP/정산·실패 정리에 적용하며 단계마다 시간을 갱신하지 않는다. 정산/취소/ACK불명은 성공 후보로 보고하지 않고 원 hold를 보존한다. 영속 block ACK를 확인하지 못하면 block 완료로 주장하지 않으며 같은 proof/epoch 확인 전에 추가 송신하지 않는다. 실제 모델/key 전송과 계수 요금 근거는 pending이며 이번 합성 검증은 실제 비용/모델 품질·운영 인수의 증거가 아니다.
+# CF-026 private one-shot live controller
+
+The controller adds no public endpoint or production default key loader. An
+external trusted coordinator supplies a fixed grant and an approval capability;
+JSON flags, synthetic grants and document digests alone do not authorize live
+traffic. The grant binds two ordered drafts, exact rendered request/projection,
+semantic/prompt/schema/price identity, explicit default tier, official count and
+generation destinations, free-count evidence, source capability and expiry. The
+existing verifier remains SELECT-only and owns phase/preparation/Principal and
+durable reservation checks.
+
+The private grant/state use owner-only0700 directories and0600 regular,
+single-link files without symlinks. A stable separate lock inode is held for the
+whole run. The exact directory/lock identity is in the approved scope so copying
+an issued grant to another store cannot reset its budget. Claim is atomically
+replaced and file/directory-fsynced before creating a resource. Missing, changed,
+claimed, closed or unacknowledged state has no regeneration fallback.
+
+Only the original newly created owned PG proof and CreationReceipt can initialize
+one explicit CF023 epoch: USD0.10 total, USD0.05 per attempt, maximum2. INSERT ACK
+and a fresh SELECT precede a live binding. The next snapshot keeps the same
+resource, epoch ID and created_at; it is permitted only after the first exact
+request/projection has observed durable settlement. No epoch reset, unit-label
+change or new grant recovers unknown use. A private journal survives DB cleanup.
+
+The approved existing key source is fixed by canonical location and owner,
+device/inode, regular/single-link, no-symlink and mode0644 identity. It is not
+chmodded or copied to a0600 replacement. Only `OPENAI_API_KEY=value` with an
+optional pair of matching quotes is supported: maximum64KiB file,4KiB line and512
+printable ASCII key bytes. Duplicate target entries, whitespace/escape,
+interpolation, ambiguous quotes or multiline keys are refused. Other values are
+not interpreted. Source and expiry are checked again after count reservation ACK;
+the deferred source is supplied at most once per attempt. Keys are not logged or
+stored in state, argv, environment, result or DB. Reference release does not imply
+complete memory erasure.
+
+Code-copy provenance is separate from credential provenance. A live caller must
+provide the exact reviewed original worktree capability (directory identity and
+controller hash); original and copied controller bytes must match. The key path
+is only its fixed approved sibling location, never a path discovered from the
+temporary copy, environment or CLI. This metadata capability does not read the
+key or authorize a call by itself.
+
+Cancellation, exception or timeout does not discard accounting. Before disposal
+the controller attempts a bounded fresh owned ledger read. If unavailable,
+count/generation/usage remain unknown and the entire100,000,000nanoUSD approval is
+conservatively held. The accounting record must have durable ACK before cleanup;
+otherwise the approval stays claimed and exact owned cleanup evidence is retained
+for coordination. No new send/retry follows. Cancellation is re-raised after
+bounded evidence and cleanup. Cleanup uncertainty is failure, never absence.
+
+The synthetic-only validation provisions a fake grant outside the DB/source-copy
+and exercises the actual controller, owned bootstrap/migration/Principal, explicit
+epoch and existing reviewed ASGI/gateway MockTransport assembly. Its success then
+unknown sequence is not live authority or provider evidence. Production live
+remains closed until the coordinator fixes the actual grant, source capability,
+official evidence and runtime scope. Current execution results and limitations
+are tracked in [CF-026 worklog](../work/CF-026-supervisor-live-controller.md).
+
+### CF-026 v1.3 bounded failure observations
+
+Each of at most two attempts records only closed verifier stage labels (maximum16),
+existing meaning-status enums and observed/hold/unconfirmed/not_called settlement.
+Projection occurs immediately on return, before settlement failure gates. No
+verifier return is represented by false plus nullable fields; malformed fields
+are a fixed diagnostic failure, never arbitrary text or its hash. The private
+controller's result summary also contains only these projected verifier fields.
+
+The controller supplier records entered, approval_checked, source_read_entered,
+source_read_returned and failed/cancelled/timed_out labels. The recorder never
+receives the key value. Read entry is not proof of content-read completion or
+HTTP transmission. Fixed ControllerError codes are retained; other errors,
+cancellation and timeouts are normalized without message/locals/body/path/hash.
+
+Classification distinguishes before-supplier, supplier failure, returned supplier
+with HTTP unknown, verified generation authority before reservation, observed
+generation reservation, and unknown. Each includes the exact labels used.
+Count/generation HTTP remain unknown: no gateway/transport instrumentation was
+added. Reservation ACKs are ledger evidence, not physical send receipts.
+
+Attempt observations are aggregated into existing settlement/final-accounting
+records under the same atomic persistence/ACK boundary. The journal cap remains24;
+nonterminal work stops at21 entries to reserve final accounting, closing and
+cleanup. No new diagnostic events or additional waits are introduced. Mandatory
+diagnostic/accounting ACK loss stops later attempts and retains claimed state,
+hold and exact cleanup proof. Final ledger capture still precedes preservation
+or disposal, and cancellation is propagated. These observations do not authorize
+calls and cannot diagnose the earlier closed one-shot attempt retroactively.
+
+### CF-026 v1.4 one-time residual continuation
+
+The closed original approval is never reopened. A separate trusted issuer may
+create one fixed continuation slot under the original canonical namespace and
+stable execution lock. Before any local issuance write it must obtain a durable
+one-shot consumption ACK and fresh readback from an independent authority. The
+authority must have an explicitly pre-provisioned available parent namespace;
+missing, lost, unavailable or ambiguous state is not first issuance. Atomic
+available-to-consumed CAS is keyed by the original anchor, not a permission object
+or new receipt ID. The exact authority identity is bound by the receipt's required
+`issuance_authority_sha256`; changing providers cannot reset the same receipt.
+
+An immutable local issuance tombstone outside the slot is then written and
+fsynced before slot creation. It is supplementary evidence, not the source of
+the one-shot right: loss of both slot and tombstone still leaves the external
+namespace consumed. Partial issuance, ACK loss, a missing or changed witness,
+replay and concurrent issuance fail closed. Runtime rechecks the same external
+consumption and requires the fully issued identity-bound capability; it does not
+reconstruct or issue a capability from JSON or local absence.
+
+`OneShotIssuanceAuthority` requires trusted observe/CAS callbacks and has no
+production implementation, default provider or create-on-missing behavior here.
+Live issuance remains blocked until independently durable authority storage,
+its fixed identity/namespace and atomic consumption/readback semantics are
+provided and reviewed. The file-backed synthetic callback provider is only a
+test simulation and cannot satisfy a live-mode permission. These tests do not
+prove recovery or safe reissuance if the independent authority itself is reset.
+
+The original grant, state and closure evidence remain byte-identical. Historical
+expiry is retained as history; current permission, evidence, source capability,
+runtime and expiry are checked separately. Only the first identical original
+request is eligible. The inherited50,000,000nanoUSD unknown hold plus one child
+reservation50,000,000nanoUSD consumes the same total100,000,000nanoUSD allowance
+and original1+child1 attempt limit. This is neither a new budget nor a bill.
+Aggregate actual usage remains unknown while the original usage is unknown.
+
+Claim, preparation/attempt identity and each count/generation right are durably
+acknowledged under the original lock. A new owned child epoch is an execution
+ledger, not restored budget: its phase reservation follows the external authority
+ACK, and the deferred supplier follows the local count reservation ACK. Each phase
+is allowed once. Accounting ACK loss preserves claimed state, conservative hold
+and exact cleanup proof; cancellation still propagates. The journal remains
+bounded to24 entries with terminal space reserved.
+
+Live dispatch calls the unchanged private `verify_live`, preserving its rejection
+of synthetic authority, mapping and transport and its shared-driver wrapper. The
+synthetic-only test assembly injects the actual continuation authority into the
+existing PhaseBudget/gateway/ASGI/preparation path using reviewed MockTransport.
+It is not live authority or provider evidence. Controller source-copy provenance
+has an explicit128KiB code-only read limit; credential, grant and state reads
+retain their64KiB limits. Current results and remaining live prerequisites are
+recorded in the worklog; no actual continuation is issued by these tests.
+
+### CF-026 v1.6 new approval aggregate
+
+A distinct explicitly approved aggregate includes the original unknown carry of
+50,000,000nanoUSD within a total1,000,000,000nanoUSD ceiling. It neither reopens the
+old closed approval nor supplies the missing v1.4 live issuance authority. The
+first supported child remains the fixed Supervisor two-candidate batch with a
+100,000,000nanoUSD worst-case reservation. Total reserved becomes150,000,000;
+850,000,000 remains. Current Flow913,500,000 exceeds that remainder; Flow and
+Technical are not integrated executable kinds in this wrapper.
+
+Only a trusted coordinator may bootstrap the canonical root once. Durable private
+coordination history must consume the bootstrap opportunity before root creation,
+retain partial/uncertain attempts and pin root/header/stable lock identities plus
+initial and latest confirmed heads. Runtime is open-only. Missing roots, history,
+head evidence, drift and ambiguous writes never cause bootstrap or budget reset.
+Reopening requires independently retained binding/head and explicit restart
+attestation, not the same approval message. Local history and reference evidence
+being lost or rolled back together cannot be recovered automatically; that is a
+blocked state, never an unused approval.
+
+Under one aggregate lock the order is reservation ACK, issuance-right consumption
+ACK, child creation/binding ACK, execution-start-right consumption ACK, then the
+unchanged legacy runner. Aggregate locks precede child locks. Intent authorization
+pins exact payload/source/spec/price/model/tier/caps, child identity/path/nonce and
+expiry. Rights and reservations are monotonic and never refunded by success,
+failure, no-call, low usage, cancellation or child disposal. No allocation replay
+issues or starts another child. Confirmed head advances only after local fsync,
+fresh read and coordination ACK; pending transitions retain the prior confirmed
+head separately. Allocation count is bounded to9 and state to64KiB.
+
+The legacy child keeps its original validation, first observed gate, durable
+usage, SELECT-only live verifier and deferred key boundary. An aggregate-owned
+accounting callback must ACK the final child accounting before child disposal;
+ACK loss uses the existing claimed/proof-preservation path. Cancellation propagates.
+The allocator records sanitized accounting and cleanup evidence without raw input
+or secrets. Current expiry may not exceed2026-11-10 21:00 UTC; later allocation or
+supplier work is closed while bounded accounting/owned cleanup remains permitted.
+No already-sent remote request can be assumed cancelled or free.
+
+The coordinator history interface has no default live storage or discovery.
+Synthetic file/CAS callbacks are separate from actual coordination history and
+actual issuance. A shared synthetic-only DI assembly uses the existing PhaseBudget/gateway/ASGI
+and reviewed MockTransport for the exact two candidates, keeping the unchanged
+checker and live factory guards intact. Focused results and the initial narrower
+synthetic-factory rejection are tracked in the worklog. No actual aggregate bootstrap,
+allocation, key or provider call is authorized by synthetic test success alone.
+
+Reproducible synthetic fixtures use an explicitly synthetic-mode six-minute
+lease relative to fixture creation. They are not bound to the historical live
+approval cutoff. Live headers still reject any expiry after2026-11-10 21:00 UTC,
+and live authorization is closed after that fixed cutoff. Synthetic mode also
+requires synthetic history/source/child scope and fixed synthetic DI; it cannot
+be promoted into a live approval. No clock, deadline override or environment
+fallback is exposed to production callers.

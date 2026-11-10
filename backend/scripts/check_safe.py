@@ -405,10 +405,13 @@ NEW.update(CF023_INPUTS)
 NEW.update(CF023_SOURCES)
 NEW.add(CF023_FIXTURE)
 
+CF026_TESTS=("tests/unit/test_cf026_supervisor_live_controller.py",)
+NEW.update({"backend/scripts/cf026_supervisor_live_controller.py", "backend/tests/unit/test_cf026_supervisor_live_controller.py"})
+
 CF024_TESTS=("tests/unit/test_cf024_supervisor_live_verifier.py",)
 NEW.add("backend/tests/unit/test_cf024_supervisor_live_verifier.py")
 
-def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False):
+def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False, controller_only=False):
     raw = subprocess.check_output(["/usr/bin/git", "ls-files", "--stage", "-z"], cwd=repo,
                                   env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"})
     selected = set()
@@ -435,11 +438,11 @@ def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_e
     if supervisor_only:
         result={p for p in result if not p.startswith("ai/") or p in CF020_INPUTS}
     if core_only:result={p for p in result if not p.startswith("ai/") or p in CF022_INPUTS}
-    if meaning_only or assembly_only:result={p for p in result if not p.startswith("ai/") or p in CF023_INPUTS}
+    if meaning_only or assembly_only or controller_only:result={p for p in result if not p.startswith("ai/") or p in CF023_INPUTS}
     return sorted(result)
 
 
-def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False):
+def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False, controller_only=False):
     if not sys.flags.isolated or not sys.flags.no_site:
         raise UnsafeCheck("use the documented clean env -i Python -I -S launch")
     if set(os.environ) - {"LANG", "TZ", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}:
@@ -462,7 +465,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
         policy = prove_os_boundary(owned, executable, sandbox_profile(owned.path, runtime, site, executable), children)
         checkout = owned.path / "checkout"
         fingerprints = {}
-        for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only, display_only=display_only, supervisor_only=supervisor_only,core_only=core_only,meaning_only=meaning_only,assembly_only=assembly_only):
+        for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only, display_only=display_only, supervisor_only=supervisor_only,core_only=core_only,meaning_only=meaning_only,assembly_only=assembly_only,controller_only=controller_only):
             data = regular_bytes(repo, p)
             if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
@@ -478,7 +481,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
             cap = {"root": str(owned.path), "source": str(checkout / "backend"),
                    "site": str(site), "runtime": str(runtime), "mode": mode,
                    "parent_pid": os.getpid(), "lifetime": 90 if mode == "self-test" else 300,
-                   "tests": list(CF024_TESTS if assembly_only else CF023_TESTS if meaning_only else CF022_TESTS if core_only else CF020_TESTS if supervisor_only else CF019_TESTS if display_only else CF018_TESTS if usage_only else CF017_TESTS if flow_errors_only else CF015_TESTS if fundamental_only else CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only, "cf015_self_only":fundamental_only, "cf017_self_only":flow_errors_only, "cf018_self_only":usage_only, "cf019_self_only":display_only,"cf020_self_only":supervisor_only,"cf022_self_only":core_only,"cf023_self_only":meaning_only,"cf024_self_only":assembly_only}
+                   "tests": list(CF026_TESTS if controller_only else CF024_TESTS if assembly_only else CF023_TESTS if meaning_only else CF022_TESTS if core_only else CF020_TESTS if supervisor_only else CF019_TESTS if display_only else CF018_TESTS if usage_only else CF017_TESTS if flow_errors_only else CF015_TESTS if fundamental_only else CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only, "cf015_self_only":fundamental_only, "cf017_self_only":flow_errors_only, "cf018_self_only":usage_only, "cf019_self_only":display_only,"cf020_self_only":supervisor_only,"cf022_self_only":core_only,"cf023_self_only":meaning_only,"cf024_self_only":assembly_only,"cf026_self_only":controller_only}
             capfile = owned.path / "capability.json"
             capfile.write_text(json.dumps(cap))
             worker = checkout / "backend/scripts/safe_checks_bootstrap.py"
@@ -497,16 +500,16 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit", "fundamental-self", "fundamental-unit", "flow-errors-self", "flow-errors-unit", "usage-self", "usage-unit", "display-self", "display-unit", "supervisor-self", "supervisor-unit", "core-self", "core-unit", "meaning-self", "meaning-unit", "meaning-assembly-self", "meaning-assembly-unit"))
+    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit", "fundamental-self", "fundamental-unit", "flow-errors-self", "flow-errors-unit", "usage-self", "usage-unit", "display-self", "display-unit", "supervisor-self", "supervisor-unit", "core-self", "core-unit", "meaning-self", "meaning-unit", "meaning-assembly-self", "meaning-assembly-unit", "live-controller-self", "live-controller-unit"))
     values = list(sys.argv[1:] if argv is None else argv)
-    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"], ["fundamental-self"], ["fundamental-unit"], ["flow-errors-self"], ["flow-errors-unit"], ["usage-self"], ["usage-unit"], ["display-self"], ["display-unit"], ["supervisor-self"], ["supervisor-unit"], ["core-self"], ["core-unit"], ["meaning-self"], ["meaning-unit"], ["meaning-assembly-self"], ["meaning-assembly-unit"]]:
+    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"], ["fundamental-self"], ["fundamental-unit"], ["flow-errors-self"], ["flow-errors-unit"], ["usage-self"], ["usage-unit"], ["display-self"], ["display-unit"], ["supervisor-self"], ["supervisor-unit"], ["core-self"], ["core-unit"], ["meaning-self"], ["meaning-unit"], ["meaning-assembly-self"], ["meaning-assembly-unit"], ["live-controller-self"], ["live-controller-unit"]]:
         parser.error("unsupported mode or extra arguments")
     args = parser.parse_args(values)
     if args.mode == "list":
         print("self-test: synthetic guards only\nunit: fixed six complete files plus audited pure stock/technical files (no DB/external)")
         return 0
     try:
-        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self","quality-self","fundamental-self","flow-errors-self","usage-self","display-self","supervisor-self","core-self","meaning-self","meaning-assembly-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit","quality-self","quality-unit","fundamental-self","fundamental-unit","flow-errors-self","flow-errors-unit","usage-self","usage-unit","display-self","display-unit","supervisor-self","supervisor-unit","core-self","core-unit","meaning-self","meaning-unit","meaning-assembly-self","meaning-assembly-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"}, quality_only=args.mode in {"quality-self","quality-unit"}, fundamental_only=args.mode in {"fundamental-self","fundamental-unit"}, flow_errors_only=args.mode in {"flow-errors-self","flow-errors-unit"}, usage_only=args.mode in {"usage-self","usage-unit"}, display_only=args.mode in {"display-self","display-unit"}, supervisor_only=args.mode in {"supervisor-self","supervisor-unit"},core_only=args.mode in {"core-self","core-unit"},meaning_only=args.mode in {"meaning-self","meaning-unit"},assembly_only=args.mode in {"meaning-assembly-self","meaning-assembly-unit"})
+        execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode in {"analysis-self","adapter-self","quality-self","fundamental-self","flow-errors-self","usage-self","display-self","supervisor-self","core-self","meaning-self","meaning-assembly-self","live-controller-self"} else "unit",) if args.mode in {"analysis-self","analysis-unit","owned-unit","adapter-self","adapter-unit","quality-self","quality-unit","fundamental-self","fundamental-unit","flow-errors-self","flow-errors-unit","usage-self","usage-unit","display-self","display-unit","supervisor-self","supervisor-unit","core-self","core-unit","meaning-self","meaning-unit","meaning-assembly-self","meaning-assembly-unit","live-controller-self","live-controller-unit"} else MODES if args.mode is None else (args.mode,), analysis_only=args.mode in {"analysis-self","analysis-unit"}, owned_only=args.mode=="owned-unit", adapter_only=args.mode in {"adapter-self","adapter-unit"}, quality_only=args.mode in {"quality-self","quality-unit"}, fundamental_only=args.mode in {"fundamental-self","fundamental-unit"}, flow_errors_only=args.mode in {"flow-errors-self","flow-errors-unit"}, usage_only=args.mode in {"usage-self","usage-unit"}, display_only=args.mode in {"display-self","display-unit"}, supervisor_only=args.mode in {"supervisor-self","supervisor-unit"},core_only=args.mode in {"core-self","core-unit"},meaning_only=args.mode in {"meaning-self","meaning-unit"},assembly_only=args.mode in {"meaning-assembly-self","meaning-assembly-unit"},controller_only=args.mode in {"live-controller-self","live-controller-unit"})
     except (UnsafeCheck, OSError, subprocess.SubprocessError) as exc:
         print(f"SAFE_CHECK_BLOCKED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 78

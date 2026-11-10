@@ -781,7 +781,7 @@ test('CF021 exact Technical worktree alias preserves dependency identity and rej
   const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
   return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
  }
- for(const sibling of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary'])assert.equal(check(path.join(workspace,sibling,'frontend')),path.dirname(dependency));
+ for(const sibling of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display'])assert.equal(check(path.join(workspace,sibling,'frontend')),path.dirname(dependency));
  for(const root of [path.join(workspace,'verith-technical-boundary-extra','frontend'),path.join(workspace,'prefix-verith-technical-boundary','frontend'),'/other/verith-technical-boundary/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
  assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
  assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/code\/dependency identity mismatch/);
@@ -832,7 +832,7 @@ test('CF031 exact read worktree alias keeps negative provenance identity checks'
  assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
  assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
 });
-test('CF028 actual caller accepts only the four reviewed sibling aliases with the fixed dependency metadata',()=>{
+test('CF028 actual caller accepts only the five reviewed sibling aliases with the fixed dependency metadata',()=>{
  const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
  const variables=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']);
  const functions=new Set(['metadataRootFor','trusted']);
@@ -847,7 +847,7 @@ test('CF028 actual caller accepts only the four reviewed sibling aliases with th
   const limited={realpathSync(p){assert.ok(real.has(p),'finite synthetic path only: '+p);return real.get(p);},statSync(p){assert.ok(metadata.has(p),'finite synthetic metadata only');return metadata.get(p);}};
   return vm.runInNewContext(code,{path,project,fs:limited,process:{getuid:()=>1234}},{timeout:100})(codeRoot,dep);
  }
- for(const name of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary'])assert.equal(check(path.join(workspace,name,'frontend')),path.dirname(dependency));
+ for(const name of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display'])assert.equal(check(path.join(workspace,name,'frontend')),path.dirname(dependency));
  const ordinary=path.join(workspace,'ordinary','frontend');assert.equal(check(ordinary,path.join(ordinary,'node_modules')),ordinary);
  for(const root of [path.join(workspace,'arbitrary','frontend'),path.join(workspace,'verith-supervisor-verification-extra','frontend'),path.join(workspace,'prefix-verith-supervisor-verification','frontend'),'/other/verith-supervisor-verification/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
  assert.throws(()=>check(project,'/other/verith/frontend/node_modules'),/unreviewed metadata root/);
@@ -865,8 +865,68 @@ test('CF028 actual protected invocation retains separate code/metadata roots and
  assert.equal(cap.packageSnapshot.snapshot,path.join(process.cwd(),'package.json'));
  if(provenance.codeRoot!==cap.packageSnapshot.sourceRoot){
   const workspace=path.dirname(path.dirname(provenance.codeRoot));
-  assert.ok(['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary'].map(name=>path.join(workspace,name,'frontend')).includes(provenance.codeRoot));
+  assert.ok(['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display'].map(name=>path.join(workspace,name,'frontend')).includes(provenance.codeRoot));
   assert.equal(cap.dependency,path.join(workspace,'verith','frontend','node_modules'));
  }
  console.log('CF028_ROOT_PROVENANCE '+JSON.stringify({codeRootKind:path.basename(path.dirname(provenance.codeRoot)),split:provenance.codeRoot!==cap.packageSnapshot.sourceRoot,manifestSHA:provenance.manifestSHA,workerPackageOwned:cap.packageSnapshot.snapshot===path.join(process.cwd(),'package.json')}));
+});
+test('CF032 exact display selection retains prior modes and only the declared readonly graph',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalDisplayUnit,['unit/technical/boundary-display.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(caller.technicalDisplayType,['src/features/technical/components/technical-boundary-preview.tsx']);
+ assert.deepEqual(caller.technicalDisplayReadonly,['src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts','src/features/technical/lib/chart.ts','src/features/technical/components/technical-chart-panel.tsx','src/shared/lib/format.ts','tests/fixtures/cf031-technical-boundary-read.json']);
+ assert.deepEqual(caller.technicalDisplayExact,[...caller.technicalDisplayType,...caller.technicalDisplayUnit.map(p=>'tests/'+p),...caller.technicalDisplayReadonly]);
+ for(const mode of ['technical-display-unit','technical-display-type','technical-display-lint','technical-read-unit','technical-boundary-unit','core-browser'])assert.ok(caller.modes.includes(mode));
+ for(const source of caller.technicalDisplayExact)assert.equal(sourceAllowed(source),true);
+ assert.doesNotMatch(caller.technicalDisplayExact.join('\n'),/src\/app|backend\/|\.env|boundary_restore|mock-data/);
+});
+
+test('CF032 actual alias accepts only the new exact display sibling and preserves identity denials',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-technical-chart-display','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,canonical=root,uid=1234,mode=0o40755}={}){
+  const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);
+  const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
+  return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
+ }
+ assert.equal(check(project),path.dirname(dependency));
+ for(const name of ['verith-technical-chart-display-extra','prefix-verith-technical-chart-display','verith-technical-chart'])assert.throws(()=>check(path.join(workspace,name,'frontend')),/unreviewed metadata root/);
+ assert.throws(()=>check('/other/verith-technical-chart-display/frontend'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/identity mismatch/);
+ assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+
+test('CF032 actual React command checks identity before/after success and failed child without a permission grant',async()=>{
+ const {checkedReactCommand}=await import('../../scripts/check-local-ports.mjs');
+ const original=[{relative:'react/cjs/react.production.js',version:'19.2.4',size:1,sha256:'a'.repeat(64),identity:[{dev:'1',ino:'1'}]}];
+ let current=structuredClone(original),reads=0,invokes=0;
+ const proof={records:original,dependency:'/synthetic/dependency',sourceRoot:'/synthetic/source',readRecords(dep,root){assert.equal(dep,'/synthetic/dependency');assert.equal(root,'/synthetic/source');reads++;return current;}};
+ assert.equal(await checkedReactCommand(proof,async()=>{invokes++;return 'ok';}),'ok');
+ assert.equal(reads,2);assert.equal(invokes,1);
+ for(const field of ['relative','version','size','sha256','identity']){
+  current=structuredClone(original);current[0][field]='drift';
+  await assert.rejects(checkedReactCommand(proof,async()=>{invokes++;}),/React identity drift/);
+ }
+ assert.equal(invokes,1);
+ current=structuredClone(original);const childError=Error('synthetic child failure');reads=0;
+ await assert.rejects(checkedReactCommand(proof,async()=>{invokes++;throw childError;}),error=>error===childError);
+ assert.equal(reads,2);assert.equal(invokes,2);
+ current=structuredClone(original);reads=0;
+ await assert.rejects(checkedReactCommand(proof,async()=>{current[0].sha256='drift';throw childError;}),error=>error instanceof AggregateError&&error.errors[0]===childError&&/React identity drift/.test(error.errors[1].message));
+ assert.equal(reads,2);
+});
+
+test('CF032 display worker receives only five production records and no browser ports',()=>{
+ const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
+ if(!cap.cf032Display)return;
+ assert.equal(cap.workload,'unit');assert.deepEqual(cap.ports,[]);assert.ok(cap.lifetime<=120);
+ assert.equal(cap.cf022Core,undefined);assert.equal(cap.cf020Planning,undefined);
+ assert.deepEqual(cap.reactProduction.map(r=>r.relative),['react/cjs/react.production.js','react/cjs/react-jsx-runtime.production.js','react-dom/cjs/react-dom.production.js','react-dom/cjs/react-dom-client.production.js','scheduler/cjs/scheduler.production.js']);
+ for(const record of cap.reactProduction){assert.match(record.sha256,/^[0-9a-f]{64}$/);assert.ok(record.size>0);assert.match(record.version,/^\d+\.\d+\.\d+$/);}
 });

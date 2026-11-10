@@ -2,35 +2,119 @@
 import {useCallback,useEffect,useRef,useState,type ReactNode} from 'react';
 import {fetchSession,AnalysisIntent,AnalysisObservation,AnalysisAccountChanged} from '@/features/flow/lib/analysis-request';
 import {ChatView} from './chat-view';
-import {coreRequest,loadCoreRecovery,writePending,freshPending,pendingKey,matchesUrl,CoreHttpError,legacyFlowRecovery,canReplayCore,requiresReauthentication,CoreObservationTimer,clarifiedDraft,newPreparation,readPreparation,writePreparation,preparationKey,preparationRequest,canAdoptPreparation,bindPreparation,planValue,canResetConversation} from '../lib/supervisor-request';
+import {coreRequest,loadCoreRecovery,writePending,freshPending,pendingKey,matchesUrl,CoreHttpError,legacyFlowRecovery,canReplayCore,requiresReauthentication,CoreObservationTimer,clarifiedDraft,newPreparation,readPreparation,writePreparation,preparationKey,preparationRequest,canAdoptPreparation,bindPreparation,planValue,canResetConversation,hash} from '../lib/supervisor-request';
 import type {Draft,Plan,Outcome,Pending,Answer,Preparation,PreparePending} from '../model/chat';
 import '../styles/chat.css';
 const empty=():Draft=>({original_query:'',answers:[],revision:0});
 export type SessionNavigation=(href:string,replace?:boolean)=>void;
-export function SupervisorSession({supervisorId,navigate,renderLegacy}:{supervisorId:string|null;navigate:SessionNavigation;renderLegacy:()=>ReactNode}){
- const [user,setUser]=useState<string|null>(null),
-  [retry,setRetry]=useState(0),
-  [legacy,setLegacy]=useState(false);
- useEffect(()=>{const c=new AbortController(),t=setTimeout(()=>c.abort(),15000);
- let live=true;
- void fetchSession(c.signal).then(s=>{if(live&&!c.signal.aborted){setLegacy(supervisorId===null&&legacyFlowRecovery(sessionStorage,s.user_id,null));
- setUser(s.user_id);
- }}).catch(()=>{if(live)setUser(null);
- });
- return()=>{live=false;
- clearTimeout(t);
- c.abort();
- };
- },[retry,supervisorId]);
- if(!user)return <section className="supervisor-chat"><h1>Supervisor 리서치</h1><p>로그인 상태를 확인한 뒤 질문을 보여드립니다.</p><button onClick={()=>setRetry(v=>v+1)}>로그인 상태 다시 확인</button><button onClick={()=>window.location.assign('/api/auth/login')}>로그인</button></section>;
- if(legacy)return renderLegacy();
- return <Conversation key={user+':'+(supervisorId??'new')} user={user} supervisorId={supervisorId} navigate={navigate} onAccountChange={()=>{setUser(null);
- setRetry(v=>v+1);
- }}/>;
+const reauthenticationKey='verith.supervisor.reauthentication.v1';
+let tabReauthenticationRequired=false;
+const verifiedOwnerKey='verith.supervisor.verified-owner.v1';
+let tabVerifiedOwnerFingerprint:string|null=null;
+function previousVerifiedOwner(){
+ try{
+  const stored=sessionStorage.getItem(verifiedOwnerKey);
+  if(stored!==null&&!/^[0-9a-f]{64}$/.test(stored))return 'unavailable';
+  if(tabVerifiedOwnerFingerprint!==null&&stored!==null&&stored!==tabVerifiedOwnerFingerprint)return 'unavailable';
+  return tabVerifiedOwnerFingerprint??stored;
+ }catch{return 'unavailable';}
 }
-function Conversation({user,supervisorId,onAccountChange,navigate}:{user:string;
+function rememberVerifiedOwner(fingerprint:string){
+ if(!/^[0-9a-f]{64}$/.test(fingerprint))return false;
+ try{sessionStorage.setItem(verifiedOwnerKey,fingerprint);tabVerifiedOwnerFingerprint=fingerprint;return true;}catch{return false;}
+}
+
+export function storedReauthenticationRequired(read:()=>string|null){
+ try{return read()!==null;}catch{return true;}
+}
+function requiresExplicitReauthentication(){
+ return tabReauthenticationRequired||storedReauthenticationRequired(()=>sessionStorage.getItem(reauthenticationKey));
+}
+function requireReauthentication(){
+ tabReauthenticationRequired=true;
+ try{sessionStorage.setItem(reauthenticationKey,'required');}catch{/* Memory remains closed if storage is unavailable. */}
+}
+function acknowledgeReauthentication(){
+ try{sessionStorage.removeItem(reauthenticationKey);tabReauthenticationRequired=false;}catch{tabReauthenticationRequired=true;}
+}
+export function acceptsSessionGeneration(expected:number,actual:number,mounted:boolean,href:string,currentHref:string,visible:boolean){
+ return expected===actual&&mounted&&href===currentHref&&visible;
+}
+export function SupervisorSession({supervisorId,navigate,renderLegacy}:{supervisorId:string|null;navigate:SessionNavigation;renderLegacy:()=>ReactNode}){
+ const [grant,setGrant]=useState<{user:string;epoch:number;route:string|null;href:string;legacy:boolean;manual:boolean}|null>(null);
+ const [checking,setChecking]=useState(false);
+ const mounted=useRef(false),generation=useRef(0),lock=useRef(false);
+ const controller=useRef<AbortController|null>(null),deadline=useRef<ReturnType<typeof setTimeout>|null>(null);
+ const owner=useRef<string|null>(null),authHref=useRef<string|null>(null),ownerFingerprint=useRef<string|null>(null);
+ const retire=useCallback(()=>{
+  generation.current++;
+  controller.current?.abort();controller.current=null;
+  if(deadline.current!==null)clearTimeout(deadline.current);
+  deadline.current=null;lock.current=false;owner.current=null;authHref.current=null;ownerFingerprint.current=null;
+ },[]);
+ const pause=useCallback(()=>{retire();setGrant(null);setChecking(false);},[retire]);
+ const onAccountChange=useCallback((user:string,epoch:number)=>{
+  if(!mounted.current||epoch!==generation.current||owner.current!==user||authHref.current!==window.location.href)return;
+  requireReauthentication();pause();
+ },[pause]);
+ const onVerified=useCallback((user:string,epoch:number)=>{
+  if(!mounted.current||epoch!==generation.current||owner.current!==user||authHref.current!==window.location.href)return;
+  if(!ownerFingerprint.current||!rememberVerifiedOwner(ownerFingerprint.current)){requireReauthentication();pause();return;}
+  if(deadline.current!==null)clearTimeout(deadline.current);
+  deadline.current=null;lock.current=false;setChecking(false);
+  acknowledgeReauthentication();
+ },[pause]);
+ const onVerificationFailed=useCallback((user:string,epoch:number)=>{
+  if(lock.current&&mounted.current&&epoch===generation.current&&owner.current===user&&authHref.current===window.location.href){requireReauthentication();pause();}
+ },[pause]);
+ const checkSession=useCallback(async(manual=false)=>{
+  if(lock.current||!mounted.current||document.visibilityState==='hidden'||!matchesUrl(window.location.href,supervisorId))return;
+  if(!manual&&requiresExplicitReauthentication()){setGrant(null);return;}
+  retire();lock.current=true;setChecking(true);setGrant(null);
+  const epoch=generation.current,href=window.location.href,c=new AbortController();controller.current=c;authHref.current=href;
+  const current=()=>acceptsSessionGeneration(epoch,generation.current,mounted.current,href,window.location.href,document.visibilityState!=='hidden')&&!c.signal.aborted;
+  // One explicit recovery is bounded across parent authentication and child GET verification.
+  deadline.current=setTimeout(()=>{if(current()){requireReauthentication();pause();}},15000);
+  try{
+   const session=await fetchSession(c.signal);
+   if(!current())return;
+   const fingerprint=await hash(session.user_id);
+   if(!current())return;
+   const previous=previousVerifiedOwner();
+   if(!manual&&(previous==='unavailable'||previous!==null&&previous!==fingerprint)){requireReauthentication();pause();return;}
+   const legacy=supervisorId===null&&legacyFlowRecovery(sessionStorage,session.user_id,null);
+   if(!current())return;
+   owner.current=session.user_id;ownerFingerprint.current=fingerprint;
+   setGrant({user:session.user_id,epoch,route:supervisorId,href,legacy,manual});
+   if(legacy){if(!rememberVerifiedOwner(fingerprint)){requireReauthentication();pause();return;}if(deadline.current!==null)clearTimeout(deadline.current);deadline.current=null;lock.current=false;setChecking(false);acknowledgeReauthentication();}
+  }catch{if(current()){requireReauthentication();pause();}}
+ },[supervisorId,retire,pause]);
+ useEffect(()=>{
+  mounted.current=true;let href=window.location.href;
+  const hide=()=>pause();
+  const show=()=>{if(document.visibilityState!=='hidden')void checkSession();};
+  const changed=()=>{if(href!==window.location.href){href=window.location.href;pause();}};
+  const visibility=()=>document.visibilityState==='hidden'?hide():show();
+  const poll=setInterval(changed,200);
+  window.addEventListener('pagehide',hide);window.addEventListener('pageshow',show);
+  window.addEventListener('popstate',changed);window.addEventListener('hashchange',changed);
+  document.addEventListener('visibilitychange',visibility);
+  const initialGeneration=generation.current;
+  // Start after commit; an intervening hide/new attempt/unmount invalidates this startup.
+  void Promise.resolve().then(()=>{if(mounted.current&&generation.current===initialGeneration)void checkSession();});
+  return()=>{mounted.current=false;retire();clearInterval(poll);
+   window.removeEventListener('pagehide',hide);window.removeEventListener('pageshow',show);
+   window.removeEventListener('popstate',changed);window.removeEventListener('hashchange',changed);
+   document.removeEventListener('visibilitychange',visibility);
+  };
+ },[checkSession,pause,retire]);
+ if(!grant||grant.route!==supervisorId||grant.href!==window.location.href)return <section className="supervisor-chat"><h1>Supervisor 리서치</h1><p>로그인 상태를 확인한 뒤 질문을 보여드립니다. 재인증이 필요하면 직접 다시 확인해 주세요.</p><button disabled={checking} onClick={()=>void checkSession(true)}>{checking?'로그인과 요청 상태 확인 중':'로그인 상태 다시 확인'}</button><button onClick={()=>window.location.assign('/api/auth/login')}>로그인</button></section>;
+ if(grant.legacy)return renderLegacy();
+ return <Conversation key={grant.user+':'+(supervisorId??'new')+':'+grant.epoch} user={grant.user} authEpoch={grant.epoch} rechecking={checking} manualRecovery={grant.manual} supervisorId={supervisorId} navigate={navigate} onAccountChange={onAccountChange} onVerified={onVerified} onVerificationFailed={onVerificationFailed}/>;
+}
+function Conversation({user,authEpoch,rechecking,manualRecovery,supervisorId,onAccountChange,onVerified,onVerificationFailed,navigate}:{user:string;authEpoch:number;rechecking:boolean;manualRecovery:boolean;
 supervisorId:string|null;
-onAccountChange:()=>void;navigate:SessionNavigation}){
+onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:number)=>void;onVerificationFailed:(user:string,epoch:number)=>void;navigate:SessionNavigation}){
  const
   [draft,setDraft]=useState<Draft>(empty),
   [plan,setPlan]=useState<Plan|null>(null),
@@ -57,7 +141,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
  consentRef=useRef({allow:false,partial:false,waivers:[] as string[]}),
  observation=useRef(new AnalysisObservation()),
  timer=useRef(new CoreObservationTimer());
- const observedFlow=useRef<string|null>(null);
+ const observedFlow=useRef<string|null>(null),automaticObservationStarted=useRef(false);
  const restore=useRef<(manual?:boolean)=>void>(()=>{});
  const clearConsent=useCallback(()=>{consentRef.current={allow:false,partial:false,waivers:[]};
  setConsent(false);
@@ -107,7 +191,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
     if(saved){draftRef.current=saved.confirm.draft;
     setDraft(saved.confirm.draft);
     }
-    if(manual){observation.current.stop();
+    if(manual&&automaticObservationStarted.current){observation.current.stop();
     setEnded(true);
     }
     if(!known.current&&!saved){
@@ -151,19 +235,20 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
      if(!manual&&result.flow){observedFlow.current=result.flow.analysis_id;
      observation.current.begin(result.flow.analysis_id,performance.now());
      const next=observation.current.next(result.flow,performance.now(),Date.now());
-     if(next.kind!=='stop')timer.current.start(current,()=>void verify(),next.delay);
+     if(next.kind!=='stop'){automaticObservationStarted.current=true;timer.current.start(current,()=>void verify(),next.delay);}
      else if(result.flow.state==='running')setEnded(true);
      }
     }
     if(!current())return;
     verifiedHref.current=target;
     setVerified(true);
+    onVerified(user,authEpoch);
     setError(recovery.storageReadable?'':'고정 입력을 읽지 못해 GET-only로 확인합니다. POST 복구는 잠겨 있습니다.');
    }catch(e){if(current()){setVerified(false);
    setError(e instanceof CoreHttpError?e.message:'상태를 확인하지 못했습니다. 같은 ID로 GET 재조회할 수 있습니다.');
    if(requiresReauthentication(e)){invalidate();
-   onAccountChange();
-   }}}
+   onAccountChange(user,authEpoch);
+   }else onVerificationFailed(user,authEpoch);}}
    finally{clearTimeout(t);
    }
   }
@@ -182,7 +267,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
   document.addEventListener('visibilitychange',visibility);
   window.addEventListener('popstate',hide);
   window.addEventListener('hashchange',hide);
-  void verify();
+  void verify(manualRecovery);
   return()=>{disposed=true;
   active.current=false;
   clearInterval(poll);
@@ -194,7 +279,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
   window.removeEventListener('popstate',hide);
   window.removeEventListener('hashchange',hide);
   };
- },[user,supervisorId,invalidate,onAccountChange]);
+ },[user,authEpoch,supervisorId,manualRecovery,invalidate,onAccountChange,onVerified,onVerificationFailed]);
  async function edit(next:Draft){if(pending.current||known.current)return;
  if(preparing.current&&!await cancelPreparation())return;
  generation.current++;
@@ -291,7 +376,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
   }
   setError(e instanceof CoreHttpError?e.message:'응답을 확인하지 못했습니다. 확정한 입력과 키는 유지됩니다.');
   if(requiresReauthentication(e)){invalidate();
-  onAccountChange();
+  onAccountChange(user,authEpoch);
   }}}
   finally{clearTimeout(t);
   intent.current.finish(ticket);
@@ -328,7 +413,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
    setPreparation(result);
    sessionStorage.removeItem(preparationKey(user));
    return true;
-  }catch(e){if(current()){setError(e instanceof CoreHttpError?e.message:'준비 삭제를 확인하지 못했습니다. 기존 키를 보존합니다.');if(requiresReauthentication(e)){invalidate();onAccountChange();}}return false;}
+  }catch(e){if(current()){setError(e instanceof CoreHttpError?e.message:'준비 삭제를 확인하지 못했습니다. 기존 키를 보존합니다.');if(requiresReauthentication(e)){invalidate();onAccountChange(user,authEpoch);}}return false;}
   finally{clearTimeout(deadline);if(current())setBusy(false);}
  }
  async function startNew(){if(busy)return;
@@ -341,6 +426,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
  timer.current.stop();
  observation.current=new AnalysisObservation();
  observedFlow.current=null;
+ automaticObservationStarted.current=false;
  pending.current=null;
  known.current=null;
  preparing.current=null;
@@ -357,7 +443,7 @@ onAccountChange:()=>void;navigate:SessionNavigation}){
  navigate('/research',true);
  if(supervisorId===null)restore.current(true);
  }
- if(!verified)return <section className="supervisor-chat"><h1>Supervisor 리서치</h1><p>계정과 요청 상태를 다시 확인해야 합니다. 원문과 결과는 숨겨졌습니다.</p>{error&&<p role="alert">{error}</p>}<button onClick={()=>restore.current(true)}>상태 다시 확인 · GET만</button><button onClick={()=>navigate('/')}>보관함</button></section>;
+ if(!verified)return <section className="supervisor-chat"><h1>Supervisor 리서치</h1><p>계정과 요청 상태를 다시 확인해야 합니다. 원문과 결과는 숨겨졌습니다.</p>{error&&<p role="alert">{error}</p>}<button disabled={rechecking} onClick={()=>restore.current(true)}>상태 다시 확인 · GET만</button><button onClick={()=>navigate('/')}>보관함</button></section>;
  return <ChatView canStartNew={canResetConversation(pending.current,known.current,outcome)} preparation={preparation} onCancelPreparation={()=>void cancelPreparation()} draft={draft} plan={plan} outcome={outcome} busy={busy} verified={verified} locked={locked} replayable={replayable} error={error} consent={consent} partialConsent={partial} waivers={waivers} observationEnded={ended} onQuery={q=>void edit({original_query:q,answers:[],revision:0})} onPrepare={()=>void action('prepare')} onAnswer={(slot,value)=>void answer(slot,value)} onSelect={ticker=>{const next={...draftRef.current,selected_ticker:ticker,candidate_ref:planRef.current?.candidate_ref};
  clearConsent();
  void action('prepare',next,preparationRef.current?.preparation_id??null);

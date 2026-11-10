@@ -40,6 +40,42 @@ function acknowledgeReauthentication(){
 export function acceptsSessionGeneration(expected:number,actual:number,mounted:boolean,href:string,currentHref:string,visible:boolean){
  return expected===actual&&mounted&&href===currentHref&&visible;
 }
+type VerificationToken={owner:string;href:string;generation:number;controller:AbortController};
+export class ConversationVerification {
+ private token:VerificationToken|null=null;
+ get pending(){return this.token!==null;}
+ begin(token:VerificationToken){if(this.token)return false;this.token=token;return true;}
+ accepts(token:VerificationToken){return this.token===token;}
+ finish(token:VerificationToken){if(!this.accepts(token))return false;this.token=null;return true;}
+ invalidate(){this.token?.controller.abort();this.token=null;}
+}
+type FocusRequest={generation:number;owner:string;href:string;origin:HTMLElement;planHash:string|null;pendingBody:boolean};
+export class PlanFocusIntent {
+ private request:FocusRequest|null=null;
+ begin(generation:number,owner:string,href:string,origin:HTMLElement|null,body:HTMLElement){
+  this.request=origin&&origin!==body?{generation,owner,href,origin,planHash:null,pendingBody:false}:null;
+ }
+ invalidate(){this.request=null;}
+ moved(target:EventTarget|null,body:HTMLElement){
+  const request=this.request;
+  if(!request||target===request.origin)return;
+  // Disabled/removed origin is a known consequence of our pending render.
+  if(target===body&&(request.pendingBody||!request.origin.isConnected||request.origin.matches(':disabled'))){request.pendingBody=true;return;}
+  this.invalidate();
+ }
+ adopt(planHash:string){if(this.request)this.request.planHash=planHash;}
+ pendingCommit(current:Element|null,body:HTMLElement){
+  const request=this.request;
+  // Native blur can happen after the pending commit without a body focusin.
+  // Preserve only the observed disabled/removed origin, never an arbitrary body/HTML.
+  if(request&&(current===request.origin||current===body)&&(!request.origin.isConnected||request.origin.matches(':disabled')))request.pendingBody=true;
+ }
+ consume(planHash:string,generation:number,owner:string,href:string,current:Element|null,body:HTMLElement){
+  const request=this.request;this.request=null;
+  return Boolean(request&&request.planHash===planHash&&request.generation===generation&&request.owner===owner&&request.href===href&&
+   (current===request.origin||current===body&&(request.pendingBody||!request.origin.isConnected||request.origin.matches(':disabled'))));
+ }
+}
 export function SupervisorSession({supervisorId,navigate,renderLegacy}:{supervisorId:string|null;navigate:SessionNavigation;renderLegacy:()=>ReactNode}){
  const [grant,setGrant]=useState<{user:string;epoch:number;route:string|null;href:string;legacy:boolean;manual:boolean}|null>(null);
  const [checking,setChecking]=useState(false);
@@ -120,6 +156,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   [plan,setPlan]=useState<Plan|null>(null),
   [outcome,setOutcome]=useState<Outcome|null>(null),
   [busy,setBusy]=useState(false),
+  [verificationPending,setVerificationPending]=useState(false),
   [verified,setVerified]=useState(false),
   [locked,setLocked]=useState(Boolean(supervisorId)),
   [error,setError]=useState(''),
@@ -143,12 +180,18 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
  timer=useRef(new CoreObservationTimer());
  const observedFlow=useRef<string|null>(null),automaticObservationStarted=useRef(false);
  const restore=useRef<(manual?:boolean)=>void>(()=>{});
+ const verification=useRef(new ConversationVerification()),planFocus=useRef(new PlanFocusIntent());
+ const commandPending=useRef(false),focusMovement=useRef(0);
  const clearConsent=useCallback(()=>{consentRef.current={allow:false,partial:false,waivers:[]};
  setConsent(false);
  setPartial(false);
  setWaivers([]);
  },[]);
  const invalidate=useCallback(()=>{generation.current++;
+ verification.current.invalidate();
+ planFocus.current.invalidate();
+ setVerificationPending(false);
+ commandPending.current=false;
  intent.current.invalidate();
  controller.current?.abort();
  timer.current.stop();
@@ -169,14 +212,20 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   active.current=true;
   let disposed=false,href=window.location.href;
   async function verify(manual=false){
-   if(!active.current||document.visibilityState==='hidden'||!matchesUrl(window.location.href,supervisorId))return;
+   if(verification.current.pending||commandPending.current||!active.current||document.visibilityState==='hidden'||!matchesUrl(window.location.href,supervisorId))return;
+   const c=new AbortController(),rev=generation.current+1,target=window.location.href;
+   const token={owner:user,href:target,generation:rev,controller:c};
+   if(!verification.current.begin(token))return;
+   setVerificationPending(true);
+   planFocus.current.invalidate();
    timer.current.stop();
    controller.current?.abort();
    intent.current.invalidate();
-   const c=new AbortController(),rev=++generation.current,target=window.location.href;
+   generation.current=rev;
    controller.current=c;
    const t=setTimeout(()=>c.abort(),15000);
-   const current=()=>!disposed&&active.current&&generation.current===rev&&window.location.href===target&&document.visibilityState!=='hidden';
+   const contextCurrent=()=>!disposed&&active.current&&generation.current===rev&&window.location.href===target&&document.visibilityState!=='hidden';
+   const current=()=>verification.current.accepts(token)&&contextCurrent();
    try{
     const session=await fetchSession(c.signal);
     if(!current()||c.signal.aborted)return;
@@ -235,7 +284,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
      if(!manual&&result.flow){observedFlow.current=result.flow.analysis_id;
      observation.current.begin(result.flow.analysis_id,performance.now());
      const next=observation.current.next(result.flow,performance.now(),Date.now());
-     if(next.kind!=='stop'){automaticObservationStarted.current=true;timer.current.start(current,()=>void verify(),next.delay);}
+     if(next.kind!=='stop'){automaticObservationStarted.current=true;timer.current.start(contextCurrent,()=>void verify(),next.delay);}
      else if(result.flow.state==='running')setEnded(true);
      }
     }
@@ -250,6 +299,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
    onAccountChange(user,authEpoch);
    }else onVerificationFailed(user,authEpoch);}}
    finally{clearTimeout(t);
+    if(verification.current.finish(token))setVerificationPending(false);
    }
   }
   restore.current=(manual=false)=>void verify(manual);
@@ -280,7 +330,24 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   window.removeEventListener('hashchange',hide);
   };
  },[user,authEpoch,supervisorId,manualRecovery,invalidate,onAccountChange,onVerified,onVerificationFailed]);
- async function edit(next:Draft){if(pending.current||known.current)return;
+ useEffect(()=>{
+  const focusIntent=planFocus.current;
+  const key=(event:KeyboardEvent)=>{if(event.key==='Tab'){focusMovement.current++;focusIntent.invalidate();}};
+  const pointer=()=>{focusMovement.current++;focusIntent.invalidate();};
+  const focus=(event:FocusEvent)=>{if(event.target!==document.body)focusMovement.current++;focusIntent.moved(event.target,document.body);};
+  document.addEventListener('keydown',key,true);
+  document.addEventListener('pointerdown',pointer,true);
+  document.addEventListener('focusin',focus,true);
+  window.addEventListener('blur',pointer);
+  return()=>{focusIntent.invalidate();document.removeEventListener('keydown',key,true);document.removeEventListener('pointerdown',pointer,true);document.removeEventListener('focusin',focus,true);window.removeEventListener('blur',pointer);};
+ },[]);
+ const onPlanCommit=useCallback((value:Plan,heading:HTMLHeadingElement)=>{
+  if(!active.current||document.visibilityState==='hidden'||!document.hasFocus()||verifiedHref.current!==window.location.href||!matchesUrl(window.location.href,supervisorId)||planRef.current!==value){planFocus.current.invalidate();return;}
+  if(planFocus.current.consume(value.plan_hash,generation.current,user,window.location.href,document.activeElement,document.body))heading.focus({preventScroll:true});
+ },[user,supervisorId]);
+ const onPendingCommit=useCallback(()=>planFocus.current.pendingCommit(document.activeElement,document.body),[]);
+ async function edit(next:Draft){if(verification.current.pending||pending.current||known.current)return;
+ planFocus.current.invalidate();
  if(preparing.current&&!await cancelPreparation())return;
  generation.current++;
  intent.current.invalidate();
@@ -292,7 +359,8 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
  draftRef.current=next;
  setDraft(next);
  }
- async function action(kind:'prepare'|'confirm',nextDraft?:Draft,parentId:string|null=null){
+ async function action(kind:'prepare'|'confirm',nextDraft?:Draft,parentId:string|null=null,focusStart?:{origin:HTMLElement|null;movement:number}){
+  if(verification.current.pending)return;
   if(!verified||verifiedHref.current!==window.location.href||!active.current||document.visibilityState==='hidden'||!matchesUrl(window.location.href,supervisorId))return;
   if(kind==='prepare'&&(pending.current||known.current))return;
   if(kind==='confirm'&&known.current&&!canReplayCore(known.current,pending.current))return;
@@ -302,6 +370,10 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   const ticket=intent.current.begin();
   if(ticket===null)return;
   const rev=++generation.current,target=window.location.href,c=new AbortController();
+  const previousPlanHash=planRef.current?.plan_hash;
+  planFocus.current.invalidate();
+  if(kind==='prepare'&&(!focusStart||focusStart.movement===focusMovement.current))planFocus.current.begin(rev,user,target,focusStart?focusStart.origin:document.activeElement instanceof HTMLElement?document.activeElement:null,document.body);
+  commandPending.current=true;
   controller.current?.abort();
   controller.current=c;
   setBusy(true);
@@ -337,6 +409,8 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
     draftRef.current=saved.body.draft;
     setDraft(saved.body.draft);
     planRef.current=result.plan;
+    if(result.plan&&result.plan.plan_hash!==previousPlanHash&&result.state!=='consumed')planFocus.current.adopt(result.plan.plan_hash);
+    else planFocus.current.invalidate();
     setPlan(result.plan);
     if(result.state==='consumed'&&result.consumed_binding_id){known.current=result.consumed_binding_id;setLocked(true);setReplayable(false);navigate('/research?supervisor_id='+result.consumed_binding_id,true);}
    }else{
@@ -366,6 +440,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
     navigate('/research?supervisor_id='+result.supervisor_id,true);
    }
   }catch(e){if(current()){
+  planFocus.current.invalidate();
   if(kind==='confirm'&&e instanceof CoreHttpError&&e.status===409&&['PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED'].includes(e.code)&&!known.current){
    // The server checks binding replay first. This explicit rejection proves first adoption did not create our binding.
    sessionStorage.removeItem(pendingKey(user));
@@ -380,17 +455,20 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   }}}
   finally{clearTimeout(t);
   intent.current.finish(ticket);
-  if(rev===generation.current)setBusy(false);
+  if(rev===generation.current){commandPending.current=false;setBusy(false);}
   }
  }
- async function answer(slot:Answer['slot'],value:string){if(draftRef.current.revision>=4||draftRef.current.answers.length>=8)return;
+ async function answer(slot:Answer['slot'],value:string){if(verification.current.pending||draftRef.current.revision>=4||draftRef.current.answers.length>=8)return;
+ const focusStart={origin:document.activeElement instanceof HTMLElement?document.activeElement:null,movement:focusMovement.current};
  const next=clarifiedDraft(draftRef.current,slot,value);
  await edit(next);
- if(draftRef.current===next)void action('prepare',next);
+ if(draftRef.current===next)void action('prepare',next,null,focusStart);
  }
  async function cancelPreparation(){
-  if(pending.current||known.current)return false;
+  if(verification.current.pending||pending.current||known.current)return false;
+  planFocus.current.invalidate();
   generation.current++;
+  commandPending.current=false;
   intent.current.invalidate();
   controller.current?.abort();
   timer.current.stop();
@@ -404,6 +482,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   controller.current=c;
   const current=()=>active.current&&generation.current===rev&&window.location.href===target&&document.visibilityState!=='hidden';
   const deadline=setTimeout(()=>c.abort(),16000);
+  commandPending.current=true;
   setBusy(true);
   try{
    const result=await preparationRequest('delete',saved.preparation_id,user,c.signal,current);
@@ -414,9 +493,10 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
    sessionStorage.removeItem(preparationKey(user));
    return true;
   }catch(e){if(current()){setError(e instanceof CoreHttpError?e.message:'준비 삭제를 확인하지 못했습니다. 기존 키를 보존합니다.');if(requiresReauthentication(e)){invalidate();onAccountChange(user,authEpoch);}}return false;}
-  finally{clearTimeout(deadline);if(current())setBusy(false);}
+  finally{clearTimeout(deadline);if(current()){commandPending.current=false;setBusy(false);}}
  }
- async function startNew(){if(busy)return;
+ async function startNew(){if(verification.current.pending||busy)return;
+ planFocus.current.invalidate();
  if(!canResetConversation(pending.current,known.current,outcomeRef.current)){setError('미확정 실행과 같은 키 복구 입력을 보존합니다. 기존 요청 상태 또는 snapshot 게시를 먼저 확인해 주세요.');return;}
  const completed=Boolean(outcomeRef.current||preparationRef.current?.state==='consumed');
  if(!completed&&preparing.current&&!await cancelPreparation())return;
@@ -443,15 +523,15 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
  navigate('/research',true);
  if(supervisorId===null)restore.current(true);
  }
- if(!verified)return <section className="supervisor-chat"><h1>Supervisor 리서치</h1><p>계정과 요청 상태를 다시 확인해야 합니다. 원문과 결과는 숨겨졌습니다.</p>{error&&<p role="alert">{error}</p>}<button disabled={rechecking} onClick={()=>restore.current(true)}>상태 다시 확인 · GET만</button><button onClick={()=>navigate('/')}>보관함</button></section>;
- return <ChatView canStartNew={canResetConversation(pending.current,known.current,outcome)} preparation={preparation} onCancelPreparation={()=>void cancelPreparation()} draft={draft} plan={plan} outcome={outcome} busy={busy} verified={verified} locked={locked} replayable={replayable} error={error} consent={consent} partialConsent={partial} waivers={waivers} observationEnded={ended} onQuery={q=>void edit({original_query:q,answers:[],revision:0})} onPrepare={()=>void action('prepare')} onAnswer={(slot,value)=>void answer(slot,value)} onSelect={ticker=>{const next={...draftRef.current,selected_ticker:ticker,candidate_ref:planRef.current?.candidate_ref};
+ if(!verified)return <section className="supervisor-chat" aria-busy={verificationPending}><h1>Supervisor 리서치</h1><p>계정과 요청 상태를 다시 확인해야 합니다. 원문과 결과는 숨겨졌습니다.</p>{error&&<p role="alert">{error}</p>}{verificationPending&&<p role="status">상태 확인 중 · 실행 없음</p>}<button disabled={rechecking||verificationPending} onClick={()=>restore.current(true)}>상태 다시 확인 · GET만</button><button onClick={()=>navigate('/')}>보관함</button></section>;
+ return <ChatView onPendingCommit={onPendingCommit} onPlanCommit={onPlanCommit} verificationPending={verificationPending} canStartNew={canResetConversation(pending.current,known.current,outcome)} preparation={preparation} onCancelPreparation={()=>void cancelPreparation()} draft={draft} plan={plan} outcome={outcome} busy={busy} verified={verified} locked={locked} replayable={replayable} error={error} consent={consent} partialConsent={partial} waivers={waivers} observationEnded={ended} onQuery={q=>void edit({original_query:q,answers:[],revision:0})} onPrepare={()=>void action('prepare')} onAnswer={(slot,value)=>void answer(slot,value)} onSelect={ticker=>{if(verification.current.pending)return;const next={...draftRef.current,selected_ticker:ticker,candidate_ref:planRef.current?.candidate_ref};
  clearConsent();
  void action('prepare',next,preparationRef.current?.preparation_id??null);
- }} onConsent={v=>{consentRef.current.allow=v;
+ }} onConsent={v=>{if(verification.current.pending)return;consentRef.current.allow=v;
  setConsent(v);
- }} onPartial={v=>{consentRef.current.partial=v;
+ }} onPartial={v=>{if(verification.current.pending)return;consentRef.current.partial=v;
  setPartial(v);
- }} onWaiver={(id,v)=>{const next=v?[...consentRef.current.waivers.filter(x=>x!==id),id]:consentRef.current.waivers.filter(x=>x!==id);
+ }} onWaiver={(id,v)=>{if(verification.current.pending)return;const next=v?[...consentRef.current.waivers.filter(x=>x!==id),id]:consentRef.current.waivers.filter(x=>x!==id);
  consentRef.current.waivers=next;
  setWaivers(next);
  }} onConfirm={()=>void action('confirm')} onObserve={()=>restore.current(true)} onNew={()=>void startNew()} onArchive={()=>navigate('/')}/>;

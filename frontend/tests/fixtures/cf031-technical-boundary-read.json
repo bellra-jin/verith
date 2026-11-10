@@ -1,0 +1,911 @@
+{
+  "synthetic": true,
+  "expected": {
+    "request": {
+      "schema_version": "analysis.agent.v1",
+      "request_id": "00000000-0000-4000-8000-000000000001",
+      "trace_id": "00000000-0000-4000-8000-000000000002",
+      "data": {
+        "operation": "technical.boundary.v1",
+        "context": {
+          "analysis_id": "00000000-0000-4000-8000-000000000003",
+          "admission_request_id": "00000000-0000-4000-8000-000000000004",
+          "attempt_id": "00000000-0000-4000-8000-000000000005",
+          "report_id": "00000000-0000-4000-8000-000000000006",
+          "input_fingerprint": "686afe4cdb3fff08bce2219ec49c4c29586a4f4b67748c65bd36c75ac64b1bf9"
+        },
+        "original_query": "  삼성전자 이동평균과 RSI 차트 분석  ",
+        "stock": {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "market": "KOSPI"
+        },
+        "requested_views": [
+          "technical"
+        ],
+        "requested_as_of": "2026-11-09T00:00:00+00:00",
+        "conditions": {
+          "profile": "technical.multiframe.v1",
+          "periods": [
+            "3m",
+            "1y",
+            "5y"
+          ]
+        }
+      },
+      "error": null
+    },
+    "request_sha256": "f4ff2e500737054aca9a76604858ea6ab99054425e3eadfcea8b52dc5b9d2109"
+  },
+  "response": {
+    "schema_version": "analysis.agent.v1",
+    "request_id": "00000000-0000-4000-8000-000000000001",
+    "trace_id": "00000000-0000-4000-8000-000000000002",
+    "data": {
+      "request_snapshot": {
+        "operation": "technical.boundary.v1",
+        "context": {
+          "analysis_id": "00000000-0000-4000-8000-000000000003",
+          "admission_request_id": "00000000-0000-4000-8000-000000000004",
+          "attempt_id": "00000000-0000-4000-8000-000000000005",
+          "report_id": "00000000-0000-4000-8000-000000000006",
+          "input_fingerprint": "686afe4cdb3fff08bce2219ec49c4c29586a4f4b67748c65bd36c75ac64b1bf9"
+        },
+        "original_query": "  삼성전자 이동평균과 RSI 차트 분석  ",
+        "stock": {
+          "stock_code": "005930",
+          "stock_name": "삼성전자",
+          "market": "KOSPI"
+        },
+        "requested_views": [
+          "technical"
+        ],
+        "requested_as_of": "2026-11-09T00:00:00+00:00",
+        "conditions": {
+          "profile": "technical.multiframe.v1",
+          "periods": [
+            "3m",
+            "1y",
+            "5y"
+          ]
+        }
+      },
+      "request_sha256": "f4ff2e500737054aca9a76604858ea6ab99054425e3eadfcea8b52dc5b9d2109",
+      "result": {
+        "request_id": "00000000-0000-4000-8000-000000000001",
+        "ticker": "005930",
+        "as_of": "2026-11-09T00:00:00+00:00",
+        "trace_id": "00000000-0000-4000-8000-000000000002",
+        "source": "KIS",
+        "data_status": "data_limited",
+        "regime": {
+          "daily_regime": "unavailable",
+          "final_regime": "unavailable",
+          "weekly_trend": "unavailable",
+          "monthly_trend": "unavailable",
+          "alignment_flag": "neutral",
+          "regime_context": "합성 경계 자료"
+        },
+        "signal": {
+          "consensus": "neutral",
+          "signal_score": 0,
+          "confidence": 0,
+          "confidence_level": "low",
+          "confidence_basis": "합성"
+        },
+        "technical_signals": [
+          {
+            "indicator": "rsi",
+            "signal": "neutral",
+            "value": null,
+            "metrics": [],
+            "detail": "합성",
+            "detail_source": "template_fallback",
+            "weight": 0
+          }
+        ],
+        "risk": null,
+        "charts": [
+          {
+            "period": "3m",
+            "chart_data": {
+              "candle_unit": "D",
+              "candles": [
+                {
+                  "date": "2026-11-05",
+                  "open": 100,
+                  "high": 105,
+                  "low": 99,
+                  "close": 102,
+                  "volume": 0,
+                  "trading_value": 0
+                },
+                {
+                  "date": "2026-11-06",
+                  "open": 100,
+                  "high": 105,
+                  "low": 99,
+                  "close": 102,
+                  "volume": 0,
+                  "trading_value": 0
+                }
+              ],
+              "overlays": {
+                "moving_average": [
+                  {
+                    "window": 5,
+                    "points": [
+                      {
+                        "date": "2026-11-06",
+                        "value": 0
+                      }
+                    ]
+                  }
+                ],
+                "support_resistance": []
+              },
+              "subcharts": {
+                "rsi": {
+                  "period": 14,
+                  "overbought": 70,
+                  "oversold": 30,
+                  "points": [
+                    {
+                      "date": "2026-11-06",
+                      "value": 0
+                    }
+                  ]
+                },
+                "volume": {
+                  "avg_window": 20,
+                  "bars": [
+                    {
+                      "date": "2026-11-06",
+                      "volume": 0,
+                      "avg_volume": null,
+                      "is_spike": false
+                    }
+                  ]
+                }
+              },
+              "annotations": [
+                {
+                  "id": "price",
+                  "kind": "golden_cross",
+                  "date": "2026-11-06",
+                  "price": 102,
+                  "label": "합성 교차",
+                  "importance": "medium",
+                  "source": "code",
+                  "meta": {
+                    "original": 0
+                  }
+                },
+                {
+                  "id": "level",
+                  "kind": "support_touch",
+                  "date": "2026-11-06",
+                  "price": 99,
+                  "label": "합성 지지",
+                  "importance": "high",
+                  "source": "code",
+                  "meta": {}
+                },
+                {
+                  "id": "rsi",
+                  "kind": "rsi_oversold",
+                  "date": "2026-11-06",
+                  "price": null,
+                  "label": "합성 RSI",
+                  "importance": "low",
+                  "source": "code",
+                  "meta": {
+                    "rsi": 0
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "period": "1y",
+            "chart_data": {
+              "candle_unit": "D",
+              "candles": [],
+              "overlays": {
+                "moving_average": [],
+                "support_resistance": []
+              },
+              "subcharts": {
+                "rsi": {
+                  "period": 14,
+                  "overbought": 70,
+                  "oversold": 30,
+                  "points": []
+                },
+                "volume": {
+                  "avg_window": 20,
+                  "bars": []
+                }
+              },
+              "annotations": []
+            }
+          },
+          {
+            "period": "5y",
+            "chart_data": {
+              "candle_unit": "W",
+              "candles": [
+                {
+                  "date": "2026-11-02",
+                  "open": 100,
+                  "high": 105,
+                  "low": 99,
+                  "close": 102,
+                  "volume": 0,
+                  "trading_value": 0
+                }
+              ],
+              "overlays": {
+                "moving_average": [
+                  {
+                    "window": 5,
+                    "points": [
+                      {
+                        "date": "2026-11-02",
+                        "value": 0
+                      }
+                    ]
+                  }
+                ],
+                "support_resistance": []
+              },
+              "subcharts": {
+                "rsi": {
+                  "period": 14,
+                  "overbought": 70,
+                  "oversold": 30,
+                  "points": [
+                    {
+                      "date": "2026-11-02",
+                      "value": 0
+                    }
+                  ]
+                },
+                "volume": {
+                  "avg_window": 20,
+                  "bars": [
+                    {
+                      "date": "2026-11-02",
+                      "volume": 0,
+                      "avg_volume": null,
+                      "is_spike": false
+                    }
+                  ]
+                }
+              },
+              "annotations": [
+                {
+                  "id": "price",
+                  "kind": "golden_cross",
+                  "date": "2026-11-02",
+                  "price": 102,
+                  "label": "합성 교차",
+                  "importance": "medium",
+                  "source": "code",
+                  "meta": {
+                    "original": 0
+                  }
+                },
+                {
+                  "id": "level",
+                  "kind": "support_touch",
+                  "date": "2026-11-02",
+                  "price": 99,
+                  "label": "합성 지지",
+                  "importance": "high",
+                  "source": "code",
+                  "meta": {}
+                },
+                {
+                  "id": "rsi",
+                  "kind": "rsi_oversold",
+                  "date": "2026-11-02",
+                  "price": null,
+                  "label": "합성 RSI",
+                  "importance": "low",
+                  "source": "code",
+                  "meta": {
+                    "rsi": 0
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "interpretation": {
+          "text": "합성 주입 결과",
+          "source": "template_fallback"
+        },
+        "verification": {
+          "calc_passed": true,
+          "regime_passed": true,
+          "label_matched": true,
+          "outcome": "template_fallback",
+          "regen_count": 0
+        },
+        "resolved_stock_name": "엔진 표시 보조값"
+      },
+      "coverage": {
+        "requested_periods": [
+          "3m",
+          "1y",
+          "5y"
+        ],
+        "available_periods": [
+          "3m",
+          "5y"
+        ],
+        "periods": [
+          {
+            "period": "3m",
+            "candle_unit": "D",
+            "start": "2026-11-05",
+            "end": "2026-11-06",
+            "count": 2,
+            "status": "available"
+          },
+          {
+            "period": "1y",
+            "candle_unit": "D",
+            "start": null,
+            "end": null,
+            "count": 0,
+            "status": "empty"
+          },
+          {
+            "period": "5y",
+            "candle_unit": "W",
+            "start": "2026-11-02",
+            "end": "2026-11-02",
+            "count": 1,
+            "status": "available"
+          }
+        ],
+        "cutoff_validation": "unverified",
+        "engine_generated_at": null,
+        "source_published_at": null,
+        "unreported_reason": "engine_does_not_report"
+      },
+      "execution_mode": "synthetic",
+      "boundary_observed_at": "2026-11-09T00:00:01+00:00"
+    },
+    "error": null
+  },
+  "expected_preview": {
+    "report_id": "00000000-0000-4000-8000-000000000006",
+    "stock": {
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
+      "market": "KOSPI"
+    },
+    "available_periods": [
+      "3m",
+      "5y"
+    ],
+    "charts": [
+      {
+        "period": "3m",
+        "candle_unit": "D",
+        "display_order": 0,
+        "has_chart_data": true,
+        "annotation_count": 3,
+        "chart_data": {
+          "candle_unit": "D",
+          "candles": [
+            {
+              "date": "2026-11-05",
+              "open": 100,
+              "high": 105,
+              "low": 99,
+              "close": 102,
+              "volume": 0,
+              "trading_value": 0
+            },
+            {
+              "date": "2026-11-06",
+              "open": 100,
+              "high": 105,
+              "low": 99,
+              "close": 102,
+              "volume": 0,
+              "trading_value": 0
+            }
+          ],
+          "overlays": {
+            "moving_average": [
+              {
+                "window": 5,
+                "points": [
+                  {
+                    "date": "2026-11-06",
+                    "value": 0
+                  }
+                ]
+              }
+            ],
+            "support_resistance": []
+          },
+          "subcharts": {
+            "rsi": {
+              "period": 14,
+              "overbought": 70,
+              "oversold": 30,
+              "points": [
+                {
+                  "date": "2026-11-06",
+                  "value": 0
+                }
+              ]
+            },
+            "volume": {
+              "avg_window": 20,
+              "bars": [
+                {
+                  "date": "2026-11-06",
+                  "volume": 0,
+                  "avg_volume": null,
+                  "is_spike": false
+                }
+              ]
+            }
+          },
+          "annotations": [
+            {
+              "id": "price",
+              "kind": "golden_cross",
+              "date": "2026-11-06",
+              "price": 102,
+              "label": "합성 교차",
+              "importance": "medium",
+              "source": "code",
+              "meta": {
+                "original": 0
+              }
+            },
+            {
+              "id": "level",
+              "kind": "support_touch",
+              "date": "2026-11-06",
+              "price": 99,
+              "label": "합성 지지",
+              "importance": "high",
+              "source": "code",
+              "meta": {}
+            },
+            {
+              "id": "rsi",
+              "kind": "rsi_oversold",
+              "date": "2026-11-06",
+              "price": null,
+              "label": "합성 RSI",
+              "importance": "low",
+              "source": "code",
+              "meta": {
+                "rsi": 0
+              }
+            }
+          ]
+        },
+        "annotations": [
+          {
+            "id": "price",
+            "kind": "golden_cross",
+            "date": "2026-11-06",
+            "price": 102,
+            "label": "합성 교차",
+            "importance": "medium",
+            "source": "code",
+            "meta": {
+              "original": 0
+            }
+          },
+          {
+            "id": "level",
+            "kind": "support_touch",
+            "date": "2026-11-06",
+            "price": 99,
+            "label": "합성 지지",
+            "importance": "high",
+            "source": "code",
+            "meta": {}
+          },
+          {
+            "id": "rsi",
+            "kind": "rsi_oversold",
+            "date": "2026-11-06",
+            "price": null,
+            "label": "합성 RSI",
+            "importance": "low",
+            "source": "code",
+            "meta": {
+              "rsi": 0
+            }
+          }
+        ]
+      },
+      {
+        "period": "1y",
+        "candle_unit": "D",
+        "display_order": 1,
+        "has_chart_data": false,
+        "annotation_count": 0,
+        "chart_data": {
+          "candle_unit": "D",
+          "candles": [],
+          "overlays": {
+            "moving_average": [],
+            "support_resistance": []
+          },
+          "subcharts": {
+            "rsi": {
+              "period": 14,
+              "overbought": 70,
+              "oversold": 30,
+              "points": []
+            },
+            "volume": {
+              "avg_window": 20,
+              "bars": []
+            }
+          },
+          "annotations": []
+        },
+        "annotations": []
+      },
+      {
+        "period": "5y",
+        "candle_unit": "W",
+        "display_order": 2,
+        "has_chart_data": true,
+        "annotation_count": 3,
+        "chart_data": {
+          "candle_unit": "W",
+          "candles": [
+            {
+              "date": "2026-11-02",
+              "open": 100,
+              "high": 105,
+              "low": 99,
+              "close": 102,
+              "volume": 0,
+              "trading_value": 0
+            }
+          ],
+          "overlays": {
+            "moving_average": [
+              {
+                "window": 5,
+                "points": [
+                  {
+                    "date": "2026-11-02",
+                    "value": 0
+                  }
+                ]
+              }
+            ],
+            "support_resistance": []
+          },
+          "subcharts": {
+            "rsi": {
+              "period": 14,
+              "overbought": 70,
+              "oversold": 30,
+              "points": [
+                {
+                  "date": "2026-11-02",
+                  "value": 0
+                }
+              ]
+            },
+            "volume": {
+              "avg_window": 20,
+              "bars": [
+                {
+                  "date": "2026-11-02",
+                  "volume": 0,
+                  "avg_volume": null,
+                  "is_spike": false
+                }
+              ]
+            }
+          },
+          "annotations": [
+            {
+              "id": "price",
+              "kind": "golden_cross",
+              "date": "2026-11-02",
+              "price": 102,
+              "label": "합성 교차",
+              "importance": "medium",
+              "source": "code",
+              "meta": {
+                "original": 0
+              }
+            },
+            {
+              "id": "level",
+              "kind": "support_touch",
+              "date": "2026-11-02",
+              "price": 99,
+              "label": "합성 지지",
+              "importance": "high",
+              "source": "code",
+              "meta": {}
+            },
+            {
+              "id": "rsi",
+              "kind": "rsi_oversold",
+              "date": "2026-11-02",
+              "price": null,
+              "label": "합성 RSI",
+              "importance": "low",
+              "source": "code",
+              "meta": {
+                "rsi": 0
+              }
+            }
+          ]
+        },
+        "annotations": [
+          {
+            "id": "price",
+            "kind": "golden_cross",
+            "date": "2026-11-02",
+            "price": 102,
+            "label": "합성 교차",
+            "importance": "medium",
+            "source": "code",
+            "meta": {
+              "original": 0
+            }
+          },
+          {
+            "id": "level",
+            "kind": "support_touch",
+            "date": "2026-11-02",
+            "price": 99,
+            "label": "합성 지지",
+            "importance": "high",
+            "source": "code",
+            "meta": {}
+          },
+          {
+            "id": "rsi",
+            "kind": "rsi_oversold",
+            "date": "2026-11-02",
+            "price": null,
+            "label": "합성 RSI",
+            "importance": "low",
+            "source": "code",
+            "meta": {
+              "rsi": 0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "owner_user_id": "00000000-0000-4000-8000-000000000007",
+  "caller_input_json": "{\"caller_payload\":\"opaque canonical input\",\"operation\":\"caller.technical.v1\"}",
+  "attacks": [
+    {
+      "name": "extra-envelope",
+      "path": [
+        "extra"
+      ],
+      "value": 1
+    },
+    {
+      "name": "response-id",
+      "path": [
+        "request_id"
+      ],
+      "value": "10000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "trace-id",
+      "path": [
+        "trace_id"
+      ],
+      "value": "10000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "digest",
+      "path": [
+        "data",
+        "request_sha256"
+      ],
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "query",
+      "path": [
+        "data",
+        "request_snapshot",
+        "original_query"
+      ],
+      "value": "changed"
+    },
+    {
+      "name": "fingerprint",
+      "path": [
+        "data",
+        "request_snapshot",
+        "context",
+        "input_fingerprint"
+      ],
+      "value": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "condition",
+      "path": [
+        "data",
+        "request_snapshot",
+        "conditions",
+        "profile"
+      ],
+      "value": "other"
+    },
+    {
+      "name": "stock",
+      "path": [
+        "data",
+        "request_snapshot",
+        "stock",
+        "stock_code"
+      ],
+      "value": "000660"
+    },
+    {
+      "name": "report",
+      "path": [
+        "data",
+        "request_snapshot",
+        "context",
+        "report_id"
+      ],
+      "value": "10000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "coverage",
+      "path": [
+        "data",
+        "coverage",
+        "periods",
+        0,
+        "count"
+      ],
+      "value": 3
+    },
+    {
+      "name": "cutoff",
+      "path": [
+        "data",
+        "coverage",
+        "cutoff_validation"
+      ],
+      "value": "verified"
+    },
+    {
+      "name": "observed",
+      "path": [
+        "data",
+        "boundary_observed_at"
+      ],
+      "value": "2026-02-30T00:00:00Z"
+    },
+    {
+      "name": "string-price",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "chart_data",
+        "candles",
+        0,
+        "open"
+      ],
+      "value": "100"
+    },
+    {
+      "name": "bool-volume",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "chart_data",
+        "candles",
+        0,
+        "volume"
+      ],
+      "value": false
+    },
+    {
+      "name": "bad-date",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "chart_data",
+        "candles",
+        0,
+        "date"
+      ],
+      "value": "2026-02-30"
+    },
+    {
+      "name": "period",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "period"
+      ],
+      "value": "1d"
+    },
+    {
+      "name": "unit",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "chart_data",
+        "candle_unit"
+      ],
+      "value": "W"
+    },
+    {
+      "name": "annotation",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "chart_data",
+        "annotations",
+        0,
+        "source"
+      ],
+      "value": "llm"
+    },
+    {
+      "name": "extra-chart",
+      "path": [
+        "data",
+        "result",
+        "charts",
+        0,
+        "chart_data",
+        "extra"
+      ],
+      "value": 0
+    }
+  ],
+  "raw_text_attacks": [
+    "{\"a\":1,\"a\":2}",
+    "{\"a\":NaN}",
+    "{\"a\":1e999}",
+    "{broken",
+    "{ \"a\":1 }"
+  ],
+  "numeric_texts": [
+    "{\"value\":0}",
+    "{\"value\":-0.0}",
+    "{\"value\":null}"
+  ]
+}

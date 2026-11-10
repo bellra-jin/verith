@@ -789,3 +789,46 @@ test('CF021 exact Technical worktree alias preserves dependency identity and rej
  assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
  assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
 });
+
+test('CF031 read modes select exact pure decoder inputs and preserve CF021 selection',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalReadUnit,['unit/technical/boundary-read.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(caller.technicalReadType,['src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts']);
+ assert.deepEqual(caller.technicalReadExact,[...caller.technicalReadType,...caller.technicalReadUnit.map(p=>'tests/'+p),'src/features/technical/lib/chart.ts','tests/fixtures/cf031-technical-boundary-read.json']);
+ for(const name of caller.technicalReadExact)assert.equal(sourceAllowed(name),true);
+ for(const name of ['tests/fixtures/cf031-technical-boundary-read.json.adjacent','tests/fixtures/cf031-other.json','tests/unit/technical/boundary-read.test.mjs.adjacent'])assert.equal(sourceAllowed(name),false);
+ assert.deepEqual(caller.technicalBoundaryUnit,['unit/technical/boundary-preview.test.mjs','tooling/safe-checks.test.mjs']);
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const execute=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='execute');
+ const declaration=execute.body.statements.find(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(tree)==='technicalReadOnly'));
+ const selection=execute.body.statements.find(n=>ts.isIfStatement(n)&&n.expression.getText(tree)==='technicalReadOnly');
+ for(const mode of ['unit','type','lint']){
+  assert.ok(caller.modes.includes('technical-read-'+mode));
+  const ctx={selected:['technical-read-'+mode]};vm.runInNewContext(declaration.getText(tree)+'\n'+selection.getText(tree),ctx,{timeout:100});assert.deepEqual(Array.from(ctx.selected),[mode]);
+ }
+ const bad={selected:['technical-read-extra']};vm.runInNewContext(declaration.getText(tree)+'\n'+selection.getText(tree),bad,{timeout:100});assert.equal(bad.technicalReadOnly,undefined);assert.deepEqual(bad.selected,['technical-read-extra']);
+ assert.match(source,/technicalReadOnly\?technicalReadUnit:technicalBoundaryOnly\?technicalBoundaryUnit/);
+ assert.match(source,/technicalReadOnly\?\['-p','tsconfig.cf031.json'\]/);
+ assert.doesNotMatch(caller.technicalReadExact.join('\n'),/components\/|app\/|\.env|boundary_runtime/);
+});
+
+test('CF031 exact read worktree alias keeps negative provenance identity checks',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-technical-read-boundary','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,uid=1234,mode=0o40755,canonical=root}={}){
+  const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);
+  const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
+  return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
+ }
+ assert.equal(check(project),path.dirname(dependency));
+ for(const sibling of ['verith-technical-read-boundary-extra','prefix-verith-technical-read-boundary','verith-technical-read'])assert.throws(()=>check(path.join(workspace,sibling,'frontend')),/unreviewed metadata root/);
+ assert.throws(()=>check('/other/verith-technical-read-boundary/frontend'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});

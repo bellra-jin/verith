@@ -886,6 +886,60 @@ class CF021Boundary(unittest.TestCase):
         self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
         for name in boundary.FORBIDDEN:self.assertNotIn(name,sys.modules)
 
+class CF031Boundary(unittest.TestCase):
+    def test_exact_new_pins_and_preserved_ai_fixed_inputs(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root = Path(__file__).resolve().parents[3]
+        self.assertEqual(c.CF031_TESTS, ('tests/unit/test_cf031_technical_boundary_restore.py',))
+        self.assertEqual(set(c.CF031_INPUTS), {
+            'backend/src/modules/technical/application/boundary_restore.py',
+            'frontend/tests/fixtures/cf031-technical-boundary-read.json',
+        })
+        self.assertEqual(len(c.CF021_INPUTS), 28)
+        self.assertEqual(len(c.CF021_FIXED_INPUTS), 9)
+        for name, sha in (c.CF021_INPUTS | c.CF021_FIXED_INPUTS | c.CF031_INPUTS).items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root, name)).hexdigest(), sha)
+            self.assertFalse(c.source_allowed(name + '.adjacent'))
+        indexed = c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/' + u for u in c.UNIT}
+        raw = b''.join(('100644 ' + '0' * 40 + ' 0\t' + name + '\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess, 'check_output', return_value=raw):
+            copied = c.selected_sources(root, technical_read_only=True)
+            prior = c.selected_sources(root, technical_boundary_only=True)
+        self.assertEqual({p for p in copied if p.startswith('ai/')}, set(c.CF021_INPUTS))
+        self.assertEqual({p for p in copied if p.startswith('frontend/')},
+            {p for p in c.CF021_FIXED_INPUTS | c.CF031_INPUTS if p.startswith('frontend/')})
+        self.assertNotIn('frontend/tests/fixtures/cf031-technical-boundary-read.json', prior)
+
+    def test_exact_modes_select_single_new_test_without_changing_old_mode(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('technical-read-self', 'technical-read-unit'):
+            with patch.object(c, 'execute') as run:
+                self.assertEqual(c.main([mode]), 0)
+                self.assertTrue(run.call_args.kwargs['technical_read_only'])
+                self.assertFalse(run.call_args.kwargs['technical_boundary_only'])
+                self.assertEqual(run.call_args.args[1], ('self-test' if mode.endswith('self') else 'unit',))
+        with patch.object(c, 'execute') as run:
+            c.main(['technical-boundary-unit'])
+            self.assertTrue(run.call_args.kwargs['technical_boundary_only'])
+            self.assertFalse(run.call_args.kwargs['technical_read_only'])
+
+    def test_closed_loader_and_existing_origin_guard_are_reused(self):
+        from tests.unit import test_cf021_technical_boundary as loader
+        from scripts import check_safe as c
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        import sys
+        loader.load_boundary()
+        loader._load('src.modules.technical.application.boundary_restore',
+            'backend/src/modules/technical/application/boundary_restore.py', c.CF031_INPUTS)
+        self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2], sys.modules))
+        self.assertFalse(loader.ATTEMPTS)
+        for name in loader.FORBIDDEN:
+            self.assertNotIn(name, sys.modules)
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -901,6 +955,7 @@ if __name__ == "__main__":
     assembly_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf024_self_only",False)
     controller_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf026_self_only",False)
     technical_boundary_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf021_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    technical_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf031_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

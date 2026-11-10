@@ -750,3 +750,42 @@ test('CF025 actual probe received response cap/parser violations cannot be recov
   if(kind==='incomplete')assert.equal((await job).ack,'unknown');else await assert.rejects(job,/ACK invalid/);
  }
 });
+
+test('CF021 technical boundary mode selects only the pure preview test, tooling and typed chart inputs',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalBoundaryUnit,['unit/technical/boundary-preview.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(caller.technicalBoundaryType,['src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts']);
+ assert.deepEqual(caller.technicalBoundaryExact,[...caller.technicalBoundaryType,...caller.technicalBoundaryUnit.map(p=>'tests/'+p),'src/features/technical/lib/chart.ts','tests/fixtures/cf021-technical-boundary.json']);
+ for(const mode of ['technical-boundary-unit','technical-boundary-type','technical-boundary-lint'])assert.ok(caller.modes.includes(mode));
+ for(const source of caller.technicalBoundaryExact)assert.equal(sourceAllowed(source),true);
+ const text=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const execute=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='execute');
+ const declaration=execute.body.statements.find(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(tree)==='technicalBoundaryOnly'));
+ const selection=execute.body.statements.find(n=>ts.isIfStatement(n)&&n.expression.getText(tree)==='technicalBoundaryOnly');
+ for(const [name,result] of [['unit','unit'],['type','type'],['lint','lint']]){
+  const ctx={selected:['technical-boundary-'+name]};vm.runInNewContext(declaration.getText(tree)+'\n'+selection.getText(tree),ctx,{timeout:100});assert.deepEqual(Array.from(ctx.selected),[result]);
+ }
+ assert.match(text,/technicalBoundaryOnly\?technicalBoundaryUnit:coreOnly\?coreUnit/);
+ assert.match(text,/technicalBoundaryOnly\?\['-p','tsconfig.cf021.json'\]/);
+ assert.doesNotMatch(caller.technicalBoundaryExact.join('\n'),/components\/|app\/|\.env|boundary_runtime/);
+});
+
+test('CF021 exact Technical worktree alias preserves dependency identity and rejects sibling lookalikes',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-technical-boundary','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,uid=1234,mode=0o40755,canonical=root}={}){
+  const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);
+  const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
+  return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
+ }
+ for(const sibling of ['verith-supervisor-core','verith-technical-boundary'])assert.equal(check(path.join(workspace,sibling,'frontend')),path.dirname(dependency));
+ for(const root of [path.join(workspace,'verith-technical-boundary-extra','frontend'),path.join(workspace,'prefix-verith-technical-boundary','frontend'),'/other/verith-technical-boundary/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});

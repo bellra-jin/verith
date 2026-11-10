@@ -109,14 +109,17 @@ export function recheckPackage(record,root,dependency){
  if(JSON.stringify(packageRecord(root,dependency,bytes,before,record.sourceRoot))!==JSON.stringify(record))throw Error('package identity/hash drift; result rejected');
 }
 const reviewedWorkspace=path.dirname(path.dirname(project));
-const reviewedCodeRoot=path.join(reviewedWorkspace,'verith-supervisor-core','frontend');
+const reviewedCodeRoots=Object.freeze([
+ path.join(reviewedWorkspace,'verith-supervisor-core','frontend'),
+ path.join(reviewedWorkspace,'verith-supervisor-verification','frontend'),
+]);
 const reviewedDependencyRoot=path.join(reviewedWorkspace,'verith','frontend','node_modules');
 const lockSHA='bb3a6a2b6c2e6374a4fa43ab8d3022ea678b0e60a003ff2b2aafb5610a7c7fed';
 const digest=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 export function metadataRootFor(codeRoot,dependency){
  if(codeRoot!==fs.realpathSync(codeRoot)||dependency!==fs.realpathSync(dependency)||fs.realpathSync(path.join(codeRoot,'node_modules'))!==dependency)throw Error('code/dependency identity mismatch');
  const metadataRoot=path.dirname(dependency);
- if(metadataRoot!==codeRoot&&(codeRoot!==reviewedCodeRoot||dependency!==reviewedDependencyRoot))throw Error('unreviewed metadata root');
+ if(metadataRoot!==codeRoot&&(!reviewedCodeRoots.includes(codeRoot)||dependency!==reviewedDependencyRoot))throw Error('unreviewed metadata root');
  trusted(codeRoot);trusted(metadataRoot);trusted(dependency);
  return metadataRoot;
 }

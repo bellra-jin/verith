@@ -18,7 +18,7 @@ test('actual prepare function checks owner twice, bounded envelope/hash, and pre
 for(const when of ['before','after'])test('account changed '+when+' cannot adopt plan or send confirm',async()=>{let sessions=0,posts=0,target;const {h}=load(async url=>{if(url==='/api/auth/session')return Response.json({user_id:when==='before'||++sessions===2?B:A,csrf_token:'fresh'});posts++;return Response.json({schema_version:'supervisor.core.v1',request_id:A,trace_id:B,data:target,error:null});});target=await plan(h);await assert.rejects(h.coreRequest('prepare',draft,A,new AbortController().signal,()=>true));assert.equal(posts,when==='before'?0:1);});
 test('late first session after generation/cancel does not issue planning or execution HTTP',async()=>{let release,entered;const reached=new Promise(r=>{entered=r;});let posts=0,current=true;const {h}=load(async url=>{if(url==='/api/auth/session'){entered();return new Promise(r=>{release=r;});}posts++;throw Error('Forbidden POST');});const job=h.coreRequest('prepare',draft,A,new AbortController().signal,()=>current);await reached;current=false;release(Response.json({user_id:A,csrf_token:'fresh'}));await assert.rejects(job);assert.equal(posts,0);});
 test('fixed pending survives503 and is owner-scoped; no result/token is stored',async()=>{const {h}=load();const pending=h.freshPending(draft,await plan(h),true,[]),saved=store();h.writePending(saved,A,pending);const before=saved.getItem(h.pendingKey(A));assert.equal(h.readPending(saved,B),null);assert.equal(JSON.stringify(h.readPending(saved,A).confirm),JSON.stringify(pending.confirm));assert.equal(saved.getItem(h.pendingKey(A)),before);assert.doesNotMatch(before,/csrf_token|session|result_json/);});
-test('production wiring preserves fixed replay/no-op timer identity and hides401 (source assertions)',()=>{const source=fs.readFileSync('src/features/supervisor/components/supervisor-session.tsx','utf8')+fs.readFileSync('src/features/supervisor/components/supervisor-chat.tsx','utf8');for(const part of ['legacyFlowRecovery(sessionStorage','<AnalysisEntry analysisId={null}/>','requiresReauthentication(e)','timer.current.stop();','timer.current.start(current,()=>void verify(),next.delay)','!canReplayCore(known.current,pending.current)','verifiedHref.current!==window.location.href'])assert.ok(source.includes(part),part);const view=fs.readFileSync('src/features/supervisor/components/chat-view.tsx','utf8');assert.ok(view.includes('!p.replayable'));assert.ok(view.includes('conditionDisposition'));assert.doesNotMatch(view,/dangerouslySetInnerHTML|iframe/);});
+test('production wiring preserves fixed replay/no-op timer identity and hides401 (source assertions)',()=>{const source=fs.readFileSync('src/features/supervisor/components/supervisor-session.tsx','utf8')+fs.readFileSync('src/features/supervisor/components/supervisor-chat.tsx','utf8');for(const part of ['legacyFlowRecovery(sessionStorage','<AnalysisEntry analysisId={null}/>','requiresReauthentication(e)','timer.current.stop();','timer.current.start(contextCurrent,()=>void verify(),next.delay)','!canReplayCore(known.current,pending.current)','verifiedHref.current!==window.location.href'])assert.ok(source.includes(part),part);const view=fs.readFileSync('src/features/supervisor/components/chat-view.tsx','utf8');assert.ok(view.includes('!p.replayable'));assert.ok(view.includes('conditionDisposition'));assert.doesNotMatch(view,/dangerouslySetInnerHTML|iframe/);});
 
 test('multi-stock/scope clarification uses the same stock answer typed slot as production ChatView',()=>{const {h}=load();assert.equal(h.clarificationSlot('multi_stock'),'stock');assert.equal(h.clarificationSlot('scope'),'stock');assert.equal(h.clarificationSlot('views'),'views');const source=fs.readFileSync('src/features/supervisor/components/chat-view.tsx','utf8');assert.ok(source.includes('clarificationSlot(slot),value)'));});
 for(const broken of ['json','denied'])test('known ID remains GET-only with '+broken+' pending storage',async()=>{let gets=0;const {h}=load(async url=>{if(url==='/api/auth/session')return Response.json({user_id:A,csrf_token:'fresh'});gets++;return Response.json({schema_version:'supervisor.core.v1',request_id:A,trace_id:B,data:{supervisor_id:A,plan:null,plan_status:'deleted',effective_scope:null,flow:null,views:[],coverage:'deleted'},error:null});});const storage=broken==='json'?store({[h.pendingKey(A)]:'{bad'}):()=>{throw Error('Synthetic storage denied');};const recovery=h.loadCoreRecovery(storage,A,A);assert.equal(recovery.storageReadable,false);assert.equal(h.canReplayCore(A,recovery.pending),false);const out=await h.coreRequest('get',A,A,new AbortController().signal,()=>true);assert.equal(out.plan_status,'deleted');assert.equal(gets,1);});
@@ -90,6 +90,156 @@ test('new conversation cannot discard unknown ACK, running or result_ready fixed
 // CF027: execute actual production callbacks/pure functions with injected IO.
 // These are not mounted React or effect lifecycle tests.
 function sessionSource(){return fs.readFileSync('src/features/supervisor/components/supervisor-session.tsx','utf8');}
+function actualSessionClass(name){
+ const source=sessionSource(),tree=ts.createSourceFile('session.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ const declaration=tree.statements.find(node=>ts.isClassDeclaration(node)&&node.name?.text===name);assert.ok(declaration,name);
+ const m={exports:{}};
+ vm.runInNewContext(ts.transpileModule(declaration.getText(tree)+';module.exports='+name+';',{
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
+ }).outputText,{module:m,exports:m.exports},{timeout:100});return m.exports;
+}
+function childVerification(fetcher=async()=>({user_id:A}),request=async()=>({plan:null,plan_status:'deleted',flow:null})){
+ const Verification=actualSessionClass('ConversationVerification'),events=[],ref=value=>({current:value});
+ const context={verification:ref(new Verification()),commandPending:ref(false),planFocus:ref({invalidate(){events.push('focus-invalidated');}}),
+  disposed:false,active:ref(true),supervisorId:A,user:A,authEpoch:1,AbortController,
+  document:{visibilityState:'visible'},performance:{now:()=>0},window:{location:{href:'http://synthetic/research?supervisor_id='+A},sessionStorage:{}},
+  generation:ref(0),controller:ref(null),timer:ref({stop(){events.push('timer-stop');}}),intent:ref({invalidate(){events.push('intent-invalidated');}}),
+  verifiedHref:ref(null),pending:ref(null),known:ref(A),draftRef:ref({}),planRef:ref(null),outcomeRef:ref(null),
+  automaticObservationStarted:ref(false),observedFlow:ref(null),observation:ref({stop(){}}),
+  fetchSession:fetcher,coreRequest:request,matchesUrl:()=>true,loadCoreRecovery:()=>({pending:null,storageReadable:true}),canReplayCore:()=>false,
+  CoreHttpError:load().h.CoreHttpError,AnalysisAccountChanged:load().flow.AnalysisAccountChanged,
+  requiresReauthentication:e=>e instanceof context.AnalysisAccountChanged||e.status===401,
+  empty:()=>({original_query:'',answers:[],revision:0}),
+  setTimeout(fn,ms){assert.equal(ms,15000);context.timeout=fn;return 1;},clearTimeout(){events.push('clear-timeout');},
+ };
+ for(const name of ['setVerificationPending','setReplayable','setLocked','setDraft','setPlan','setOutcome','setVerified','setError','setEnded','onVerified','onVerificationFailed','onAccountChange'])context[name]=value=>events.push([name,value]);
+ context.invalidate=()=>{context.generation.current++;context.active.current=false;context.verification.current.invalidate();context.controller.current?.abort();events.push('invalidated');};
+ return {context,events,verify:actualSessionFunction('verify',context)};
+}
+test('CF028 production verify duplicate is a synchronous no-op before abort/timer/generation/HTTP',async()=>{
+ let release,sessions=0,gets=0;
+ const child=childVerification(()=>{sessions++;return new Promise(resolve=>{release=resolve;});},async()=>{gets++;return {plan:null,plan_status:'deleted',flow:null};});
+ const first=child.verify(true),controller=child.context.controller.current,revision=child.context.generation.current,eventCount=child.events.length;
+ await child.verify(true);await child.verify(false);
+ assert.equal(sessions,1);assert.equal(gets,0);assert.equal(controller.signal.aborted,false);assert.equal(child.context.generation.current,revision);assert.equal(child.events.length,eventCount);
+ release({user_id:A});await first;
+ assert.equal(gets,1);assert.equal(child.context.verification.current.pending,false);
+ assert.deepEqual(child.events.filter(e=>e[0]==='setVerificationPending').map(e=>e[1]),[true,false]);
+ assert.equal(child.events.some(e=>e[0]==='onVerified'),true);
+});
+for(const failure of ['503','timeout','401','owner'])test('CF028 production verify settles '+failure+' and explicit retry can clear the error',async()=>{
+ let attempt=0;
+ const child=childVerification(async()=>{
+  attempt++;if(attempt===1){if(failure==='owner')return {user_id:B};if(failure==='timeout')throw new DOMException('Synthetic abort','AbortError');throw new child.context.CoreHttpError(Number(failure));}
+  return {user_id:A};
+ });
+ await child.verify(true);assert.equal(child.context.verification.current.pending,false);
+ if(['401','owner'].includes(failure)){assert.ok(child.events.includes('invalidated'));assert.equal(child.events.some(e=>e[0]==='onAccountChange'),true);}
+ else {assert.ok(child.events.some(e=>e[0]==='setError'&&e[1]));await child.verify(true);assert.equal(attempt,2);assert.deepEqual(child.events.filter(e=>e[0]==='setError').at(-1),['setError','']);}
+});
+for(const reason of ['URL','hidden','unmount','generation'])test('CF028 production verify ignores late response after '+reason+' and old finally cannot release a new token',async()=>{
+ let release;const child=childVerification(()=>new Promise(resolve=>{release=resolve;})),task=child.verify(true);
+ child.context.verification.current.invalidate();
+ if(reason==='URL')child.context.window.location.href+='&changed';
+ if(reason==='hidden')child.context.document.visibilityState='hidden';
+ if(reason==='unmount')child.context.active.current=false;
+ if(reason==='generation')child.context.generation.current++;
+ const next={owner:A,href:'new',generation:99,controller:new AbortController()};assert.equal(child.context.verification.current.begin(next),true);
+ release({user_id:A});await task;
+ assert.equal(child.context.verification.current.accepts(next),true);assert.equal(child.events.some(e=>e[0]==='onVerified'),false);
+ assert.equal(child.events.filter(e=>e[0]==='setVerificationPending'&&e[1]===false).length,0);
+});
+test('CF028 production lock invalidation aborts only its token and competing command guards precede side effects (wiring)',()=>{
+ const Gate=actualSessionClass('ConversationVerification'),gate=new Gate(),first={controller:new AbortController()},second={controller:new AbortController()};
+ assert.equal(gate.begin(first),true);gate.invalidate();assert.equal(first.controller.signal.aborted,true);assert.equal(gate.begin(second),true);assert.equal(gate.finish(first),false);assert.equal(gate.pending,true);assert.equal(gate.finish(second),true);
+ const source=sessionSource();for(const name of ['edit','action','answer','cancelPreparation','startNew']){
+  const tree=ts.createSourceFile('session.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let node;
+  function visit(n){if(ts.isFunctionDeclaration(n)&&n.name?.text===name)node=n;ts.forEachChild(n,visit);}visit(tree);
+  assert.match(node.body.statements[0].getText(tree),/verification.current.pending/);
+ }
+ for(const part of ['onSelect={ticker=>{if(verification.current.pending)return','onConsent={v=>{if(verification.current.pending)return','onPartial={v=>{if(verification.current.pending)return','onWaiver={(id,v)=>{if(verification.current.pending)return'])assert.ok(source.includes(part),part);
+});
+test('CF028 production competing handlers return before reading or mutating conversation during GET verification',async()=>{
+ const verification={current:{pending:true}};
+ for(const name of ['edit','action','answer','cancelPreparation','startNew']){
+  const command=actualSessionFunction(name,{verification});
+  await command(name==='action'?'prepare':{});
+ }
+});
+test('CF028 actual fifteen-second abort settles verification and permits explicit retry without automatic HTTP',async()=>{
+ let calls=0;const child=childVerification(signal=>{
+  calls++;return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('Synthetic abort','AbortError')),{once:true}));
+ });
+ const task=child.verify(true);child.context.timeout();await task;
+ assert.equal(calls,1);assert.equal(child.context.verification.current.pending,false);assert.ok(child.events.some(e=>e[0]==='setError'&&e[1]));
+});
+test('CF028 automatic observation retains its bounded context after GET token settlement',async()=>{
+ let predicate,callback;const child=childVerification(async()=>({user_id:A}),async()=>({plan:null,plan_status:'confirmed',flow:{analysis_id:A,state:'running'}}));
+ child.context.performance={now:()=>0};
+ child.context.observation.current={begin(){},next:()=>({kind:'wait',delay:100}),permit:()=>true};
+ child.context.timer.current.start=(current,run)=>{predicate=current;callback=run;};
+ await child.verify(false);assert.equal(child.context.verification.current.pending,false);assert.equal(predicate(),true);assert.equal(typeof callback,'function');
+ child.context.generation.current++;assert.equal(predicate(),false);
+});
+test('CF028 actual focus intent is once-only, request-bound, and treats own disabled/removed origin separately from user movement',()=>{
+ const Focus=actualSessionClass('PlanFocusIntent'),body={},origin={isConnected:true,matches:()=>false},other={};
+ const focus=new Focus();const begin=()=>{focus.begin(1,A,'/research',origin,body);focus.adopt('plan');};
+ begin();assert.equal(focus.consume('plan',1,A,'/research',origin,body),true);assert.equal(focus.consume('plan',1,A,'/research',origin,body),false);
+ for(const args of [['old',1,A,'/research'],['plan',2,A,'/research'],['plan',1,B,'/research'],['plan',1,A,'/other']]){begin();assert.equal(focus.consume(...args,origin,body),false);}
+ begin();focus.moved(other,body);assert.equal(focus.consume('plan',1,A,'/research',origin,body),false);
+ begin();focus.moved(body,body);assert.equal(focus.consume('plan',1,A,'/research',body,body),false);
+ origin.matches=()=>true;begin();focus.moved(body,body);assert.equal(focus.consume('plan',1,A,'/research',body,body),true);
+ begin();focus.pendingCommit(body,body);origin.matches=()=>false;assert.equal(focus.consume('plan',1,A,'/research',body,body),true);
+ origin.matches=()=>false;origin.isConnected=false;begin();assert.equal(focus.consume('plan',1,A,'/research',body,body),true);
+ focus.begin(1,A,'/research',null,body);focus.adopt('plan');assert.equal(focus.consume('plan',1,A,'/research',body,body),false);
+ begin();focus.invalidate();assert.equal(focus.consume('plan',1,A,'/research',origin,body),false);
+});
+test('CF028 actual pending commit remembers disabled origin before a late silent BODY blur, but user movement still cancels',()=>{
+ const Focus=actualSessionClass('PlanFocusIntent'),body={},html={},origin={isConnected:true,matches:()=>true};
+ for(const moved of [false,true]){
+  const focus=new Focus();focus.begin(1,A,'/research',origin,body);
+  origin.matches=()=>true;focus.pendingCommit(origin,body);
+  // Chrome may move to BODY without focusin, then the final render re-enables origin.
+  origin.matches=()=>false;focus.adopt('plan');if(moved)focus.invalidate();
+  assert.equal(focus.consume('plan',1,A,'/research',body,body),!moved);
+  assert.equal(focus.consume('plan',1,A,'/research',body,body),false);
+ }
+ const focus=new Focus();origin.matches=()=>true;focus.begin(1,A,'/research',origin,body);focus.pendingCommit(origin,body);origin.matches=()=>false;focus.adopt('plan');
+ assert.equal(focus.consume('plan',1,A,'/research',html,body),false);
+ // An enabled origin at pending commit cannot grant an unexplained BODY fallback.
+ focus.begin(1,A,'/research',origin,body);focus.pendingCommit(origin,body);focus.adopt('plan');assert.equal(focus.consume('plan',1,A,'/research',body,body),false);
+});
+test('CF028 actual plan commit callback checks private context/focus and never scrolls or repeats',()=>{
+ const Focus=actualSessionClass('PlanFocusIntent'),origin={isConnected:true,matches:()=>false},body={},value={plan_hash:'plan'};
+ let focuses=0;const context={active:{current:true},document:{visibilityState:'visible',hasFocus:()=>true,activeElement:origin,body},verifiedHref:{current:'/research'},window:{location:{href:'/research'}},matchesUrl:()=>true,supervisorId:null,planRef:{current:value},planFocus:{current:new Focus()},generation:{current:1},user:A};
+ const commit=actualSessionFunction('onPlanCommit',context,true),heading={focus(options){assert.equal(options.preventScroll,true);focuses++;}};
+ const begin=()=>{context.planFocus.current.begin(1,A,'/research',origin,body);context.planFocus.current.adopt('plan');};
+ begin();commit(value,heading);commit(value,heading);assert.equal(focuses,1);
+ for(const change of [()=>context.active.current=false,()=>context.document.visibilityState='hidden',()=>context.document.hasFocus=()=>false,()=>context.window.location.href='/other',()=>context.planRef.current={}]){
+  context.active.current=true;context.document.visibilityState='visible';context.document.hasFocus=()=>true;context.window.location.href='/research';context.planRef.current=value;begin();change();commit(value,heading);assert.equal(focuses,1);
+ }
+});
+test('CF028 production DOM/keyboard wiring is prepared, not mounted focus evidence',()=>{
+ const source=sessionSource(),view=fs.readFileSync('src/features/supervisor/components/chat-view.tsx','utf8');
+ assert.match(view,/<h2 ref=\{heading\} tabIndex=\{-1\}/);assert.match(view,/onPlanCommit\?\.\(plan,heading.current\)/);assert.match(view,/const blocked=p.busy\|\|Boolean\(p.verificationPending\)/);
+ assert.match(source,/heading.focus\(\{preventScroll:true\}\)/);assert.match(source,/document.hasFocus\(\)/);
+ assert.match(source,/result.plan.plan_hash!==previousPlanHash/);assert.match(source,/event.key==='Tab'/);assert.match(source,/removeEventListener\('pointerdown',pointer,true\)/);
+ assert.equal((source.match(/planFocus.current.adopt\(/g)??[]).length,1);
+});
+test('CF028 actual ChatView JSX retains pending status and disabled GET for deleted results (injected hooks/JSX, not mounted)',()=>{
+ const source=fs.readFileSync('src/features/supervisor/components/chat-view.tsx','utf8'),m={exports:{}};
+ const jsx=(type,props)=>({type,props});
+ vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,{
+  module:m,exports:m.exports,require(id){if(id==='react')return {useRef:()=>({current:null}),useEffect(){},useLayoutEffect(){}};if(id==='react/jsx-runtime')return {jsx,jsxs:jsx,Fragment:'fragment'};if(id==='../lib/supervisor-request')return load().h;throw Error('Closed JSX unit registry');},
+ },{timeout:100});
+ for(const deleted of [false,true]){
+  const tree=m.exports.ChatView({draft:{original_query:'',answers:[],revision:0},plan:null,outcome:deleted?{plan:null,plan_status:'deleted'}:null,verificationPending:true,busy:false,locked:true,verified:true,replayable:false,waivers:[]}),nodes=[];
+  function visit(value){if(Array.isArray(value)){value.forEach(visit);return;}if(value&&typeof value==='object'){nodes.push(value);visit(value.props?.children);}}visit(tree);
+  assert.ok(nodes.some(n=>n.props?.role==='status'&&n.props.children==='상태 확인 중 · 실행 없음'));
+  assert.ok(nodes.some(n=>n.type==='button'&&n.props.children==='상태 다시 확인 · GET만'&&n.props.disabled===true));
+  if(deleted)assert.ok(nodes.some(n=>n.type==='h2'&&n.props.children==='삭제된 결과입니다'));
+ }
+});
 function actualSessionFunction(name,context={},callback=false){
  const source=sessionSource(),tree=ts.createSourceFile('session.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let selected;
  function visit(node){if(!callback&&ts.isFunctionDeclaration(node)&&node.name?.text===name)selected=node;if(callback&&ts.isVariableDeclaration(node)&&node.name.getText(tree)===name&&node.initializer&&ts.isCallExpression(node.initializer)&&node.initializer.expression.getText(tree)==='useCallback')selected=node.initializer.arguments[0];ts.forEachChild(node,visit);}visit(tree);assert.ok(selected,name);
@@ -136,7 +286,7 @@ test('CF027 actual parent failure/deadline keeps latch, retires request, and nev
 test('CF027 stable callbacks/effect wiring and actual-observation marker are preserved (source assertions, not lifecycle)',()=>{
  const source=sessionSource();assert.match(source,/const onAccountChange=useCallback/);assert.doesNotMatch(source,/\[retry,supervisorId\]|setRetry/);
  assert.match(source,/reauthentication\.v1/);assert.match(source,/if\(!manual&&requiresExplicitReauthentication\(\)\)/);
- assert.match(source,/manual&&automaticObservationStarted.current/);assert.match(source,/void verify\(manualRecovery\)/);assert.match(source,/automaticObservationStarted.current=false/);assert.match(source,/disabled=\{rechecking\}/);
+ assert.match(source,/manual&&automaticObservationStarted.current/);assert.match(source,/void verify\(manualRecovery\)/);assert.match(source,/automaticObservationStarted.current=false/);assert.match(source,/disabled=\{rechecking\|\|verificationPending\}/);
  assert.match(source,/onAccountChange=\{onAccountChange\}/);assert.match(source,/onAccountChange,onVerified,onVerificationFailed\]/);
 });
 function fixtureFunction(name,context){
@@ -409,4 +559,98 @@ test('CF027 collected server observation followed by client deadline commits fai
  let restarted=0;
  await fixtureFunction('respondFixtureWatchAck',{terminal:{open:()=>false},failScenario(){restarted++;},bounded:task=>task,writeFixtureWatchAck:async()=>{}})({},record,'commit');
  assert.equal(restarted,0);
+});
+
+test('CF028 public DOM diagnostic samples pending/plan commits without private fields and cleans bounded observers',()=>{
+ let observerCallback,disconnected=false,pending=false,heading=null;
+ const events=new Map(),updates=[],active={tagName:'HTML',isConnected:true,matches:selector=>{assert.equal(selector,':disabled');return false;},get value(){throw Error('private value must not be read');}};
+ const root={getAttribute:name=>{assert.equal(name,'aria-busy');return String(pending);},querySelector:selector=>{assert.equal(selector,'.sc-card h2[tabindex="-1"]');return heading;}};
+ const doc={activeElement:active,hasFocus:()=>true,visibilityState:'visible',querySelector:selector=>{assert.equal(selector,'.supervisor-chat');return root;},getElementById:id=>{assert.equal(id,'app');return {};},addEventListener:(name,fn)=>events.set(name,fn),removeEventListener:name=>events.delete(name)};
+ const win={addEventListener:(name,fn)=>events.set(name,fn),removeEventListener:name=>events.delete(name)};
+ class Observer{constructor(callback){observerCallback=callback;}observe(_node,options){assert.equal(options.subtree,true);assert.deepEqual(Array.from(options.attributeFilter),['aria-busy']);}disconnect(){disconnected=true;}}
+ const snapshot=fixtureFunction('fixtureFocusSnapshot',{}),watch=fixtureFunction('watchPublicFocus',{fixtureFocusSnapshot:snapshot});
+ const stop=watch(doc,win,value=>updates.push(JSON.parse(value)),Observer);
+ pending=true;observerCallback();heading={};pending=false;observerCallback();
+ assert.ok(updates.flatMap(x=>x.snapshots).some(x=>x.phase==='plan-commit'&&x.tag==='HTML'&&x.connected&&x.hasFocus));
+ assert.ok(updates.flatMap(x=>x.snapshots).some(x=>x.phase==='pending-commit'));
+ for(let n=0;n<40;n++){events.get('focusin')();events.get('blur')();events.get('focus')();}
+ const last=updates.at(-1);assert.equal(last.snapshots.length,8);assert.deepEqual(last.events,{focusin:32,windowFocus:32,windowBlur:32});
+ assert.doesNotMatch(JSON.stringify(last),/private|original_query|owner|csrf|nonce|plan_hash/);
+ stop();assert.equal(disconnected,true);assert.equal(events.size,0);
+});
+test('CF028 fixed synthetic deleted outcome passes the unchanged production validator and exposes no private plan',async()=>{
+ const out=fixtureFunction('outcome',{state:{status:'deleted'}})({id:A});
+ const validated=await load().h.outcomeValue(out);
+ assert.equal(validated.supervisor_id,A);assert.equal(validated.plan_status,'deleted');assert.equal(validated.plan,null);assert.equal(validated.flow,null);assert.equal(validated.effective_scope,null);assert.equal(validated.views.length,0);assert.equal(validated.coverage,'deleted');
+ const source=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8');
+ assert.ok(source.includes("['ready','pending','unknown','running','result_ready','stored','failed','deleted']"));
+});
+
+function mountedGetFixtureModel(options={}){
+ const counts={sessionGET:0,preparePOST:1,prepareGET:0,prepareDELETE:0,confirmPOST:1,outcomeGET:1,model:0,provider:0};
+ const attempts={total:0,session:0,core:0,GET:0,POST:2,DELETE:0};
+ const state={account:'A',authStatus:200,httpStatus:200,status:'stored',delay:0};
+ const sessionDelay={armed:false,held:false},scenario={status:'idle',name:null},ui={pending:false,error:false,deleted:false,stored:true};
+ const records=[],requests=[];let clicks=0,releases=0,samples=0,now=0,timerCleared=0;
+ const bump=(sessions,core)=>{attempts.session+=sessions;attempts.core+=core;attempts.GET+=sessions+core;attempts.total+=sessions+core;counts.sessionGET+=sessions;};
+ const settle=(alreadyHeld=false)=>{bump(alreadyHeld?2:3,1);counts.outcomeGET++;ui.pending=false;ui.error=false;ui.deleted=state.status==='deleted';ui.stored=!ui.deleted;};
+ const button={textContent:'상태 다시 확인 · GET만',isConnected:true,getClientRects:()=>[{}],get disabled(){return ui.pending;},click(){clicks++;if(ui.pending){if(options.extraPost)attempts.POST++;return;}if(sessionDelay.armed){sessionDelay.armed=false;sessionDelay.held=true;ui.pending=true;bump(1,0);return;}if(state.httpStatus===503){bump(2,1);ui.error=true;ui.stored=false;return;}settle();}};
+ const root={getAttribute:()=>String(ui.pending),querySelector:()=>ui.error?{}:null,querySelectorAll(selector){if(selector==='button')return options.ambiguous?[button,button]:[button];if(selector==='[role="status"]')return ui.pending?[{textContent:'상태 확인 중 · 실행 없음'}]:[];if(selector==='h2')return ui.deleted?[{textContent:'삭제된 결과입니다'}]:[];if(selector==='a[href^="/reports/flow/"]')return ui.stored?[{}]:[];throw Error('Unreviewed selector');}};
+ const doc={location:new URL('http://127.0.0.1:9999/research?supervisor_id='+A),visibilityState:'visible',querySelectorAll:selector=>{assert.equal(selector,'.supervisor-chat');return [root];}};
+ const controller=new AbortController();
+ const fetcher=async(path,init={})=>{
+  requests.push(path);assert.ok(['/fixture-control','/fixture-counts'].includes(path));assert.ok(init.signal instanceof AbortSignal);
+  if(path==='/fixture-control'){
+   const value=JSON.parse(init.body);assert.equal(init.headers['X-Fixture-Nonce'],'synthetic');
+   if(value.scenario){scenario.name=value.scenario==='collect'?scenario.name:value.scenario;scenario.status=value.scenario==='collect'?'collected':'armed';}
+   if(value.httpStatus)state.httpStatus=value.httpStatus;if(value.status)state.status=value.status;
+   if(value.sessionAction==='hold_next')sessionDelay.armed=true;
+   if(value.sessionAction==='release'){releases++;assert.equal(sessionDelay.held,true);sessionDelay.held=false;settle(true);}
+  }else{
+   samples++;
+   if(options.expiredHold&&sessionDelay.held){now=4000;}
+   if(options.lostHold&&sessionDelay.held&&samples>2)sessionDelay.held=false;
+  }
+  return {status:200,json:async()=>structuredClone({counts,attempts,state,sessionDelay,scenario})};
+ };
+ const context={AbortController,Date:{now:()=>now},validateFixtureTarget:target=>{assert.match(target,/^\/research\?supervisor_id=/);return {id:A};},
+  setTimeout(fn,ms){if(ms===20000){context.deadline=fn;return -1;}assert.equal(ms,50);return setTimeout(fn,ms);},clearTimeout(handle){if(handle===-1)timerCleared++;else clearTimeout(handle);}};
+ const run=fixtureFunction('runMountedGetCase',context);
+ return {run,doc,controller,records,requests,ui,context,options:{doc,nonce:'synthetic',signal:controller.signal,current:()=>true,onArm:()=>true,onCollect:()=>records.push({phase:'clock-cleared'}),onPhase:value=>records.push(value),fetcher},result:()=>({clicks,releases,samples,timerCleared})};
+}
+for(const kind of ['stored','error-retry','deleted'])test('CF028 fixed fixture '+kind+' drives DOM model clicks/HTTP controls with bounded deltas (not React mounted)',async()=>{
+ const fixture=mountedGetFixtureModel();await fixture.run(kind,fixture.options);
+ assert.equal(fixture.result().releases,1);assert.equal(fixture.result().timerCleared,1);
+ assert.ok(fixture.records.some(r=>r.phase===kind+':disabled-click-no-extra-HTTP'&&r.pending&&r.disabled&&r.delta.session===1&&r.delta.core===0));
+ const last=fixture.records.at(-1);assert.equal(last.phase,kind+':collected-programmatic-mounted');assert.equal(last.pending,false);assert.equal(last.disabled,false);assert.equal(last.delta.session,3);assert.equal(last.delta.core,1);assert.equal(last.delta.POST,0);assert.equal(last.delta.DELETE,0);
+ if(kind==='error-retry')assert.ok(fixture.records.some(r=>r.phase==='error-retry:actual-503-error'));
+ if(kind==='deleted')assert.equal(fixture.ui.deleted,true);
+ assert.doesNotMatch(JSON.stringify(fixture.records),/supervisor_id|storage|nonce|synthetic|original_query|owner|csrf/);
+});
+for(const failure of ['ambiguous','extraPost','expiredHold','lostHold'])test('CF028 fixed fixture fails '+failure+' without a release retry or invented binding',async()=>{
+ const fixture=mountedGetFixtureModel({[failure]:true});await assert.rejects(fixture.run('stored',fixture.options),/Mounted GET case/);assert.equal(fixture.result().releases,0);assert.equal(fixture.result().timerCleared,1);
+});
+test('CF028 fixed fixture parent cancellation and twenty-second deadline stop pending HTTP and remove timer',async()=>{
+ for(const mode of ['parent','deadline']){
+  const fixture=mountedGetFixtureModel();let entered;
+  const waiting=new Promise(resolve=>{entered=resolve;});
+  fixture.options.fetcher=(_path,init)=>new Promise((_,reject)=>{init.signal.addEventListener('abort',()=>reject(Error('synthetic abort')),{once:true});entered();});
+  const task=fixture.run('stored',fixture.options);await waiting;if(mode==='parent')fixture.controller.abort();else fixture.context.deadline();
+  await assert.rejects(task,/synthetic abort/);assert.equal(fixture.result().releases,0);assert.equal(fixture.result().timerCleared,1);
+ }
+});
+test('CF028 fixed mounted wiring stays in existing nonce controls and never calls component handlers/storage directly (source)',()=>{
+ const source=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8'),tree=ts.createSourceFile('fixture.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const fn=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='runMountedGetCase').getText(tree);
+ assert.doesNotMatch(fn,/sessionStorage|writePending|newPreparation|coreRequest|preparationRequest|onObserve|restore\.current|eval\(/);
+ assert.match(fn,/setTimeout\(abort,20000\)/);assert.match(fn,/Date.now\(\)-clickedAt<3000/);assert.match(fn,/button\(\).click\(\)/);
+ assert.match(source,/lock.current=true;setMountedRunning\(true\)/);assert.match(source,/mountedOperation.current.controller\?\.abort\(\)/);
+ assert.match(source,/mounted-get-deleted/);assert.match(source,/name.startsWith\('mounted-get-'\).*bindings.values/);
+});
+test('CF028 mounted scenario arm requires a prior owned confirmation and a finite reviewed case name',()=>{
+ const context={scenario:{status:'idle'},attempts:{total:0},failureWatchers:new Set([{record:{ready:true,disconnected:false}}]),bindings:new Map(),currentOwner:()=>A,scenarioTimer:null,setTimeout:()=>1,clearTimeout(){},console:{log(){}},Date:{now:()=>0}};
+ const arm=fixtureFunction('controlScenario',context);
+ assert.equal(arm('mounted-get-stored'),false);context.bindings.set('other',{owner:B});assert.equal(arm('mounted-get-stored'),false);context.bindings.set('own',{owner:A});
+ assert.equal(arm('mounted-get-arbitrary'),false);assert.equal(arm('mounted-get-stored'),true);
+ assert.equal(context.scenario.name,'mounted-get-stored');assert.equal(context.bindings.size,2);
 });

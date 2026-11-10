@@ -781,11 +781,49 @@ test('CF021 exact Technical worktree alias preserves dependency identity and rej
   const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
   return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
  }
- for(const sibling of ['verith-supervisor-core','verith-technical-boundary'])assert.equal(check(path.join(workspace,sibling,'frontend')),path.dirname(dependency));
+ for(const sibling of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary'])assert.equal(check(path.join(workspace,sibling,'frontend')),path.dirname(dependency));
  for(const root of [path.join(workspace,'verith-technical-boundary-extra','frontend'),path.join(workspace,'prefix-verith-technical-boundary','frontend'),'/other/verith-technical-boundary/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
  assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
  assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/code\/dependency identity mismatch/);
  assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/code\/dependency identity mismatch/);
  assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
  assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+test('CF028 actual caller accepts only the three reviewed sibling aliases with the fixed dependency metadata',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const variables=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']);
+ const functions=new Set(['metadataRootFor','trusted']);
+ const selected=tree.statements.filter(node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>variables.has(d.name.getText(tree)))||ts.isFunctionDeclaration(node)&&functions.has(node.name?.text));
+ assert.equal(selected.length,5);
+ const code=selected.map(node=>node.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-supervisor-verification','frontend');
+ const dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(codeRoot,dep=dependency,{alias=dep,canonical=codeRoot,uid=1234,mode=0o40755}={}){
+  const real=new Map([[codeRoot,canonical],[dep,dep],[path.join(codeRoot,'node_modules'),alias],[path.dirname(dep),path.dirname(dep)]]);
+  const metadata=new Map([...real.values()].map(p=>[p,{uid,mode}]));
+  const limited={realpathSync(p){assert.ok(real.has(p),'finite synthetic path only: '+p);return real.get(p);},statSync(p){assert.ok(metadata.has(p),'finite synthetic metadata only');return metadata.get(p);}};
+  return vm.runInNewContext(code,{path,project,fs:limited,process:{getuid:()=>1234}},{timeout:100})(codeRoot,dep);
+ }
+ for(const name of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary'])assert.equal(check(path.join(workspace,name,'frontend')),path.dirname(dependency));
+ const ordinary=path.join(workspace,'ordinary','frontend');assert.equal(check(ordinary,path.join(ordinary,'node_modules')),ordinary);
+ for(const root of [path.join(workspace,'arbitrary','frontend'),path.join(workspace,'verith-supervisor-verification-extra','frontend'),path.join(workspace,'prefix-verith-supervisor-verification','frontend'),'/other/verith-supervisor-verification/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/verith/frontend/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{canonical:'/canonical/elsewhere'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{alias:'/other/node_modules'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+
+test('CF028 actual protected invocation retains separate code/metadata roots and owned package snapshot',()=>{
+ const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
+ const provenance=JSON.parse(fs.readFileSync('source-provenance.json','utf8'));
+ assert.equal(cap.packageSnapshot.sourceRoot,path.dirname(cap.dependency));
+ assert.equal(provenance.dependency,cap.dependency);
+ assert.equal(cap.packageSnapshot.snapshot,path.join(process.cwd(),'package.json'));
+ if(provenance.codeRoot!==cap.packageSnapshot.sourceRoot){
+  const workspace=path.dirname(path.dirname(provenance.codeRoot));
+  assert.ok(['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary'].map(name=>path.join(workspace,name,'frontend')).includes(provenance.codeRoot));
+  assert.equal(cap.dependency,path.join(workspace,'verith','frontend','node_modules'));
+ }
+ console.log('CF028_ROOT_PROVENANCE '+JSON.stringify({codeRootKind:path.basename(path.dirname(provenance.codeRoot)),split:provenance.codeRoot!==cap.packageSnapshot.sourceRoot,manifestSHA:provenance.manifestSHA,workerPackageOwned:cap.packageSnapshot.snapshot===path.join(process.cwd(),'package.json')}));
 });

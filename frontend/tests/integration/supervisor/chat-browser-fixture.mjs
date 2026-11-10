@@ -159,7 +159,7 @@ function recordAttempt(kind,method,now=Date.now()){
  return true;
 }
 function controlScenario(name){
- const names=['rerender','reauth','stale-session','recovery','new-request'];
+ const names=['rerender','reauth','stale-session','recovery','new-request','get-verification','plan-focus','mounted-get-stored','mounted-get-error-retry','mounted-get-deleted'];
  if(name==='collect'){
   if(scenario.status!=='armed')return false;
   clearTimeout(scenarioTimer);scenarioTimer=null;
@@ -167,6 +167,7 @@ function controlScenario(name){
   console.log('CF027_SCENARIO_OBSERVATION '+JSON.stringify({name:scenario.name,delta:scenario.delta,status:'collected_not_acceptance'}));return true;
  }
  if(!names.includes(name)||scenario.status==='armed'||scenario.status==='failed'||![...failureWatchers].some(w=>w.record.ready&&!w.record.disconnected))return false;
+ if(name.startsWith('mounted-get-')&&![...bindings.values()].some(row=>row.owner===currentOwner()))return false;
  scenario.name=name;scenario.status='armed';scenario.reason=null;scenario.started_at=Date.now();scenario.baseline={...attempts};scenario.delta=null;
  scenarioTimer=setTimeout(()=>failScenario('SCENARIO_DEADLINE'),30000);return true;
 }
@@ -215,25 +216,121 @@ function preparedView(row){
  return {preparation_id:row.id,state:status,plan:['ready','clarification','unsupported'].includes(status)?row.plan:null,created_at:row.created,expires_at:row.expires,meaning_status:['ready','clarification','unsupported'].includes(status)?row.meaning:status,consumed_binding_id:consumed??null};
 }
 function outcome(row){
+ if(state.status==='deleted')return {supervisor_id:row.id,plan:null,plan_status:'deleted',effective_scope:null,views:[],coverage:'deleted',flow:null};
  const status=['running','unknown','result_ready','stored','failed'].includes(state.status)?state.status:'stored';
  return {supervisor_id:row.id,plan:row.plan,plan_status:'confirmed',effective_scope:{selected_views:['flow'],fixed_observation_window:true,all_subjects_retained:true,waived_conditions:row.body.consent.waived_conditions,partial_consent:row.body.consent.allow_partial},views:row.plan.requested_views.map(view=>({view,state:view==='flow'?status:'not_executed',reason:view==='flow'?'flow_state':'not_connected'})),coverage:status==='stored'?(row.plan.partial?'partial':'fulfilled'):['failed','unknown'].includes(status)?'unfulfilled':'pending',flow:{analysis_id:row.analysis,admission_request_id:row.analysis,attempt_id:row.analysis,state:status,deadline_at:new Date(Date.now()+120000).toISOString(),report_id:status==='stored'?row.report:null,report_url:status==='stored'?'/reports/flow/'+row.report:null,error:null}};
+}
+function fixtureFocusSnapshot(doc,phase){
+ const target=doc.activeElement;
+ return {phase,tag:target?.tagName??'NONE',disabled:Boolean(target?.matches?.(':disabled')),connected:Boolean(target?.isConnected),hasFocus:doc.hasFocus(),visibility:doc.visibilityState};
+}
+function watchPublicFocus(doc,win,update,Observer=win.MutationObserver){
+ let snapshots=[],lastRoot=null,lastPending=null,lastHeading=null;
+ const events={focusin:0,windowFocus:0,windowBlur:0};
+ const sample=phase=>{snapshots=[...snapshots.slice(-7),fixtureFocusSnapshot(doc,phase)];update(JSON.stringify({snapshots,events:{...events}}));};
+ const focusin=()=>{events.focusin=Math.min(32,events.focusin+1);sample('focusin');};
+ const focus=()=>{events.windowFocus=Math.min(32,events.windowFocus+1);sample('window-focus');};
+ const blur=()=>{events.windowBlur=Math.min(32,events.windowBlur+1);sample('window-blur');};
+ const committed=()=>{
+  const root=doc.querySelector('.supervisor-chat'),pending=root?.getAttribute('aria-busy')==='true',heading=root?.querySelector('.sc-card h2[tabindex="-1"]')??null;
+  if(root!==lastRoot){lastRoot=root;sample('session-commit');}
+  if(pending!==lastPending){lastPending=pending;sample('pending-commit');}
+  if(heading!==lastHeading){lastHeading=heading;if(heading)sample('plan-commit');}
+ };
+ const observer=new Observer(committed),app=doc.getElementById('app');
+ observer.observe(app,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-busy']});
+ doc.addEventListener('focusin',focusin);win.addEventListener('focus',focus);win.addEventListener('blur',blur);committed();
+ return()=>{observer.disconnect();doc.removeEventListener('focusin',focusin);win.removeEventListener('focus',focus);win.removeEventListener('blur',blur);};
+}
+async function runMountedGetCase(kind,{doc,nonce,signal,current,onArm,onCollect,onPhase,fetcher=fetch}){
+ if(!['stored','error-retry','deleted'].includes(kind))throw Error('Mounted GET case invalid');
+ const target=doc.location.href,c=new AbortController(),started=Date.now();
+ let reads=0,polls=0;
+ const abort=()=>c.abort();
+ signal.addEventListener('abort',abort,{once:true});
+ const deadline=setTimeout(abort,20000);
+ const check=value=>{if(!value)throw Error('Mounted GET case failed');};
+ const alive=()=>check(!signal.aborted&&!c.signal.aborted&&current()&&doc.location.href===target&&doc.visibilityState==='visible'&&Date.now()-started<20000);
+ const root=()=>{const found=doc.querySelectorAll('.supervisor-chat');check(found.length===1);return found[0];};
+ const button=()=>{
+  const found=[...root().querySelectorAll('button')].filter(node=>node.textContent.trim()==='상태 다시 확인 · GET만'&&node.isConnected&&node.getClientRects().length>0);
+  check(found.length===1);return found[0];
+ };
+ const pending=()=>root().getAttribute('aria-busy')==='true'&&[...root().querySelectorAll('[role="status"]')].some(node=>node.textContent.trim()==='상태 확인 중 · 실행 없음');
+ const error=()=>Boolean(root().querySelector('[role="alert"]'));
+ const deleted=()=>[...root().querySelectorAll('h2')].some(node=>node.textContent.trim()==='삭제된 결과입니다');
+ const read=async(path,value)=>{
+  alive();check(++reads<=100);
+  const response=await fetcher(path,{signal:c.signal,...(value?{method:'POST',headers:{'Content-Type':'application/json','X-Fixture-Nonce':nonce},body:JSON.stringify(value)}:{})});
+  alive();check(response.status===200);const result=await response.json();alive();return result;
+ };
+ const sample=()=>read('/fixture-counts');
+ const control=value=>read('/fixture-control',value);
+ const pause=()=>new Promise((resolve,reject)=>{
+  alive();const done=()=>{c.signal.removeEventListener('abort',cancel);resolve();};
+  const timer=setTimeout(done,50),cancel=()=>{clearTimeout(timer);c.signal.removeEventListener('abort',cancel);reject(Error('Mounted GET case cancelled'));};
+  c.signal.addEventListener('abort',cancel,{once:true});
+ });
+ const until=async predicate=>{while(++polls<=80){alive();const value=await sample();if(predicate(value))return value;await pause();}throw Error('Mounted GET case polling limit');};
+ const delta=(value,base)=>Object.fromEntries(['session','core','GET','POST','DELETE'].map(key=>[key,value.attempts[key]-base.attempts[key]]));
+ const unchanged=(value,base)=>{
+  check(value.attempts.POST===base.attempts.POST&&value.attempts.DELETE===base.attempts.DELETE);
+  for(const key of ['preparePOST','prepareGET','prepareDELETE','confirmPOST','model','provider'])check(value.counts[key]===base.counts[key]);
+ };
+ const phase=(name,value,base)=>onPhase({phase:kind+':'+name,pending:pending(),disabled:button().disabled,delta:delta(value,base)});
+ try{
+  alive();check(validateFixtureTarget(doc.location.pathname+doc.location.search+doc.location.hash).id!==null);
+  check(root().querySelectorAll('a[href^="/reports/flow/"]').length===1&&!button().disabled&&!pending()&&!error());
+  const initial=await sample();check(initial.counts.confirmPOST>0&&['A','B'].includes(initial.state.account)&&initial.state.authStatus===200&&initial.state.httpStatus===200&&initial.state.status==='stored'&&initial.state.delay===0&&!initial.sessionDelay.armed&&!initial.sessionDelay.held);
+  const armed=await control({scenario:'mounted-get-'+kind});check(armed.scenario.status==='armed'&&armed.scenario.name==='mounted-get-'+kind);check(onArm(started));
+  if(kind==='error-retry'){
+   await control({httpStatus:503});button().click();
+   const failed=await until(()=>error()&&!pending()&&!button().disabled);unchanged(failed,initial);
+   check(failed.attempts.session-initial.attempts.session===2&&failed.attempts.core-initial.attempts.core===1);phase('actual-503-error',failed,initial);
+   await control({httpStatus:200});
+  }else if(kind==='deleted'){
+   await control({status:'deleted'});button().click();
+   const gone=await until(()=>deleted()&&!pending()&&!button().disabled);unchanged(gone,initial);phase('actual-deleted-GET',gone,initial);
+  }
+  const base=await sample();check(!button().disabled&&!pending()&&!base.sessionDelay.armed&&!base.sessionDelay.held);
+  const heldArm=await control({sessionAction:'hold_next'});check(heldArm.sessionDelay.armed&&!heldArm.sessionDelay.held);
+  const clickedAt=Date.now();button().click();
+  const held=await until(value=>value.sessionDelay.held&&!value.sessionDelay.armed&&pending()&&button().disabled);
+  unchanged(held,base);check(held.attempts.session-base.attempts.session===1&&held.attempts.core===base.attempts.core);phase('held',held,base);
+  button().click();await pause();await pause();
+  const duplicate=await sample();unchanged(duplicate,base);
+  check(duplicate.sessionDelay.held&&duplicate.attempts.session-base.attempts.session===1&&duplicate.attempts.core===base.attempts.core);phase('disabled-click-no-extra-HTTP',duplicate,base);
+  alive();check(Date.now()-clickedAt<3000);
+  // No release if a fresh acknowledgement cannot prove this one-shot is still held.
+  const fresh=await sample();check(fresh.sessionDelay.held&&!fresh.sessionDelay.armed&&Date.now()-clickedAt<3000);
+  await control({sessionAction:'release'});
+  const settled=await until(value=>!value.sessionDelay.held&&!pending()&&!button().disabled&&!error()&&(kind!=='deleted'||deleted()));
+  unchanged(settled,base);unchanged(settled,initial);
+  check(settled.attempts.session-base.attempts.session===3&&settled.attempts.core-base.attempts.core===1&&settled.attempts.GET-base.attempts.GET===4);
+  check(settled.counts.sessionGET-base.counts.sessionGET===3&&settled.counts.outcomeGET-base.counts.outcomeGET===1);phase('settled',settled,base);
+  const collected=await control({scenario:'collect'});check(collected.scenario.status==='collected'&&collected.scenario.name==='mounted-get-'+kind);unchanged(collected,initial);onCollect();
+  phase('collected-programmatic-mounted',collected,base);
+ }finally{clearTimeout(deadline);signal.removeEventListener('abort',abort);c.abort();}
 }
 const bundle=`const modules={${Object.entries(registry).map(([id,body])=>JSON.stringify(id)+':function(module,exports,require){'+body+'\n}').join(',')}};const cache={};function require(id){if(!Object.hasOwn(modules,id))throw Error('Closed fixture registry');if(!cache[id]){const m={exports:{}};cache[id]=m;modules[id](m,m.exports,require);}return cache[id].exports;}
 const validateFixtureTarget=${validateFixtureTarget.toString()},fixtureAdapter=${fixtureAdapter.toString()},postFixtureWatchAck=${postFixtureWatchAck.toString()},watchFixtureFailure=${watchFixtureFailure.toString()},createClientScenarioDeadline=${createClientScenarioDeadline.toString()};
 const React=require('react'),Session=require('SupervisorSession').SupervisorSession;
-function Fixture(){const [id,setId]=React.useState(()=>validateFixtureTarget(location.pathname+location.search+location.hash).id),[stats,setStats]=React.useState('합성 제어 대기'),[failed,setFailed]=React.useState(false),[watchStatus,setWatchStatus]=React.useState('connecting');const lock=React.useRef(false),failure=React.useRef(false),watch=React.useRef('connecting'),watchId=React.useRef(null),failureReason=React.useRef(null),scenarioClock=React.useRef(null);
+const fixtureFocusSnapshot=${fixtureFocusSnapshot.toString()},watchPublicFocus=${watchPublicFocus.toString()};
+const runMountedGetCase=${runMountedGetCase.toString()};
+function Fixture(){const [id,setId]=React.useState(()=>validateFixtureTarget(location.pathname+location.search+location.hash).id),[stats,setStats]=React.useState('합성 제어 대기'),[failed,setFailed]=React.useState(false),[watchStatus,setWatchStatus]=React.useState('connecting'),[focusLabel,setFocusLabel]=React.useState('focus · 관측 대기'),[mountedRunning,setMountedRunning]=React.useState(false);const lock=React.useRef(false),failure=React.useRef(false),watch=React.useRef('connecting'),watchId=React.useRef(null),failureReason=React.useRef(null),scenarioClock=React.useRef(null),mountedOperation=React.useRef({controller:null,alive:true});
  const failClosed=React.useCallback((reason='CLIENT_FAILURE')=>{if(failure.current)return;failure.current=true;failureReason.current=reason;lock.current=true;setFailed(true);setStats('fixture 시나리오 실패 · 새 작업을 중단했습니다. 정리 결과를 확인하세요.');},[]);
  if(scenarioClock.current===null)scenarioClock.current=createClientScenarioDeadline(()=>failClosed('CLIENT_SCENARIO_DEADLINE'));
  const onWatchStatus=React.useCallback((value,id=null)=>{if(value==='registered')watchId.current=id;watch.current=value;setWatchStatus(value);},[]);
  React.useEffect(()=>{const c=new AbortController();void watchFixtureFailure(c.signal,${JSON.stringify(nonce)},failClosed,onWatchStatus);return()=>c.abort();},[failClosed,onWatchStatus]);
- React.useEffect(()=>{if(failed)scenarioClock.current.clear();return()=>scenarioClock.current.clear();},[failed]);
+ React.useEffect(()=>{if(failed){scenarioClock.current.clear();mountedOperation.current.controller?.abort();}return()=>scenarioClock.current.clear();},[failed]);
+ React.useEffect(()=>{const owned=mountedOperation.current;owned.alive=true;return()=>{owned.alive=false;owned.controller?.abort();};},[]);
  React.useEffect(()=>{
   if(!failed||failureReason.current===null||watchId.current===null)return;
   const c=new AbortController();onWatchStatus('commit-sent');
   void postFixtureWatchAck(c.signal,${JSON.stringify(nonce)},watchId.current,'commit',failureReason.current).then(()=>onWatchStatus('commit-acknowledged'),()=>onWatchStatus('commit-unconfirmed'));
   return()=>c.abort();
  },[failed,onWatchStatus]);
- const refresh=async()=>{if(failure.current||scenarioClock.current.expired())return;try{const r=await fetch('/fixture-counts');if(failure.current||scenarioClock.current.expired())return;if(!r.ok)throw Error();const value=await r.json();if(failure.current||scenarioClock.current.expired())return;if(value.scenario?.status==='failed'){failClosed();return;}setStats(JSON.stringify(value));}catch{failClosed();}};
+ const refresh=async()=>{if(lock.current||failure.current||scenarioClock.current.expired())return;try{const r=await fetch('/fixture-counts');if(lock.current||failure.current||scenarioClock.current.expired())return;if(!r.ok)throw Error();const value=await r.json();if(lock.current||failure.current||scenarioClock.current.expired())return;if(value.scenario?.status==='failed'){failClosed();return;}setStats(JSON.stringify(value));}catch{failClosed();}};
  const control=async(value)=>{if(lock.current||failure.current||scenarioClock.current.expired())return;
  const arming=value.scenario&&value.scenario!=='collect',started=Date.now();
  if(arming&&watch.current!=='registered'){failClosed();return;}
@@ -246,12 +343,20 @@ function Fixture(){const [id,setId]=React.useState(()=>validateFixtureTarget(loc
   if(value.scenario==='collect')scenarioClock.current.clear();
   setStats('적용 완료 · '+JSON.stringify(applied));
  }catch{failClosed();}finally{if(!failure.current)lock.current=false;}};
+ React.useEffect(()=>watchPublicFocus(document,window,setFocusLabel),[]);
+ const mountedCase=async(kind)=>{
+  if(lock.current||failure.current||watch.current!=='registered'||scenarioClock.current.expired())return;
+  lock.current=true;setMountedRunning(true);const c=new AbortController();mountedOperation.current.controller=c;const target=location.href,phases=[];
+  try{await runMountedGetCase(kind,{doc:document,nonce:${JSON.stringify(nonce)},signal:c.signal,current:()=>mountedOperation.current.alive&&!failure.current&&location.href===target,onArm:started=>scenarioClock.current.arm(started),onCollect:()=>scenarioClock.current.clear(),onPhase:value=>{if(!failure.current&&mountedOperation.current.alive){phases.push(value);setStats(JSON.stringify(phases));}}});}
+  catch{if(mountedOperation.current.alive&&!failure.current)failClosed();}
+  finally{if(mountedOperation.current.controller===c){mountedOperation.current.controller=null;if(!failure.current&&mountedOperation.current.alive){lock.current=false;setMountedRunning(false);}}}
+ };
  const adapter=React.useMemo(()=>fixtureAdapter({origin:location.origin,location,history,events:window,onChange:setId,onInvalid:()=>{setId(null);setFailed(true);setStats('안전한 fixture URL 오류');},onOutside:()=>setStats('범위 밖 합성 navigation 관측')}),[]);
  React.useEffect(()=>adapter.listen(),[adapter]);
  const finishFixture=async(action)=>{if(lock.current||failed||scenarioClock.current.expired())return;scenarioClock.current.clear();lock.current=true;try{const response=await fetch('/fixture-finish',{method:'POST',headers:{'Content-Type':'application/json','X-Fixture-Nonce':${JSON.stringify(nonce)}},body:JSON.stringify({action})});const value=await response.json();if(failure.current)return;if(response.status!==200||value.state!==(action==='complete'?'completed':'cancelled'))throw Error();failure.current=true;setFailed(true);setStats(action==='complete'?'fixture 수명주기 완료 · UI 수용 아님':'fixture 취소 · UI 수용 미완');}catch{setFailed(true);setStats('안전한 fixture 종료 오류 · 재전송하지 마세요');}};
  const navigate=React.useCallback((href,replace=false)=>adapter.navigate(href,replace),[adapter]);
  const legacy=React.useCallback(()=>React.createElement('p',null,'기존 Flow pending 복구 seam · 이번 fixture는 새 storage 사용'),[]);
- return React.createElement(React.Fragment,null,React.createElement('aside',null,React.createElement('p',null,'CF023 실제 production controller / 합성 HTTP. 질문 예: 삼성전자 수급, 수급, 005930 수급, 삼성전자 외국인 수급과 차트'),React.createElement('p',{role:'status'},stats),React.createElement('p',null,'failure watch · '+watchStatus+' · 전달 상태이며 UI 수용 결과가 아님'),...['ready','pending','unknown','running','result_ready','stored','failed'].map(status=>React.createElement('button',{key:status,disabled:failed,onClick:()=>control({status})},'합성 '+status)),... [200,401,403,503].map(httpStatus=>React.createElement('button',{key:'http'+httpStatus,disabled:failed,onClick:()=>control({httpStatus})},'합성 HTTP '+httpStatus)),... [0,250,16000].map(delay=>React.createElement('button',{key:'delay'+delay,disabled:failed,onClick:()=>control({delay})},'합성 지연 '+delay+'ms')),...['A','B'].map(account=>React.createElement('button',{key:account,disabled:failed,onClick:()=>control({account})},'합성 계정 '+account)),...['rerender','reauth','stale-session','recovery','new-request'].map(scenario=>React.createElement('button',{key:'scenario'+scenario,disabled:failed||watchStatus!=='registered',onClick:()=>control({scenario})},'시나리오 arm · '+scenario)),React.createElement('button',{onClick:()=>control({scenario:'collect'}),disabled:failed},'30초 내 관측 수집'),...['hold_next','release'].map(sessionAction=>React.createElement('button',{key:sessionAction,disabled:failed,onClick:()=>control({sessionAction})},'session '+sessionAction)),...[200,401].map(authStatus=>React.createElement('button',{key:'auth'+authStatus,disabled:failed,onClick:()=>control({authStatus})},'session HTTP '+authStatus)),React.createElement('button',{onClick:()=>void refresh(),disabled:failed},'합성 카운터 확인'),React.createElement('button',{onClick:()=>void finishFixture('complete'),disabled:failed},'fixture 완료'),React.createElement('button',{onClick:()=>void finishFixture('cancel'),disabled:failed},'fixture 취소')),failed?null:React.createElement(Session,{supervisorId:id,navigate,renderLegacy:legacy}));}
+ return React.createElement(React.Fragment,null,React.createElement('aside',null,React.createElement('p',null,'CF023 실제 production controller / 합성 HTTP. 질문 예: 삼성전자 수급, 수급, 005930 수급, 삼성전자 외국인 수급과 차트'),React.createElement('p',{role:'status'},stats),React.createElement('p',null,focusLabel),React.createElement('p',null,'failure watch · '+watchStatus+' · 전달 상태이며 UI 수용 결과가 아님'),...['ready','pending','unknown','running','result_ready','stored','failed','deleted'].map(status=>React.createElement('button',{key:status,disabled:failed||mountedRunning,onClick:()=>control({status})},'합성 '+status)),... [200,401,403,503].map(httpStatus=>React.createElement('button',{key:'http'+httpStatus,disabled:failed||mountedRunning,onClick:()=>control({httpStatus})},'합성 HTTP '+httpStatus)),... [0,250,16000].map(delay=>React.createElement('button',{key:'delay'+delay,disabled:failed||mountedRunning,onClick:()=>control({delay})},'합성 지연 '+delay+'ms')),...['A','B'].map(account=>React.createElement('button',{key:account,disabled:failed||mountedRunning,onClick:()=>control({account})},'합성 계정 '+account)),...['rerender','reauth','stale-session','recovery','new-request','get-verification','plan-focus'].map(scenario=>React.createElement('button',{key:'scenario'+scenario,disabled:failed||mountedRunning||watchStatus!=='registered',onClick:()=>control({scenario})},'시나리오 arm · '+scenario)),React.createElement('button',{onClick:()=>control({scenario:'collect'}),disabled:failed||mountedRunning},'30초 내 관측 수집'),...['hold_next','release'].map(sessionAction=>React.createElement('button',{key:sessionAction,disabled:failed||mountedRunning,onClick:()=>control({sessionAction})},'session '+sessionAction)),...[200,401].map(authStatus=>React.createElement('button',{key:'auth'+authStatus,disabled:failed||mountedRunning,onClick:()=>control({authStatus})},'session HTTP '+authStatus)),...['stored','error-retry','deleted'].map(kind=>React.createElement('button',{key:'mounted'+kind,disabled:failed||mountedRunning||watchStatus!=='registered'||id===null,onClick:()=>void mountedCase(kind)},'고정 mounted GET · '+kind)),React.createElement('button',{onClick:()=>void refresh(),disabled:failed||mountedRunning},'합성 카운터 확인'),React.createElement('button',{onClick:()=>void finishFixture('complete'),disabled:failed||mountedRunning},'fixture 완료'),React.createElement('button',{onClick:()=>void finishFixture('cancel'),disabled:failed||mountedRunning},'fixture 취소')),failed?null:React.createElement(Session,{supervisorId:id,navigate,renderLegacy:legacy}));}
 require('react-dom/client').createRoot(document.getElementById('app')).render(React.createElement(Fixture));`;
 let finish,terminalError,terminalResponse,closeDeadline=Infinity;
 const started=Date.now(),expires=started+590000,delays=new Map(),active=new Set();
@@ -331,7 +436,7 @@ async function handle(req,res){
  }
  if(req.url==='/fixture-control'&&req.method==='POST'&&req.headers['x-fixture-nonce']===nonce){
   const keys=Object.keys(body),stateKeys=['status','account','authStatus','httpStatus','delay'];
-  if(keys.some(k=>![...stateKeys,'scenario','sessionAction'].includes(k))||body.status!==undefined&&!['ready','pending','unknown','running','result_ready','stored','failed'].includes(body.status)||body.account!==undefined&&!['A','B'].includes(body.account)||body.authStatus!==undefined&&![200,401].includes(body.authStatus)||body.httpStatus!==undefined&&![200,401,403,503].includes(body.httpStatus)||body.delay!==undefined&&![0,250,16000].includes(body.delay)||body.scenario!==undefined&&(keys.length!==1||!['rerender','reauth','stale-session','recovery','new-request','collect'].includes(body.scenario))||body.sessionAction!==undefined&&(keys.length!==1||!['hold_next','release'].includes(body.sessionAction))){json({},422);return;}
+  if(keys.some(k=>![...stateKeys,'scenario','sessionAction'].includes(k))||body.status!==undefined&&!['ready','pending','unknown','running','result_ready','stored','failed','deleted'].includes(body.status)||body.account!==undefined&&!['A','B'].includes(body.account)||body.authStatus!==undefined&&![200,401].includes(body.authStatus)||body.httpStatus!==undefined&&![200,401,403,503].includes(body.httpStatus)||body.delay!==undefined&&![0,250,16000].includes(body.delay)||body.scenario!==undefined&&(keys.length!==1||!['rerender','reauth','stale-session','recovery','new-request','get-verification','plan-focus','mounted-get-stored','mounted-get-error-retry','mounted-get-deleted','collect'].includes(body.scenario))||body.sessionAction!==undefined&&(keys.length!==1||!['hold_next','release'].includes(body.sessionAction))){json({},422);return;}
   if(body.scenario!==undefined&&!controlScenario(body.scenario)){json({},409);return;}
   if(body.sessionAction==='hold_next'){if(holdNextSession||heldSession){json({},409);return;}holdNextSession=true;}
   if(body.sessionAction==='release'){if(!heldSession){json({},409);return;}heldSession();}

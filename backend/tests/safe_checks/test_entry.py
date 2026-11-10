@@ -849,6 +849,43 @@ class CF026Boundary(unittest.TestCase):
         for name in ('scripts.runner_owned_database', 'src.shared.config', 'openai', 'src.api.main'):
             self.assertNotIn(name, sys.modules)
 
+class CF021Boundary(unittest.TestCase):
+    def test_exact_pins_and_single_collection(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        self.assertEqual(len(c.CF021_INPUTS),28)
+        self.assertEqual({k:v for k,v in c.CF021_INPUTS.items() if k in c.CF018_INPUTS},c.CF018_INPUTS)
+        self.assertEqual(c.CF021_TESTS,('tests/unit/test_cf021_technical_boundary.py',))
+        for name,h in (c.CF021_INPUTS | c.CF021_FIXED_INPUTS).items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),h)
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):copied=c.selected_sources(root,technical_boundary_only=True)
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF021_INPUTS))
+        self.assertEqual({p for p in copied if p.startswith('frontend/')},{p for p in c.CF021_FIXED_INPUTS if p.startswith('frontend/')})
+
+    def test_fixed_modes_and_no_existing_dispatch_change(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('technical-boundary-self','technical-boundary-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertTrue(run.call_args.kwargs['technical_boundary_only'])
+                self.assertFalse(run.call_args.kwargs['controller_only'])
+        self.assertEqual(c.main(['list']),0)
+
+    def test_closed_absolute_loader_existing_origin_guards(self):
+        from tests.unit import test_cf021_technical_boundary as boundary
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        import sys
+        boundary.load_boundary()
+        self.assertFalse(boundary.ATTEMPTS)
+        self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        for name in boundary.FORBIDDEN:self.assertNotIn(name,sys.modules)
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -863,6 +900,7 @@ if __name__ == "__main__":
     meaning_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf023_self_only",False)
     assembly_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf024_self_only",False)
     controller_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf026_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    technical_boundary_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf021_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

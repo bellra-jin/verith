@@ -20,7 +20,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from ...config import INTRADAY_CONFIDENCE_ADJUSTMENT_CAP, INTRADAY_RISK_NOTE_MAX_COUNT
+from ..intraday_limits import INTRADAY_CONFIDENCE_ADJUSTMENT_CAP, INTRADAY_RISK_NOTE_MAX_COUNT
 from .ohlcv import NonNegativeNumber  # inf/nan·음수 불허 재사용(중복 정의 금지)
 
 _ISO_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")

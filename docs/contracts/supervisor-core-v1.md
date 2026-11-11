@@ -88,6 +88,10 @@ resource, epoch ID and created_at; it is permitted only after the first exact
 request/projection has observed durable settlement. No epoch reset, unit-label
 change or new grant recovers unknown use. A private journal survives DB cleanup.
 
+The key source is exactly `verith/ai/.env` under the reviewed worktree parent.
+Backend, Frontend, the verifier worktree and alternative paths are refused. This
+service-location correction does not rebind a consumed grant or permit replay.
+
 The approved existing key source is fixed by canonical location and owner,
 device/inode, regular/single-link, no-symlink and mode0644 identity. It is not
 chmodded or copied to a0600 replacement. Only `OPENAI_API_KEY=value` with an
@@ -259,3 +263,140 @@ and live authorization is closed after that fixed cutoff. Synthetic mode also
 requires synthetic history/source/child scope and fixed synthetic DI; it cannot
 be promoted into a live approval. No clock, deadline override or environment
 fallback is exposed to production callers.
+# CF026 fixed-window renewal
+
+The private aggregate controller retains the historical cutoff and accepts only
+the separately reviewed current window, with a fixed lower start bound and upper
+expiry bound. Header and child schema keys, the cumulative budget and original
+unknown hold, canonical aggregate identity, one-shot issuance and delayed key
+supply remain unchanged. An expired historical descriptor cannot be revived by
+changing its expiry. Current source, runtime and contract evidence must be bound
+again before any execution. Synthetic future leases do not grant live access.
+
+
+## CF-026 후속 준비 전용 계약 prototype
+
+기존 frozen aggregate는 reopen하거나 rewrite하지 않는다. 현재 전체 예약
+150,000,000nanoUSD에는 과거 unknown carry가 이미 포함되어 있으므로 다시
+더하거나 환불하지 않는다. `FIRST_SETTLEMENT_UNCONFIRMED`는 aggregate의
+종료 사유이고 `KEY_SOURCE_INVALID`는 supplier 단계 원인이다. count 예약 1·
+generation 예약 0·HTTP unknown·estimated=null을 각각 유지한다.
+
+이번 준비는 기존 단일 unit 안의 순수 test-only prototype이다. runtime에서
+import하거나 실행하는 planner/API가 아니며 실제 파일의 진위 확인·예산 예약·
+발급·권한 생성 기능이 없다. 외부에서 검증된 선행 증거 projection과 독립 expected
+hash를 입력으로 받아 original root, aggregate header/state, child grant,
+closure/accounting, 실행 당시 source/runtime 및 carry의 연결을 대조한다.
+이 입력의 실제 파일 검증/독립 witness 확보는 아직 구현·검증하지 않았다.
+합성 hash가 실제 승인이나 실제 증거로 승격되는 것이 아니다.
+
+제안은 원래 첫 질문 하나의 명시적인 1회 재검증이다. 두 고정 draft의 독립
+request/projection hash를 대조하되 첫 항목만 고르며 둘째로 대체하지 않는다.
+count 1/generation 1/HTTP 2·자동 retry 0·같은 모델/default tier/origin/endpoints·
+input 16384/output 2048과 정확 AI source 제안만 수용한다. 기존 count 1을 포함해
+계획 count 2이며, 신규 보수 예약 50,000,000을 가정한 누적 200,000,000/잔여
+800,000,000nanoUSD를 계산한다. 실제 예약이나 실사용액이 아니다. 새 두 질문
+batch 100,000,000안은 채택하지 않는다.
+
+결과는 언제나 `execution_authorized=false`, `new_source_bound=false`다.
+이전 retry 0 정책이 재검증을 자동 허용하지 않는다. 첫 요청의 명시적 1회 재검증과
+새 bounded 시간창 결정, 동일 선행 사건을 중복 후속에서 소비하지 못하게 하는
+독립 단일 소비 witness, fresh AI source capability와 검토된 단일 실행 조립이
+없으면 실행할 수 없다. 기존 두 질문 legacy runner와 source/hold가 다른
+continuation receipt를 우회하거나 그대로 재사용하지 않는다.
+
+프로토타입은 controller의 128KiB provenance 상한을 늘리지 않으며 실제 controller/
+entry/worker/guard/AI32·기존 실행 산출물은 변경하지 않는다. 실제 실행 기능이
+필요해지면 정확한 추가 파일과 보호 입력 범위를 별도 검토해야 한다. 이 계약의
+수용은 순수 합성 계산/거절 회귀이며 실제 authority·PG·provider 수용이 아니다.
+
+## CF-026 단일 successor helper · 실제 activation 전
+
+별도 `scripts.cf026_successor`는 private DI용 단일 helper이며 CLI/issuer/기본
+credential loader가 없다. authority/source/journal이 없으면 부작용 전에 닫는다.
+기존 controller·verifier·gateway·PhaseBudget·worker/guard와 private 실행 산출물은
+변경하지 않는다. 실제 authority adapter는 아직 제공하지 않으며 합성 callback이
+실제 소비 권위라고 주장하지 않는다.
+
+읽기 검증은 실제 frozen header/state, child grant/state, closure, coordination
+head, 과거 carry grant/state/closure 및 당시 runtime의 10개 pinned JSON을 쓴다.
+파일을 열기 전에 canonical 경로/종류를 제한하고, owner·mode0600·nlink1·symlink
+거절·identity/hash를 검사한다. header의 carry hash, allocation/child/회계 연결,
+coordination의 root/header/state head와 directory/lock pin, closure의 adapter
+pin, 당시 source/runtime 연결을 교차 대조한다. 예전 raw schema를 단순한 projection
+schema로 바꿔 수용하지 않는다. 새 source는 별도의 정확 AI capability다.
+
+successor-once identity는 원 namespace와 원 bootstrap에 고정한다. 실제 최종
+head는 따로 pin하며 source/invocation·해시 표현을 바꿔 슬롯을 늘릴 수 없다.
+독립 consume/readback ACK가 reserve50m→issue→start의 local fsync/fresh readback보다
+선행하고, start 뒤에만 자기 자원을 만든다. local journal은 검토된 private 경로의
+추가 증거이며 새 budget root나 authority가 아니다. 원 부모150m은 불변이고 후속
+보수 예약50m과 결합한 값만200m이다. 실제 adapter의 원자성·보존은 미검증이다.
+
+lease는 독립 ACK의 발급 시각부터 최대600초, start는30초 이내다. 두 제한 모두
+wall-time과 monotonic을 확인하며 사용자 지정 기간으로 표현하지 않는다. await/
+ACK/fsync 뒤와 driver 호출·소유 engine의 SQL/commit 직전에 재검사한다. SQL
+listener는 새 소유 engine에만 붙고 finally에서 제거한다. 이는 전송 직전 검사이며
+이미 서버가 받은 명령의 원자적 취소를 보장하지 않는다. 과거 날짜를 다시 열지 않는다.
+
+새 조립은 기존 verify_live를 정확 한 번 호출한다. 소유 setup의 동일 attestation/
+migration·Principal·최초 epoch INSERT/fresh SELECT 구조를 유지하고 그 engine에
+lease guard를 더한다. local epoch100m/2는 그대로이며 외부 count1/generation1/
+attempt1·50m 권한이 더 좁게 제한한다. 기존 준비 owner/draft/spec/attempt/epoch
+조회 helper를 재사용하고 count root ACK→local PhaseBudget ACK 뒤 deferred source를
+최대 한 번 공급한다. 실제 source/key는 이번 무키 검사에서 읽지 않는다.
+
+모든 실패 경로에서 fresh ledger/고정 진단을 먼저 로컬에 보존하고 외부 회계 ACK
+뒤에만 정확 소유 자원을 정리한다. 회계 ACK가 불명이면 proof를 보존하며 preserve도
+driver timeout/외부 bound 안에 둔다. 뒤늦은 취소가 앞선 오류에 가려지지 않는다.
+raw provider/자유 예외·키·비밀 hash를 보존하지 않고 HTTP unknown과 usage null,
+권리/예약을 유지한다. local 증거 유실 뒤에도 독립 권위가 재소비를 막아야 한다.
+
+현재 수용은 새 helper의 실제 함수·자기 합성 파일 journal/fsync·authority 모의와
+verify_live keyword/phase/supplier DI spy다. 실제 Principal/ASGI/PG/provider가 모두
+실행된 수용이 아니다. actual activation에는 신규265-source/provenance, AI source
+metadata, 단일 scope/lease descriptor, 명시 private successor entry, 실제 독립
+authority adapter의 최종 검토가 남아 있다. 기존 private entry/manifest/flags를
+조용히 바꾸거나 소비된 grant를 재사용하지 않는다.
+# CF026 명시 재시도 ordinal 1 추가 경계
+
+소비된 최초 successor가 provider 전에 입력/readback timeout으로 종료된 뒤의 명시 재시도는 원 once의 재개가 아니다. 원 frozen 부모 150m과 소비된 successor 50m은 그대로 보존하고, 정확한 timeout/원복 증거 및 원문 item·turn·UTF-8 본문 hash, 새 동의에 묶인 고정 ordinal 1만 별도로 검증한다. 기본 authority는 계속 unavailable이며, local evidence나 boolean/hash만으로 실제 실행권이 생기지 않는다.
+
+동일 namespace/bootstrap와 고정 ordinal 1이 identity를 결정한다. source·invocation·동의 ID·증거 직렬화 변경으로 추가 슬롯을 만들 수 없다. 실제 외부 조율은 같은 canonical lock 아래 소비 전 이력 확인·최초 추가 50m 기록·독립 readback을 수행해야 한다. 같은 record/nonce나 비어 있는 old journal을 재사용하지 않고, 이후 자동 retry와 ordinal 2는 닫는다.
+
+기존 200m에 추가 50m을 합친 250m만 이 분기의 server record·phase ACK·회계·반환값으로 수용한다. 이는 실제 청구액이 아니며 기존 보류를 환불하거나 예산을 초기화하지 않는다. 첫 동일 질문 한 개, 무료 count 1·generation 1·HTTP 2·자동 provider retry 0은 유지한다. 원 과거 HTTP unknown과 별도 timeout의 미호출 관측도 구분한다.
+
+새 helper의 시작 제한은 발급 시각 기준 wall/monotonic 120초이며 private ready 입력도 120초로 제한한다. 전체 lease 600초·provider/verifier 60초·callback 5초·cleanup 30초·예약 전 source preload 30초는 유지한다. 입력/ACK 수신 시점부터 시계를 다시 시작하지 않고 늦은 ACK에는 새 자원/키/송신을 막는다. 이번 무키 수용은 실제 권위 발급이나 PG/provider 성공을 뜻하지 않는다.
+
+## CF026 policy2 deadline·정산·안전 진단 추록
+
+위 재시도 조립의 시간 설명은 당시 이력이다. 이번 무키 변경에서 policy2의
+`provider_seconds`를 5에서 55로 변경하고 `verifier_seconds`는 60으로 유지했다.
+AI와 Backend mirror의 새 semantic SHA는
+`c3cb325b4b4e92cf72b1ff62714dec6e12f8637220dcaa0b2d9443644b397251`이다.
+모델·가격·토큰·시도 상한·schema·prompt·endpoint와 자동 retry 0은 그대로다.
+이는 새 semantic spec이며 과거 승인·epoch·준비·frozen source·입력·manifest를
+새 hash로 갱신하거나 기존 consumed 권리를 복구하지 않는다.
+
+policy2의 meaning/route/client/preparation 상한은 각각 60/65/70/75초다.
+policy1의 meaning 5초·client 8초·total 15초와 body/auth 제한은 보존한다.
+gateway에는 meaning outer를 포함한 가장 이른 절대 deadline을 내부 전달한다.
+최대 5초, 짧은 잔여 시간에서는 그 1/4 이하의 정산 tail을 남기고 각 HTTP는
+`min(55, 남은 shared send deadline)`으로 제한한다. authority가 좁힌 기한을
+다시 늘리지 않는다. 별도 settlement deadline이 없는 기존 budget은 현재 송신
+기한과 budget deadline의 교집합을 사용한다.
+
+정산 시작을 await 전에 latch하여 정상/실패 경로 전체에서 finish는 최대 1회다.
+성공 정산 ACK 손실·DB 예외·정산 timeout 뒤 추가 finish나 provider retry는 없다.
+외부 cancellation은 취소된 task에서 정산 SQL을 다시 실행하지 않고 전파하며
+unknown/hold를 보존한다. 정산 기한도 원 absolute/authority와 최대 5초보다 길지 않다.
+
+새 private `gateway_diagnostic`은 최대 16개의 고정 stage/elapsed_ms와 정산 불명
+flag만 담고 기존 public DTO와 verifier stages에는 섞지 않는다. dispatch 진입은
+wire 송신 증거가 아니다. 응답 관측·count 검증·usage·정산 ACK를 구분하며 키·본문·
+헤더·자유 예외·HTTP status는 durable projection에 남기지 않는다. verifier 반환
+전에 외부 취소나 바깥 timeout이 끝나면 이 진단이 없을 수 있다.
+
+실제 helper의 정확한 Closed 타입·등록 code만 고정 오류로 전달하고 후기 정산
+gate도 최종 회계 전에 보존한다. 이 변경은 무키 회귀 수용이며 기존 250m 보수
+예약을 환불하거나 실제 생성 결과·비용·모델 품질을 확인한 것이 아니다.

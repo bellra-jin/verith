@@ -666,3 +666,253 @@ synthetic PG4묶음·정리 증거를 해시로 대조했다. 위 pending 문장
 실행기 구현·합성 검증 완료이며 실제 모델·Flow/Technical/provider·브라우저/운영
 인수 완료가 아니다. 이전 실제 시도의 송신/사용량 unknown과 보수 carry는 보존한다.
 원격 exact-head CI·Ready 이후 CI와 정상 병합 결과는 별도로 확인해야 한다.
+## Fixed-window renewal preparation
+
+The resumed controller keeps the historical shutdown constant and adds one closed
+current window. Live headers require the reviewed start lower bound and expiry
+upper bound; the authority is checked again after awaiting its acknowledgement.
+No header fields, endpoints, retry policy, token caps, budget amounts, original
+hold or issuance identities were changed. The controller remains below its
+131,072-byte provenance cap. The private adapter, ceremony, descriptor builder
+and frozen verifier use the same window; entry/runtime/coordinator remain unchanged.
+
+Focused protected self3/unit207 passed with guard violations0 and owned-root
+cleanup. The first self invocation stopped before worker execution because it
+used the resolved interpreter instead of the documented absolute virtualenv entry.
+Correcting that caller path preserved the interpreter guard. Separate private
+helper tests55 passed using synthetic paths, with actual key/resource access,
+network and subprocess operations blocked by the test audit.
+
+At this preparation checkpoint the three release flags remain False. No live
+grant, aggregate, database or provider request has been created. Final source,
+runtime and descriptor binding, independent review and the actual one-shot run
+remain pending. These tests are not evidence of actual model interpretation.
+
+## 갱신된 시간창의 실제 일회 실행 결과
+
+현재 창의 source264, runtime, descriptor와 실행 명령의 독립 검토를 완료했다.
+기존 일회 entry를 정식 도구 심사로 요청했고 허용되어 프로세스가 시작됐다.
+`preflight-reviewed`는 성공했지만 `execute-reviewed-once`는 안전 중단 상태로
+exit1을 반환했다. 같은 동작을 재시도하거나 다른 provider 경로로 전환하지 않았다.
+
+최종 진단은 첫 후보의 `supplier_failure` / `KEY_SOURCE_INVALID`다. 승인 확인 뒤
+`source_read_entered`를 기록했지만 `source_read_returned`에는 도달하지 않았다.
+이 고정 코드는 로컬 `single_key`의 입력 형식 검증에서 발생한다. 값이나 형식의
+세부 원인은 출력하거나 추가로 읽지 않았고, OpenAI 인증 오류로 단정하지 않는다.
+첫 `FIRST_SETTLEMENT_UNCONFIRMED` gate에서 중단되어 둘째 후보는 실행하지 않았다.
+모델 출력·종목/의도 해석 품질은 검증하지 못했다.
+
+fresh ledger의 count-stage 예약1 / generation 예약0, estimated_nano=null,
+blocked/unknown hold를 cleanup 전에 영속 기록했다. 예약 횟수는 실제 HTTP 호출
+횟수가 아니다. count/generation HTTP 필드는 unknown을 유지한다. 이 실행의
+phase 보수 hold는50,000,000nanoUSD이며, 외부 aggregate의 전체 예약은 과거
+50,000,000 carry와 이번 allocation100,000,000을 합한150,000,000nanoUSD다.
+이는 실제 청구액이나 관측된 사용액이 아니며, allocation은 환불하지 않는다.
+aggregate는 frozen이고 child는 closed여서 새 실행을 자동으로 열지 않는다.
+
+소유 receipt에 한정한 PG cleanup_confirmed와 entry의 source-copy close 반환을
+확인했다. 원 실제 carry 파일 해시와 실행 source264는 전후 동일했다. 임시
+세 RELEASED는 새 검토된 False bytes/hash로 전부 복원됐다. 원 key/environment
+파일을 수정하거나 비밀·비밀 해시·raw provider 응답을 결과에 넣지 않았다.
+실행 시점 frozen manifest는 보존하고 문서 갱신 hash를 별도 기록한다.
+이번 결과는 실행 심사 통과 및 실제 안전 중단/회계/정리 관측이며, OpenAI 연결·
+실제 모델 해석·Flow 저장·Technical·브라우저 수용 통과가 아니다.
+
+## 키 출처 서비스 경로 정정 · 무키 검증
+
+사용자의 서비스 위치 정정에 따라 검증기의 고정 source를 main worktree의
+`verith/ai/.env`로 맞춘다. 이전 Backend source 지정은 잘못됐다. 조율 측의
+비노출 검사에서 Backend의 대상 선언이0개였고 다른 형식 오류는 없었다는
+보고를 받았다. 사용자 키 값이 잘못됐다고 판단할 근거는 없다.
+
+Controller의 정확한 source 경로만 변경하고 Backend/Frontend/검증용 worktree/
+다른 workspace/다른 파일명 거절 회귀를 추가한다. 기존 owner·regular/nlink1·
+no-symlink·mode0644·identity drift 보호는 변경하지 않는다. 실제 `.env` 내용은
+읽지 않고 합성 metadata와 기존 무키 보호 검사만 사용한다.
+원 실행의 grant/state/aggregate/journal/descriptor/runtime/manifest와 예약은
+불변으로 보존하며 새 source로 재결합하거나 재실행하지 않는다. 기존 private
+runtime도 실행 당시 증거로 유지하고, 향후 수정안만 별도 checkpoint에 저장한다.
+기존 외부 정본의 Backend 경로와 충돌하는 부분은 사용자의 후속 서비스 위치
+정정에 따라 이 범위에서만 변경했다. 이 수정은 실행 기간이나 권한의 연장이 아니다.
+
+
+이번 정정 후 기존 보호 `live-controller-self`3개와 단일
+`live-controller-unit`212개가 통과했다. guard violations0이며 두 검사 모두
+자기 임시 root를 제거했다. 정확 AI 경로 수용은 합성 metadata로, 기존 provenance
+controller drift와 source identity/mode drift는 기존 회귀로 검사한다. 다른 서비스
+경로5개는 credential metadata/content 접근 전에 거절함을 별도 회귀로 확인했다.
+이 결과는 실제 AI source 파일의 키 존재·값·API 인증 수용을 증명하지 않는다.
+기존 private runtime의 검토용 수정안은 정확 KEY 경로 한 줄만 변경됐고 구문을
+정적으로 검사했다. 기존 실행 파일·고정 산출물은 교체하지 않았다. 실제 PG·모델·
+provider·키 읽기·CF029 재시도·Git 게시·새 실행권 발행은 이번 정정에서0이다.
+
+
+## frozen 사건을 보존한 후속 검사 준비
+
+새 사용자 지시는 실제 호출이 아닌 후속 방법 준비·무키 회귀 범위다. 실제 창은
+만료됐으며 기존 frozen 사건·소비된 실행권·150,000,000nanoUSD 예약은 유지한다.
+기존 aggregate의 frozen 거절과 현재 source/hold에 맞지 않는 continuation을
+변경하지 않는다. Controller는 130,675bytes로 기존 상한 안에 그대로 보존한다.
+
+준비 전용 prototype과 합성 회귀를 기존 고정 단일 unit 파일에 추가했다. 실행
+코드가 아니라 순수 계약 계산이며, 실제 파일/원장의 진위 확인이나 발급권은 없다.
+독립 expected 9종 증거 hash, closed/frozen/소비/cleanup 상태, count 1/gen0,
+HTTP unknown·usage null 및 현재 carry 150m을 대조한다. 첫 동일 질문의 요청/
+projection만 고르고, 기존 모델·공식 목적지·default tier·토큰 상한·retry 0을
+유지한 count 1/generation 1/HTTP 2·신규 50m의 계획만 계산한다. 계획 누적 200m/
+잔여 800m은 실제 예약이나 비용이 아니다. 중간의 두 질문 100m 제안은 이후
+독립 검토의 횟수 정정에 따라 채택하지 않았다.
+
+반환값은 항상 execution_authorized=false이며 이전 실패의 재시도를 허용하지
+않는다. 최초 요청을 1회 재검증하는 명시 결정과 새 시간창, 같은 선행 사건의
+단일 소비 witness, 새 AI source capability·단일 실행 조립이 남아 있다.
+현재 구현으로는 frozen aggregate를 재사용하거나 기존 runner를 호출할 수 없다.
+private checkpoint에는 합성 계획/수용 기준만 기록하고 실제 grant/allocation/
+장부·flags·키·provider·DB·CF029 거절 동작·Git은 건드리지 않는다.
+
+
+기존 보호 `live-controller-unit`의 단일 파일 254개가 통과했다. 기존 212개와
+신규 순수 계약 회귀 42개이며 guard violations 0, exit0, 자기 임시 root 제거를
+확인했다. 보호 self/entry/controller/guard는 앞선 검사 이후 변경하지 않아
+이번에는 반복하지 않았다. 예약과 사용액을 구분하고 입력 불변·다른 서비스 source
+거절·실행 권한 없는 결과를 실제 live grant로 수용하지 않는 회귀를 포함한다.
+합성 projection 검증을 실제 증거 진위·외부 단일 소비 authority 검증으로
+표현하지 않는다. 기존 실제 실행 증거 11파일은 해시가 그대로다.
+
+
+### 최종 한 질문 prototype · 새 진행 의사와 실행 미구현의 구분
+
+이 절 앞부분의 ‘실제 호출이 아닌 준비 범위’는 최초 준비 지시 시점의 이력이다.
+이후 사용자는 첫 동일 질문 하나/count 1회/generation 1회/추가 보수 예약
+50,000,000nanoUSD·누적200,000,000 제안으로 진행하는 데 동의했다. 개발 측도
+원문과 확인 가능한 수신 시각을 직접 대조했다. 같은 범위를 다시 승인받아야
+한다는 상태가 아니며, 그 진행 의사를 검토된 실제 실행 scope·단일 소비·짧은
+once-only lease에 결합하는 구현이 남은 상태다. 과거 만료창이나 소비된 실행권을
+되살리지 않고 사용자 지정 기간을 임의로 만들지 않는다.
+
+254개는 첫 질문/추가50m의 이전 prototype 검사 결과이며, 깊은 불변 반환과
+history/attempt/spec/price 검사를 보완하기 전 이력이다. 보완 후 같은 보호 단일
+파일에서 최종269개가 통과했다(exit0, guard violations0, 자기 임시 root 제거).
+MappingProxyType 안의 primitive/tuple만 반환하며 top-level/nested 변경 거절,
+입력 불변·결정론, 원 carry와 이번 batch 소속·attempt 누적2·독립 expected
+namespace/proof·spec/price·두 질문/둘째 질문 대체 거절을 확인했다.
+
+이 prototype의 독립 source 검토는 무키 범위에서 구체 차단 finding 없이 끝났다.
+제공된 해시끼리의 일치가 실제 출처 진위를 증명하지 않는다는 한계를 유지한다.
+실제 선행 증거·독립 witness 검증, 원자적 단일 소비, 정확 AI source의 fresh
+capability와 검토된 단일 요청 실행기 결합은 미구현이다. Controller는 그대로이며
+기존 grant/원장/hold·private runtime·flags와 실제 실행 증거는 변경하지 않았다.
+이번 준비의 실제 key/.env 읽기·provider·DB·발급·Git·CF029 재시도는 모두0이다.
+
+## 단일 요청 successor helper 구현 · 무키 조립
+
+별도 단일 요청 조립 정본 v1.0 SHA256
+`af1d792007538b7b41a5bce0df333e8300097ddad752acc37b8eb7f565fe3d83`의
+정확6경로로 새 `backend/scripts/cf026_successor.py`와 기존 보호 선택/회귀·계약/
+작업 기록을 보완했다. 기존 controller는130,675bytes와 검토된 hash 그대로다.
+worker/guard·AI32·verifier/gateway/PhaseBudget·DB schema·package/lock·private
+loader/entry와 실제 기록은 변경하지 않았다.
+
+실제 frozen schema의10 JSON과 canonical 경로·pin을 검증하고, parent accounting과
+child journal·coordination head/lock·runtime/source를 연결한다. 원 namespace/
+bootstrap의 단일 successor identity, 독립 consume+readback, local journal의
+scope/identity/fsync, 두 clock의600초/30초 제한, start fsync 이후 자원/SQL/epoch
+쓰기 전 검사를 구현했다. 소유 engine에만 SQL/commit hook을 붙이고 복구한다.
+기존 local epoch100m/2는 유지하며 외부50m/count1/generation1 권한을 좁게 쓴다.
+
+초기 self3/unit283이 통과한 뒤 집중 회귀를 추가했다. 다음 회차는307통과/1실패였다.
+실패는 성공용 mock ledger에 normal transition이 요구한 active=null이 빠진 fixture
+오류였으며 이를 보완했다. 실제 DB나 공급자 오류로 해석하지 않는다. 이후317개가
+통과했고 읽기 쉬운 줄바꿈 정리는 AST 동일성을 대조했다. 이력 로그는 보존하며
+최종 소스 검사 결과와 합산하지 않는다.
+
+단일 verify_live spy는 실제 새 helper의 phase/deferred supplier/keyword 경로를
+실행하지만 fresh Principal/준비 SQL·verifier 본체는 mock이다. epoch helper의
+지연 clock 후 INSERT0와 소유 SQL/commit guard도 실제 새 함수를 mock DB에 실행한
+회귀다. 실제 PG·migration·ASGI·OpenAI 통과로 보고하지 않는다. 실제 authority는
+기본 unavailable이며 이번 synthetic witness는 독립 실제 서비스/원자 CAS 증거가 아니다.
+
+회계 ACK 손실 전에 확인 가능한 ledger를 local journal에 남기고, ACK 뒤 cleanup을
+확인한다. ACK 불명에는 proof/preserve와 보수 예약을 유지하고 취소를 재전파한다.
+원 실제 기록·원150m 예약과 세 .env를 보존했다. 이번 actual 키/.env 읽기·DB·API·
+발급·flags 활성화·Git·CF029 거절 재시도는0이다.
+
+최종 동결 후보의 보호 self3·단일 unit322가 통과했다. 최종 로그는 self-4.log와
+unit-6.log이며 guard violations0, exit0, 자기 임시 root 제거를 확인했다. 최종
+직전 회차는320통과/2실패였다. 신규 테스트가 phase ACK 불명에서 proof를 보존한
+올바른 동작을 cleanup으로 잘못 기대했기 때문이며 단언을 바로잡았다. 이력으로
+보존하고 최종322와 합산하지 않는다. 검사 실행 권한 거절이나 실제 자원 실패는
+아니었다.
+
+최종 회귀에는 frozen 실제 schema/연결·canonical 경로와 root/coordination lock
+identity·첫 요청 변조·old runtime/source·두 clock·lease 갱신 거절·start fsync
+지연·소유 SQL/commit/epoch guard·동시/재시작/로컬 증거 손실·phase 직렬화·
+ACK 불명·늦은 cancellation·회계 보존·고정 비밀 비노출이 포함된다. 실제 새 helper를
+실행한 함수 테스트와 독립 authority/DB/verifier spy는 구분한다. source는 controller
+모드에서만 신규1개를 더해265개이며 다른 기존 모드의 사본 범위는 늘리지 않았다.
+
+실제 활성화에는 그대로인 private_runtime의 AI source/신규 module loader와265-source
+검토 map, 단일 scope/lease descriptor, 명시 successor private entry, 실제 독립
+authority adapter/retained witness가 남아 있다. old private entry는 여전히 과거
+두 질문 ceremony를 가리키며 재사용하지 않는다. 이 단계는 repo helper와 무키
+회귀 완료이지 실제 발급·원자 외부 권위·ASGI/PG/provider·모델 품질 완료가 아니다.
+사용자의 단일 질문 진행 의사는 확인됐고 같은 범위의 시간 승인을 반복 요청할
+상태가 아니다. 실제 동작 전 최종 scope/one-shot lease/출처 결합을 검토해야 한다.
+# CF026 successor 명시 재시도 추가 검증
+
+최초 successor의 별도 실제 시도는 server once 예약 50m이 소비된 뒤 readback이 시작 기한을 넘겨 입력을 보내지 않고 timeout으로 종료됐다. 부모가 관측한 해당 시도의 key/count/generation/DB는 0이며 entry는 False로 원복됐고 source copy는 제거됐다. 빈 local journal과 원 소비 기록은 보존한다. 기존 150m과 합친 200m은 실제 청구액이 아닌 보수 예약이며, 이번 코드 수정으로 해제하지 않는다.
+
+후속 명시 재시도는 정확 첫 질문 한 개와 추가 50m·결합 250m, count 1/generation 1/HTTP 2/자동 provider retry 0으로 한정한다. base artifact 10과 frozen 부모 검증은 유지하고, 원 timeout/원복 evidence와 manifest pin, 실제 readback의 원문 UTF-8 본문·item/turn 및 새 동의를 추가 검증한다. body hash를 JSON 재직렬화로 대체하지 않으며, namespace/bootstrap의 고정 retry ordinal 1만 허용한다. 새 source/동의/nonce/디렉터리로 슬롯을 늘리지 않는다.
+
+이번 직접 검증은 기존 보호 self 3개, 고정 단일 unit 358개 통과·guard 위반 0·parent exit 0·임시 root 제거다. 별도 private stdlib 합성 42개도 통과했고 audit의 key-content/network/unexpected-child는 각각 0이다. helper의 실제 함수와 local lock/fsync/PTY를 실행한 것이며, 외부 authority·runner·PG/provider는 합성/DI 경계다. 실제 모델 품질·정산 성공으로 표현하지 않는다.
+
+초기 보호 명령은 private 준비용 PATH를 넣어 caller env gate에서 exit 78로 차단됐다. guard를 변경하지 않고 문서화된 PATH 없는 clean env와 정확한 worktree .venv Python 입구로 정정했다. 첫 unit의 테스트 assertion 배치와 validator 예외 기대 오류를 수정한 뒤, raw-body/manifest 및 늦은 ACK의 250m 보존 회귀를 포함한 최종 358개가 통과했다. 실패 로그는 private checkpoint에 별도 보존하며 성공으로 합산하지 않는다.
+
+120초 시작 제한은 wall과 monotonic을 함께 강제하며 ready 입력도 120초다. 48.045초 전달, 120초 경계와 초과, 새 자원 전 늦은 ACK, 같은 retry의 중복/변조·이전 200m 보존을 검증했다. 전체 lease 600초·provider 60초·callback 5초·cleanup 30초·예약 전 preload 30초와 기존 controller/AI32/worker/guard/dependency는 유지했다. 새 실제 입력·임시 activation delta는 다음 독립 확인 대상이며, 이번 구현/무키 검사에서 실제 예약·키·DB·API·Git 실행은 0이다.
+
+## 실제 retry1 결과와 별도 무키 deadline 보완
+
+부모가 수행한 실제 retry1은 입력 전달 뒤 SUCCESSOR_CLOSED로 종료됐다. 보존된
+정제 journal에는 count/generation 예약 ACK, supplier의 source_read_returned,
+final accounting과 closed/cleanup_confirmed가 있다. meaning unavailable·정산
+unconfirmed·usage unknown·estimated null이며, 250m은 청구액이 아닌 보수 예약이다.
+기존 실행물·once·원장·입력·manifest와 이 예약을 그대로 보존했다.
+
+generation 예약은 gateway가 count HTTP 200과 응답 검증을 통과한 뒤에만 발생한다는
+코드 경로 근거가 있다. 생성 HTTP 송신/완료·모델 출력·실제 청구는 기존 증거로
+확정할 수 없다. 당시 CONTROLLER_FAILED는 helper의
+FIRST_SETTLEMENT_UNCONFIRMED를 일반화할 수 있는 오류 표시였으며 공급자 오류를
+직접 증명하지 않는다. 실제 중단 원인의 시간·예외 단계는 소급 확정하지 않는다.
+
+기존에는 provider와 meaning 전체가 각각 5초이고 내부 client 8초,
+route/preparation 15초·verifier 60초였다. 중첩 timeout/cancellation이 정산을
+끊을 수 있는 경로를 별도 무키 수정으로 보완했다. 새 spec은 provider 55초·
+verifier 60초이며 양쪽 mirror SHA는
+`c3cb325b4b4e92cf72b1ff62714dec6e12f8637220dcaa0b2d9443644b397251`이다.
+policy2 외곽은 60/65/70/75초로 정렬하고 가장 이른 absolute deadline 안에서
+송신과 최대 5초 정산 tail을 나눈다. policy1·body/auth·모델/가격/횟수는 보존한다.
+
+정산은 await 전에 latch하여 성공·실패 경로 합계 최대 1회다. ACK 손실·빠른 DB
+예외·정산 timeout에서 finish 1회와 HTTP 추가 요청 0을 확인했다. 외부 취소 시
+SQL 재정산 없이 cancellation을 전파하고 hold/unknown을 보존한다. 안전 진단은
+별도 private 필드의 고정 stage/elapsed와 정산 불명 flag만 사용한다. verifier가
+반환하지 못하는 바깥 timeout/cancel에서는 이 진단도 없을 수 있다.
+
+최종 직접 검사는 보호 meaning-assembly self 3개/unit 77개,
+live-controller self 3개/unit 364개가 모두 통과했다. 두 unit은 각각 정확 단일
+파일을 수집했고 guard violations 0·parent exit 0·자기 임시 root 제거를 확인했다.
+새 private 사본의 합성 검사 44개도 통과했고 key-content/network/unexpected-child
+audit는 각각 0, release flag는 False다. private 사본은 소비된 실행 파일을
+덮어쓰지 않는다. 최종 코드의 독립 읽기 검토에서 구체적 blocker는 없었고 이후
+테스트의 DB mock에 flush 하나를 보완했다.
+
+PreparationService.post→실제 AIClient→인증 ASGI→meaning 경로에서 기존 15초에
+해당하는 scaled 지연보다 긴 응답을 검증했다. DB/종목 resolver와 후보 gateway는
+합성이며 실제 PG/provider 수용은 아니다. 실제 gateway/PhaseBudget/helper 함수
+회귀, mock SQL·callback·scaled clock의 경계를 구분한다. 신규 회귀 첫 실행은
+mock flush 누락으로 76통과/1실패였고 보완 후 77개가 통과했다. 이전 pin/기한
+수정 중 실패 로그도 보존하며 최종 통과 수와 합산하지 않는다.
+
+이번 수정·회귀에서 추가 actual key/.env 읽기·예약·발급·DB·API·flags 활성화·
+Git 작업은 0이다. 새 semantic spec의 실제 승인/epoch/과거 lineage 호환·추가
+실행·모델 품질은 미검증이며 이 작업은 ordinal 2나 기존 실행권 재사용을 열지 않는다.

@@ -827,8 +827,12 @@ class CF026Boundary(unittest.TestCase):
         raw = b''.join(('100644 ' + '0'*40 + ' 0\t' + p + '\0').encode() for p in sorted(indexed))
         with patch.object(c.subprocess, 'check_output', return_value=raw):
             copied = c.selected_sources(root, controller_only=True)
+            assembly_copied = c.selected_sources(root, assembly_only=True)
+        self.assertNotIn("backend/scripts/cf026_successor.py", assembly_copied)
         self.assertEqual({p for p in copied if p.startswith('ai/')}, set(c.CF023_INPUTS))
         self.assertIn('backend/scripts/cf026_supervisor_live_controller.py', copied)
+        self.assertIn('backend/scripts/cf026_successor.py', copied)
+        self.assertNotIn('backend/scripts/cf026_successor_other.py', copied)
         self.assertIn('backend/tests/unit/test_cf026_supervisor_live_controller.py', copied)
 
     def test_fixed_selection_keeps_existing_worker(self):
@@ -843,6 +847,9 @@ class CF026Boundary(unittest.TestCase):
     def test_controller_import_and_default_have_no_runtime_actions(self):
         import asyncio
         from scripts import cf026_supervisor_live_controller as controller
+        from scripts import cf026_successor as successor
+        with self.assertRaisesRegex(successor.Closed, "DEFAULT_UNAVAILABLE"):
+            asyncio.run(successor.run())
         with self.assertRaisesRegex(controller.ControllerError, 'LIVE_GATE_CLOSED'):
             asyncio.run(controller.run_controller(None))
         import sys

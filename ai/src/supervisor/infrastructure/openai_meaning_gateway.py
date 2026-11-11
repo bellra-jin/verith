@@ -17,6 +17,12 @@ COUNT_PATH = '/v1/responses/input_tokens'
 GENERATE_PATH = '/v1/responses'
 INPUT_FIELDS = ('model', 'instructions', 'input', 'text', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning')
 COUNT_DOCUMENTATION = 'https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count'
+DIAGNOSTIC_STAGES = frozenset({
+    'count_dispatch_entered', 'count_response_received', 'count_response_rejected', 'count_validated',
+    'generation_dispatch_entered', 'generation_response_received', 'generation_response_rejected',
+    'usage_observed', 'usage_unknown', 'usage_anomalous', 'settlement_ACK', 'hold_ACK',
+    'settlement_unconfirmed', 'provider_timeout', 'settlement_timeout', 'settlement_failure', 'cancelled', 'provider_failure',
+})
 
 
 @dataclass(frozen=True)
@@ -110,12 +116,28 @@ class OpenAIMeaningGateway:
         self._started = False
         self.settlement_uncertain = False
         self.block_confirmed = False
+        self._events = []
+        self._events_started = None
+
+    def _mark(self, stage):
+        if stage not in DIAGNOSTIC_STAGES:
+            raise MeaningUnavailable('Meaning diagnostic unavailable')
+        if len(self._events) >= 16:
+            self.settlement_uncertain = True
+            return
+        elapsed = 0 if self._events_started is None else asyncio.get_running_loop().time() - self._events_started
+        self._events.append({'stage': stage, 'elapsed_ms': min(120000, max(0, int(elapsed * 1000)))})
+
+    def diagnostic(self):
+        # Dispatch entry is not proof of bytes transmitted. Never includes a key,
+        # headers, raw body, arbitrary exception text or a hash of those values.
+        return {'events': [dict(event) for event in self._events], 'settlement_uncertain': self.settlement_uncertain}
 
     @staticmethod
     def valid_key(value):
         return type(value) is str and 0 < len(value) <= 512 and all(33 <= ord(c) <= 126 for c in value)
 
-    async def _post(self, path, value, limit, *, key=None):
+    async def _post(self, path, value, limit, *, key=None, deadline=None):
         if path not in {COUNT_PATH, GENERATE_PATH}:
             raise MeaningUnavailable('Meaning destination unavailable')
         credential = self._key if key is None else key
@@ -125,17 +147,28 @@ class OpenAIMeaningGateway:
         if len(raw) > CAPS['request_bytes']:
             raise MeaningUnavailable('Meaning request unavailable')
         try:
-            async with httpx.AsyncClient(transport=self._transport, timeout=CAPS['provider_seconds'], trust_env=False, follow_redirects=False, verify=True) as client:
+            phase = 'count' if path == COUNT_PATH else 'generation'
+            remaining = CAPS['provider_seconds'] if deadline is None else deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError('Meaning provider deadline exceeded')
+            self._mark(phase + '_dispatch_entered')
+            async with httpx.AsyncClient(transport=self._transport, timeout=min(CAPS['provider_seconds'], remaining), trust_env=False, follow_redirects=False, verify=True) as client:
+                if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError('Meaning provider deadline exceeded')
                 async with client.stream('POST', ORIGIN + path, content=raw,
                                          headers={'Authorization': 'Bearer ' + credential, 'Content-Type': 'application/json', 'Accept-Encoding': 'identity'}) as response:
                     if response.headers.get('content-encoding', 'identity').lower() != 'identity' or response.status_code != 200:
+                        self._mark(phase + '_response_rejected')
                         raise MeaningUnavailable('Meaning provider unavailable')
                     body = bytearray()
                     async for chunk in response.aiter_bytes():
                         if len(body) + len(chunk) > limit:
                             raise MeaningUnavailable('Meaning response unavailable')
                         body.extend(chunk)
+                    self._mark(phase + '_response_received')
                     return decode(bytes(body))
+        except httpx.TimeoutException:
+            raise TimeoutError('Meaning provider timeout') from None
         except httpx.HTTPError:
             raise MeaningUnavailable('Meaning provider unavailable') from None
         finally:
@@ -152,11 +185,13 @@ class OpenAIMeaningGateway:
                     raise TimeoutError('Meaning settlement deadline exceeded')
         except BaseException:
             self.settlement_uncertain = True
+            self._mark('settlement_unconfirmed')
             raise
+        self._mark('hold_ACK' if blocked else 'settlement_ACK')
         if blocked:
             self.block_confirmed = True
 
-    async def propose(self, draft, *, attempt_id=None):
+    async def propose(self, draft, *, attempt_id=None, caller_deadline=None):
         key, supplier = self._key, self._key_supplier
         self._key = self._key_supplier = None
         if self._started:
@@ -165,8 +200,48 @@ class OpenAIMeaningGateway:
         authorized = False
         observation = {'state': 'unknown', 'reason': 'UNOBSERVED', 'estimated_nano': None}
         loop = asyncio.get_running_loop()
-        deadline = min(loop.time() + CAPS['provider_seconds'], self._deadline if self._deadline is not None else float('inf'))
+        self._events_started = loop.time()
+        bounds = [loop.time() + CAPS['verifier_seconds']]
+        invalid_deadline = False
+        for bound in (self._deadline, caller_deadline):
+            if bound is None:
+                continue
+            if type(bound) not in {float, int} or not -float('inf') < bound < float('inf'):
+                invalid_deadline = True
+                bounds.append(-float('inf'))
+            else:
+                bounds.append(bound)
+        overall_deadline = min(bounds)
+        # Keep finalization inside the existing verifier/authority deadline. A
+        # shorter caller deadline narrows both portions; neither is renewed.
+        reserve = min(5, max(0, (overall_deadline - loop.time()) / 4))
+        deadline = overall_deadline - reserve
+        finish_deadline = None
+        settlement_attempted = False
+        def tighten_send():
+            nonlocal deadline, overall_deadline
+            hard = min(overall_deadline, getattr(self._budget, 'settlement_deadline', overall_deadline))
+            if hard < overall_deadline:
+                overall_deadline = hard
+                tail = min(5, max(0, (hard - loop.time()) / 4))
+                deadline = min(deadline, hard - tail)
+            deadline = min(deadline, getattr(self._budget, 'deadline', deadline))
+        def settlement_limit():
+            nonlocal finish_deadline
+            legacy_limit = min(deadline, getattr(self._budget, 'deadline', deadline))
+            approved = min(overall_deadline, getattr(self._budget, 'settlement_deadline', legacy_limit))
+            finish_deadline = min(approved, loop.time() + 5) if finish_deadline is None else min(finish_deadline, approved)
+            return finish_deadline
+        async def settle(blocked):
+            nonlocal settlement_attempted
+            if settlement_attempted:
+                self.settlement_uncertain = True
+                raise MeaningUnavailable('Meaning settlement unavailable')
+            settlement_attempted = True
+            await self._finish(attempt_id, observation, blocked, settlement_limit())
         try:
+            if invalid_deadline:
+                raise CounterUnavailable()
             if self._budget is None or self._agreement is None or supplier is not None and (key is not None or not callable(supplier)) or supplier is None and not self.valid_key(key):
                 raise CounterUnavailable()
             self._agreement.validate()
@@ -184,13 +259,14 @@ class OpenAIMeaningGateway:
                     if type(approved_until) not in {float, int} or approved_until <= loop.time():
                         raise CounterUnavailable()
                     deadline = min(deadline, approved_until)
+                tighten_send()
                 # The nested boundary is the same absolute deadline, never a renewed duration.
                 async with asyncio.timeout_at(deadline):
                     authorized = True  # An uncertain reservation ACK retains its already durable hold.
                     if await self._budget.authorize(attempt_id, 'count', request_hash, projection_hash, None) is not True:
                         authorized = False
                         raise CounterUnavailable()
-                    deadline = min(deadline, getattr(self._budget, 'deadline', deadline))
+                    tighten_send()
                     if loop.time() >= deadline:
                         raise TimeoutError('Meaning deadline exceeded')
                     if supplier is not None:
@@ -200,9 +276,10 @@ class OpenAIMeaningGateway:
                     if loop.time() >= deadline or not self.valid_key(key):
                         raise MeaningUnavailable('Meaning credential unavailable')
                     async with asyncio.timeout_at(deadline):
-                        count = await self._post(COUNT_PATH, projection, CAPS['count_response_bytes'], key=key)
+                        count = await self._post(COUNT_PATH, projection, CAPS['count_response_bytes'], key=key, deadline=deadline)
                     if type(count) is not dict or set(count) != {'object', 'input_tokens'} or count['object'] != 'response.input_tokens' or type(count['input_tokens']) is not int or not 0 <= count['input_tokens'] <= CAPS['input_tokens']:
                         raise CounterUnavailable()
+                    self._mark('count_validated')
                     evidence = InputTokenEvidence(request_hash, projection_hash, count['input_tokens'], MODEL, sha(PRICE), self._agreement.documentation_sha256, self._agreement.counting_fee_bound_nano)
                     maximum = evidence.input_tokens * PRICE['input_nano_per_token'] + CAPS['output_tokens'] * PRICE['output_nano_per_token'] + evidence.count_fee_bound_nano
                     if maximum > CAPS['attempt_reserve_nano'] or evidence.request_sha256 != sha(request) or evidence.projection_sha256 != sha({name: request[name] for name in INPUT_FIELDS}):
@@ -211,22 +288,34 @@ class OpenAIMeaningGateway:
                         raise CounterUnavailable()
                     if loop.time() >= deadline:
                         raise TimeoutError('Meaning deadline exceeded')
-                    deadline = min(deadline, getattr(self._budget, 'deadline', deadline))
+                    tighten_send()
                     if loop.time() >= deadline:
                         raise TimeoutError('Meaning deadline exceeded')
                     async with asyncio.timeout_at(deadline):
-                        response = await self._post(GENERATE_PATH, request, CAPS['response_bytes'], key=key)
+                        response = await self._post(GENERATE_PATH, request, CAPS['response_bytes'], key=key, deadline=deadline)
                     observation = usage_observation(response)
+                    self._mark('usage_' + observation['state'])
                     if observation['state'] != 'observed':
                         raise MeaningUnavailable('Meaning usage unavailable')
                     candidate = candidate_output(response)
-                    await self._finish(attempt_id, observation, False, deadline)
-                    return candidate
+            # Leave both send timeout contexts before bounded settlement SQL.
+            await settle(False)
+            return candidate
         except BaseException as error:
-            deadline = min(deadline, getattr(self._budget, 'deadline', deadline))
-            if authorized and loop.time() < deadline:
+            if isinstance(error, asyncio.CancelledError):
+                # A cancelling task must not re-enter protected SQL. The durable
+                # reservation stays held; bounded outer accounting retains proof.
+                self.settlement_uncertain |= authorized
+                self._mark('cancelled')
+                raise
+            tighten_send()
+            if isinstance(error, TimeoutError):
+                self._mark('provider_timeout' if finish_deadline is None else 'settlement_timeout')
+            else:
+                self._mark('settlement_failure' if settlement_attempted else 'provider_failure')
+            if authorized and not settlement_attempted and loop.time() < settlement_limit():
                 try:
-                    await self._finish(attempt_id, observation, True if self.settlement_uncertain else observation['state'] != 'observed', deadline)
+                    await settle(True if self.settlement_uncertain else observation['state'] != 'observed')
                 except asyncio.CancelledError:
                     raise
                 except Exception:

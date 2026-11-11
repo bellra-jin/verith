@@ -558,6 +558,7 @@ class PhaseBudget:
         self.body,self.authority,self.agreement=body,authority,agreement
         self.key_source=key_source
         self.deadline,self.stages=deadline,stages
+        self.settlement_deadline=deadline
         self.attempt=None
         self.preparation=None
         self.request_hash=self.projection_hash=None
@@ -579,7 +580,9 @@ class PhaseBudget:
         if type(expires) is not datetime or expires.tzinfo is None:
             raise assembly_error()
         remaining=(expires-datetime.now(timezone.utc)).total_seconds()
-        self.deadline=min(self.deadline,asyncio.get_running_loop().time()+remaining)
+        approved_until=asyncio.get_running_loop().time()+remaining
+        self.deadline=min(self.deadline,approved_until)
+        self.settlement_deadline=min(self.settlement_deadline,approved_until)
         if remaining<=0:
             raise assembly_error()
         return self.deadline
@@ -663,14 +666,19 @@ class PhaseBudget:
         import asyncio
         from scripts.cf002_interactive_login import owned_session
         from src.modules.supervisor.infrastructure.preparation_repository import DurableMeaningBudget
-        if attempt!=self.attempt or asyncio.get_running_loop().time()>=self.deadline:
+        task=asyncio.current_task()
+        if task is not None and task.cancelling():
+            self.uncertain=True
+            raise asyncio.CancelledError()
+        deadline=min(self.settlement_deadline,asyncio.get_running_loop().time()+5)
+        if attempt!=self.attempt or asyncio.get_running_loop().time()>=deadline:
             self.uncertain=True
             raise assembly_error()
         delegate=DurableMeaningBudget(lambda:owned_session(self.proof),epoch_id=self.binding.epoch_id,owner=self.principal.user_id)
         try:
-            with bounded_owned_calls(self.proof,lambda:self.deadline):
+            with bounded_owned_calls(self.proof,lambda:deadline):
                 proof_identity(self.proof,self.binding,self.binding.mode)
-                async with asyncio.timeout_at(self.deadline):
+                async with asyncio.timeout_at(deadline):
                     await delegate.finish(attempt,observation,blocked=blocked)
         except BaseException:
             self.uncertain=True
@@ -757,7 +765,7 @@ async def _run_meaning_assembly(*, mode, proof, binding, principal, prepare_body
                 async with owned_session(proof) as session:
                     result=await PreparationService(session,principal=principal,client=client,epoch_id=binding.epoch_id).post(body,uuid4())
             if gateway.settlement_uncertain or budget.uncertain:
-                return {'state':'unknown','meaning_status':'unavailable','stages':stages,'settlement':'unconfirmed','real_provider_requests':0 if mode=='synthetic' else None}
+                return {'state':'unknown','meaning_status':'unavailable','stages':stages,'settlement':'unconfirmed','gateway_diagnostic':gateway.diagnostic(),'real_provider_requests':0 if mode=='synthetic' else None}
             # Read back through the real owner-aware service; no model/key on observation.
             before=len(stages)
             async with owned_session(proof) as session:
@@ -765,7 +773,7 @@ async def _run_meaning_assembly(*, mode, proof, binding, principal, prepare_body
             if result!=stored or len(stages)!=before:
                 raise assembly_error()
             stages.append('preparation_owner_readback')
-            return {'state':result['state'],'meaning_status':result['meaning_status'],'plan_hash':result['plan']['plan_hash'] if result['plan'] else None,'stages':stages,'settlement':'hold' if gateway.block_confirmed else 'observed' if 'settlement_ACK' in stages else 'not_called','semantic_sha256':MEANING_SPEC_SHA256,'real_provider_requests':0 if mode=='synthetic' else None}
+            return {'state':result['state'],'meaning_status':result['meaning_status'],'plan_hash':result['plan']['plan_hash'] if result['plan'] else None,'stages':stages,'settlement':'hold' if gateway.block_confirmed else 'observed' if 'settlement_ACK' in stages else 'not_called','gateway_diagnostic':gateway.diagnostic(),'semantic_sha256':MEANING_SPEC_SHA256,'real_provider_requests':0 if mode=='synthetic' else None}
 
 
 import weakref

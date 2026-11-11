@@ -60,8 +60,9 @@ def make_core_router(*,gateway=None,token=None,enabled=None):
         except UnicodeError:return fail(401,'AUTH_REQUIRED')
         values=[v for k,v in request.scope['headers'] if k.lower()==b'x-flow-service-token']
         if len(expected)<32 or any(c<32 or c>126 for c in expected) or len(values)!=1 or not hmac.compare_digest(expected,values[0]):return fail(401,'AUTH_REQUIRED')
+        started=asyncio.get_running_loop().time()
         try:
-            async with asyncio.timeout(15):
+            async with asyncio.timeout_at(started+15):
                 h=request.headers
                 if request.url.query or len(h.getlist('content-type'))!=1 or h.get('content-type','').split(';')[0].strip().lower()!='application/json' or h.get('content-encoding') not in {None,'identity'}:raise ValueError()
                 lengths=h.getlist('content-length')
@@ -79,6 +80,10 @@ def make_core_router(*,gateway=None,token=None,enabled=None):
                 else:
                     body=Envelope[InternalInput].model_validate(decoded)
                 if body.error is not None or body.data is None:raise ValueError()
+            # Body/auth retain their original bound. Policy1 also retains its
+            # original total deadline; only policy2 gets the longer exchange.
+            policy2=isinstance(data,dict) and data.get('policy_version')=='supervisor.flow-core.2'
+            async with asyncio.timeout_at(started+(65 if policy2 else 15)):
                 from src.supervisor.application.runtime import run_core
                 result=await run_core(body.data,gateway=gateway)
                 value=dict(schema_version='supervisor.core.v1',request_id=body.request_id,trace_id=body.trace_id,data=result.model_dump(mode='json'),error=None)

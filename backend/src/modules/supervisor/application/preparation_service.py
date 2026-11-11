@@ -179,7 +179,7 @@ class PreparationService:
         id = None
         claimed = False
         try:
-            async with asyncio.timeout(15):
+            async with asyncio.timeout(75):
                 await self.session.rollback()
                 await self.auth()
                 key = hashlib.sha256(body.prepare_key.encode()).digest()

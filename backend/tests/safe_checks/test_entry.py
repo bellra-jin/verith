@@ -782,6 +782,11 @@ class CF023Boundary(unittest.TestCase):
         import sys
         load_meaning()
         self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        from src.modules.supervisor.domain import contracts
+        proposals=sys.modules['src.supervisor.domain.meaning_proposals']
+        meaning=sys.modules['src.supervisor.domain.meaning']
+        self.assertEqual(proposals.semantic_spec(),contracts.MEANING_SPEC)
+        self.assertEqual(meaning.sha(proposals.semantic_spec()),contracts.MEANING_SPEC_SHA256)
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 class CF024Boundary(unittest.TestCase):

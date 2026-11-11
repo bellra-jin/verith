@@ -428,3 +428,21 @@ POST하거나 새 key를 만들지 않는다. hash/storage await 중 취소도 s
 또는 model 요청까지 취소한다는 보장은 추가하지 않는다. 이 회귀는 실제 함수와
 주입 IO/가짜 시계의 무키 검증이며 React mount·실제 로그인·Backend/PG·공급자·
 청구 확인이 아니다. 기존 250m 보수 예약과 consumed 실행 기록은 변경하지 않는다.
+
+### CF037 고정 단일 재검증
+
+기존 frozen 부모150m, 선행 timeout 소비50m 및 closed retry1의 unknown50m을 별도로 검증해250m을 이월한다. 새 명시 동의의 고정 ordinal2 하나만 추가50m·누적300m으로 표현하며, 같은 canonical namespace/bootstrap의 once identity는 source·동의 ID·invocation 변경으로 늘어나지 않는다. 첫 질문의 무료 count1·generation1·HTTP2, 자동 provider retry0을 유지한다. 과거 hold는 청구액이나 환불 가능액이 아니다.
+
+과거 artifact의 semantic SHA는 provider5 계약으로 검증하고 현재 실행은 병합된 provider55/verifier60 계약으로 별도 검증한다. 이 분기에서 provider_seconds만5→55인 파생 차이를 허용하며 질문·prompt/schema·모델·가격·token cap·request/projection은 그대로 대조한다. 기존 controller의 credential provenance와 새 helper의 exact code provenance를 각각 고정하고 controller·gateway·guard·AI32를 수정하지 않는다. 키 source는 기존 AI 서비스의 단일 경로이며 dotenv 탐색·fallback은 없다.
+
+최초 독립 소비 기록과 실제 readback 후 같은 invocation의 ordered local fsync ACK를 사용한다. callback5초·시작/입력120초·lease600초·preload30초·cleanup30초를 갱신 없이 유지한다. once/이력 소실·변조·조회 불명이나 ACK 손실은 추가 송신 없이 보류·증거를 보존한다. 이 분기의 구현·합성 검사는 실제 발급이나 공급자 품질 검증을 대신하지 않는다.
+
+정산 observed와 의미 품질 미수용은 별도로 보고한다. helper는 의미 rejected를 MEANING_REJECTED, 다른 미보완 상태를 MEANING_NOT_SUPPLEMENTED로 표시하며 FIRST_SETTLEMENT_UNCONFIRMED는 실제 정산 미확정에 유지한다. 의미 실패도 다음 송신을 허용하지 않으며 기존 회계·cleanup과 보수 예약을 보존한다. raw 후보가 남지 않은 실제 실행의 세부 거절 원인은 소급 추정하지 않는다.
+
+### CF037 고정 진단 재검증
+
+소비된 ordinal2의 입력·실제 reserve 원문/readback·source/runtime·observed usage와 정산 ACK·meaning rejected·closed/cleanup 및 비활성 원복을 별도로 대조한 고정 ordinal3만 허용한다. 기존 unknown250m과 observed 실행50m을 합한300m은 보존하며 새50m을 더한 누적350m을 적용한다. 기존 retry2의 unknown 이력 검증은 변경하지 않는다. 같은 canonical namespace/bootstrap의 ordinal3 once는 source·승인·invocation·경로 변경으로 늘어나지 않는다.
+
+실제 기존 grounded validator가 거절한 위치에서 고정 이유/필드/항목 index와 승인된 질문에 정확히 대조된 최소 span·유한 enum만 기존16KiB quality projection 안에 남긴다. 분류할 수 없는 실제 실패는 고정 미상 코드로 표시한다. 임의 후보 text/value·raw 응답·예외/traceback·credential은 보존하지 않으며 validator/prompt/schema를 변경하지 않는다. 진단용 순수 재검사는 추가 provider 요청이 아니다.
+
+첫 질문 하나의 count1/generation1/HTTP2·자동 retry0, 시작/ready120초·lease600초와 기존 callback/preload/cleanup 제한을 유지한다. 실제 ordinal3 lease는 2026-11-11T21:00:00Z를 넘지 않는다. 소비/ACK/응답 불명은 추가 송신 없이350m과 증거를 보존한다. 무키 입력 검증은 실제 발급·모델 품질 수용이나 청구 확인을 대신하지 않는다.

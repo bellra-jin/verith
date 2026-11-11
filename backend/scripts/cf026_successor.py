@@ -43,6 +43,8 @@ CODES = frozenset([
     'LEASE_EXPIRED',
     'LEASE_START',
     'LEDGER_LIMIT',
+    'MEANING_REJECTED',
+    'MEANING_NOT_SUPPLEMENTED',
     'NOT_STARTED',
     'PHASE_LIMIT',
     'PHASE_SCOPE',
@@ -131,7 +133,8 @@ class Scope:
             raise Closed("CODE_DRIFT")
         base = source.path.parent if synthetic else source.code_root.path.parent
         if not synthetic:
-            original = source.code_root.path / "backend/scripts/cf026_successor.py"
+            code_root = reviewed_execution_root(source, d, module_hash)
+            original = code_root / "backend/scripts/cf026_successor.py"
             if hashlib.sha256(C.read_fixed(original, 0o644, limit=131072)[0]).hexdigest() != module_hash:
                 raise Closed("CODE_DRIFT")
         names = {"header", "state", "child_grant", "child_state", "closure", "runtime",
@@ -326,7 +329,7 @@ class Scope:
             runtime.get("key_metadata") != original_source.get("identity")
             or runtime.get("source_manifest", {}).get("backend/scripts/cf026_supervisor_live_controller.py") != original_source.get("code_root", {}).get("controller_sha256")
             or grant.get("requests", [])[:1] != [d["request"]]
-            or grant.get("semantic_sha256") != d["semantic_sha256"]
+            or grant.get("semantic_sha256") != historical_semantic(d)
             or grant.get("price_sha256") != d["price_sha256"]
         ):
             raise Closed("ANCESTRY_STATE")
@@ -368,18 +371,52 @@ class Scope:
         return d
 
 
+def code_directory_identity(path):
+    """Code directory metadata; private ancestry's 0700 rule stays separate."""
+    path = C.no_links(path)
+    info = path.lstat()
+    if not C.stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise Closed("CODE_DRIFT")
+    return [info.st_dev, info.st_ino, info.st_uid, info.st_mode]
+
+
+def reviewed_execution_root(source, data, module_hash):
+    code_root = source.code_root.path
+    if data.get("retry", {}).get("ordinal") in {2,3}:
+        code_root = code_root.parent / "verith-supervisor-single-revalidation"
+        expected = dict(path=str(code_root), directory=code_directory_identity(code_root), helper_sha256=module_hash)
+        if data["retry"].get("current_code") != expected:
+            raise Closed("CODE_DRIFT")
+    return code_root
+
+
 def once_identity(scope):
     d = scope.data
     # One opportunity for the original bootstrap; the final head is separately pinned.
     # Re-serializing or replacing projection hashes cannot mint another identity.
     value = {"namespace": d["namespace"], "predecessor_bootstrap": d["predecessor_bootstrap"]}
     if "retry" in d:
-        value["retry_ordinal"] = 1
+        value["retry_ordinal"] = d["retry"]["ordinal"]
     return C.digest(value)
 
 
 def reservation_total(scope):
-    return 250000000 if "retry" in scope.data else 200000000
+    retry = scope.data.get("retry")
+    return 350000000 if retry and retry.get("ordinal") == 3 else 300000000 if retry and retry.get("ordinal") == 2 else 250000000 if retry else 200000000
+
+
+def historical_semantic(data):
+    if data.get("retry", {}).get("ordinal") not in {2,3}:
+        return data["semantic_sha256"]
+    # Only the reviewed provider5 -> provider55 change; every other semantic
+    # input stays in the old hash. This never repins a historical artifact.
+    from scripts.cf023_supervisor_meaning_check import load_meaning
+    load_meaning()
+    from src.modules.supervisor.domain.contracts import MEANING_SPEC
+    if MEANING_SPEC["caps"]["provider_seconds"] != 55 or MEANING_SPEC["caps"]["verifier_seconds"] != 60:
+        raise Closed("REQUEST_DRIFT")
+    old = MEANING_SPEC | {"caps": MEANING_SPEC["caps"] | {"provider_seconds": 5}}
+    return C.digest(old)
 
 
 def check_retry(d, base):
@@ -389,6 +426,10 @@ def check_retry(d, base):
     independent history check. They do not mint authority or restore consumed rights.
     """
     retry = d["retry"]
+    if type(retry) is dict and retry.get("ordinal") == 3:
+        return check_retry3(d, base)
+    if type(retry) is dict and retry.get("ordinal") == 2:
+        return check_retry2(d, base)
     keys = {"schema", "ordinal", "timeout", "timeout_manifest", "record_body", "record_body_sha256", "record_item_id", "record_turn_id",
             "consent_message_id", "carried_nano", "total_reserved_nano"}
     if (type(retry) is not dict or set(retry) != keys or retry["schema"] != "cf026.successor.retry1.v1"
@@ -467,6 +508,105 @@ def check_retry(d, base):
         raise Closed("RETRY_EVIDENCE")
 
 
+def check_retry2(d, base):
+    """Fixed next opportunity after the closed unknown retry1, not auto retry.
+
+    Pinned local history is checked here; the parent-held authority must also
+    authenticate the original server items and enforce the canonical once slot.
+    """
+    r = d["retry"]
+    fields = {"schema", "ordinal", "prior_retry", "evidence", "record_body", "record_body_sha256",
+              "record_item_id", "record_turn_id", "consent_message_id", "carried_nano", "total_reserved_nano", "current_code"}
+    if (set(r) != fields or r["schema"] != "cf026.successor.retry2.v1"
+        or type(r["ordinal"]) is not int or r["ordinal"] != 2
+        or type(r["carried_nano"]) is not int or r["carried_nano"] != 250000000
+        or type(r["total_reserved_nano"]) is not int or r["total_reserved_nano"] != 300000000
+        or type(r["consent_message_id"]) is not str
+        or C.re.fullmatch(r"Sentinel_[a-f0-9]{32}", r["consent_message_id"]) is None
+        or type(r["prior_retry"]) is not dict or r["prior_retry"].get("ordinal") != 1):
+        raise Closed("RETRY_SCOPE")
+    check_retry(d | {"retry": r["prior_retry"]}, base)
+    home = base / ".cf026-successor-retry-20261111"
+    expected = dict(inputs=home/"reviewed-successor-inputs.json", journal=home/"successor-journal-retry-1"/"state.json",
+                    phases=home/"successor-phases-retry-1.json",
+                    result=base/".cf026-runtime-deadline-diagnostic-20261111"/"actual-result.json")
+    if type(r["evidence"]) is not dict or set(r["evidence"]) != set(expected):
+        raise Closed("RETRY_EVIDENCE")
+    records = {}
+    for name, path in expected.items():
+        pin = r["evidence"][name]
+        if type(pin) is not dict or set(pin) != {"path", "stamp_json", "sha256"} or pin["path"] != str(path):
+            raise Closed("RETRY_EVIDENCE")
+        records[name] = Artifact(name, path, pin["stamp_json"], pin["sha256"]).verify(base)
+    prior = records["inputs"]["template"]["scope_template"]
+    if (prior.get("retry") != r["prior_retry"] or prior.get("namespace") != d["namespace"]
+        or prior.get("predecessor_bootstrap") != d["predecessor_bootstrap"]
+        or prior.get("predecessor_sha256") != d["predecessor_sha256"]
+        or prior.get("artifacts") != d["artifacts"] or prior.get("request") != d["request"]
+        or prior.get("semantic_sha256") != historical_semantic(d)
+        or prior.get("price_sha256") != d["price_sha256"]):
+        raise Closed("RETRY_EVIDENCE")
+    marker = "CF026_SUCCESSOR_RESERVE_ONCE\n"
+    body = r["record_body"]
+    if (type(body) is not str or not body.startswith(marker) or len(body.encode()) > 8192
+        or hashlib.sha256(body.encode()).hexdigest() != r["record_body_sha256"]):
+        raise Closed("RETRY_EVIDENCE")
+    record = C.decode(body[len(marker):])
+    required = {"schema", "additional_reserve_nano", "authority_sha256", "count_cap", "delegation", "generation_cap",
+                "http_cap", "invocation", "issued_at", "namespace", "predecessor_sha256", "process_id", "retry_cap",
+                "retry_ordinal", "retry_of_sha256", "scope_sha256", "successor_once", "synthetic_only", "total_reserved_nano"}
+    if (set(record) != required or record["schema"] != "cf026.successor.reserve-once.v1"
+        or record["synthetic_only"] is not False or record["namespace"] != d["namespace"]
+        or record["predecessor_sha256"] != d["predecessor_sha256"] or record["invocation"] == d["invocation"]
+        or record["successor_once"] != C.digest(dict(namespace=d["namespace"], predecessor_bootstrap=d["predecessor_bootstrap"], retry_ordinal=1))
+        or record["retry_of_sha256"] != r["prior_retry"]["record_body_sha256"]
+        or record["delegation"] != "same-invocation-ordered-local-fsync"
+        or type(record["process_id"]) is not int or record["process_id"] <= 0):
+        raise Closed("RETRY_EVIDENCE")
+    for key, value in dict(additional_reserve_nano=50000000, total_reserved_nano=250000000,
+                           retry_ordinal=1, count_cap=1, generation_cap=1, http_cap=2, retry_cap=0).items():
+        if type(record[key]) is not int or record[key] != value:
+            raise Closed("RETRY_EVIDENCE")
+    for key in ("authority_sha256", "invocation", "scope_sha256"):
+        if type(record[key]) is not str or C.re.fullmatch(r"[a-f0-9]{64}", record[key]) is None:
+            raise Closed("RETRY_EVIDENCE")
+    journal, phases, result = records["journal"], records["phases"], records["result"]
+    events = journal.get("journal", [])
+    accounts = [e for e in events if e.get("phase") == "final_accounting"]
+    if (journal.get("schema") != "cf026.successor.journal.v1" or journal.get("status") != "closed"
+        or journal.get("scope_sha256") != record["scope_sha256"]
+        or journal.get("rights") != dict(count=1, generation=1) or len(accounts) != 1
+        or not events or events[-1].get("phase") != "cleanup_confirmed"
+        or len([e for e in events if e.get("phase") == "closing" and e.get("external_accounting_ACK") is True]) != 1):
+        raise Closed("RETRY_EVIDENCE")
+    account = accounts[0]
+    expected_ledger = dict(count=1, generation=1, reserved=50000000, blocked=False,
+                           attempts=[dict(state="unknown", estimated_nano=None)])
+    if (account.get("reserved_nano") != 250000000 or account.get("ledger") != expected_ledger
+        or account.get("estimated_nano") is not None or account.get("http") != "unknown"
+        or account.get("observation") != "fresh_ledger"):
+        raise Closed("ACCOUNTING")
+    ordered = ["reserve", "issue", "start", "count", "generation", "accounting"]
+    binding = {k: record[k] for k in record if k not in {"schema", "synthetic_only", "process_id", "authority_sha256", "delegation", "issued_at"}}
+    ack = binding | dict(phase="accounting", authority_sha256=record["authority_sha256"], sequence=6,
+                         issued_at=record["issued_at"], consumed=True, record_sha256=C.digest(account))
+    if phases.get("binding") != binding or phases.get("ack") != ack or phases.get("phases") != ordered or phases.get("sequence") != 6:
+        raise Closed("ACCOUNTING")
+    direct, report = result.get("direct_readonly", {}), result.get("parent_reported", {})
+    if (result.get("schema") != "cf026.retry1.actual-result-diagnostic.v1"
+        or result.get("original_files") != {str(expected[n]): r["evidence"][n]["sha256"] for n in ("journal", "phases")}
+        or direct.get("closed") is not True or direct.get("cleanup_recorded") is not True
+        or direct.get("local_accounting_ack_matches_journal") is not True
+        or direct.get("ledger") != expected_ledger or direct.get("total_reserved_nano") != 250000000
+        or direct.get("estimated_nano") is not None or direct.get("phase_order") != ordered
+        or report.get("exit_code") != 1 or report.get("terminal_code") != "SUCCESSOR_CLOSED"
+        or report.get("source_copy_removed") is not True
+        or report.get("server_record_item_id") != r["record_item_id"] or report.get("server_record_turn_id") != r["record_turn_id"]
+        or report.get("issued_at") != record["issued_at"] or report.get("process_id") != record["process_id"]
+        or C.parse_expiry(d["consent_at"]) <= C.parse_expiry(record["issued_at"])):
+        raise Closed("RETRY_EVIDENCE")
+
+
 @dataclass(frozen=True, repr=False, init=False)
 class Lease:
     clock: object
@@ -475,12 +615,14 @@ class Lease:
     monotonic_end: float
     monotonic_start_end: float
 
-    def __init__(self, issued_at, consent_at, clock):
+    def __init__(self, issued_at, consent_at, clock, *, not_after=None):
         issued = C.parse_expiry(issued_at)
         now = clock.wall()
         if not C.parse_expiry(consent_at) <= issued <= now or (now - issued).total_seconds() > 120:
             raise Closed("LEASE_START")
         expires = issued + timedelta(seconds=600)
+        if not_after is not None:
+            expires = min(expires, C.parse_expiry(not_after))
         object.__setattr__(self, "clock", clock)
         object.__setattr__(self, "issued", issued)
         object.__setattr__(self, "expires", expires)
@@ -633,7 +775,7 @@ class Session:
                     additional_reserve_nano=50000000, total_reserved_nano=reservation_total(self.scope),
                     count_cap=1, generation_cap=1, http_cap=2, retry_cap=0)
         if "retry" in self.scope.data:
-            args.update(retry_ordinal=1, retry_of_sha256=self.scope.data["retry"]["record_body_sha256"])
+            args.update(retry_ordinal=self.scope.data["retry"]["ordinal"], retry_of_sha256=self.scope.data["retry"]["record_body_sha256"])
         if record is not None:
             args["record_sha256"] = C.digest(record)
         timeout = 5 if cleanup or self.lease is None else min(5, self.lease.check())
@@ -656,7 +798,8 @@ class Session:
                 ):
                     raise Closed("AUTHORITY_ACK_UNKNOWN")
                 if self.lease is None:
-                    self.lease = Lease(ack["issued_at"], self.scope.data["consent_at"], self.clock)
+                    end = "2026-11-11T21:00:00+00:00" if not self.synthetic and self.scope.data.get("retry",{}).get("ordinal")==3 else None
+                    self.lease = Lease(ack["issued_at"], self.scope.data["consent_at"], self.clock, not_after=end)
                 elif C.parse_expiry(ack["issued_at"]) != self.lease.issued:
                     raise Closed("LEASE_DRIFT")
                 self.sequence = ack["sequence"]
@@ -896,9 +1039,112 @@ async def verify_once(session, proof, binding, principal, observation):
     authority = PhaseAuthority(session, proof, binding, principal, body, deferred, observation)
     agreement = CounterAgreement(d["counter"]["documentation_url"], d["counter"]["documentation_sha256"], INPUT_FIELDS, 0)
     session.check()
-    return await verify_live(proof=proof, binding=binding, principal=principal,
-                             prepare_body=d["request"]["prepare_body"], authority=authority,
-                             counter_agreement=agreement, key_supplier=deferred)
+    from src.supervisor.infrastructure.openai_meaning_gateway import OpenAIMeaningGateway
+    # Observe only the returned typed proposal, after the unchanged gateway's
+    # usage validation/settlement. No HTTP/key/raw response interception.
+    original = OpenAIMeaningGateway.propose
+    async def capture(gateway, draft, **kwargs):
+        candidate = await original(gateway, draft, **kwargs)
+        session.quality = safe_quality(draft, candidate)
+        return candidate
+    from unittest.mock import patch
+    with patch.object(OpenAIMeaningGateway, "propose", capture):
+        return await verify_live(proof=proof, binding=binding, principal=principal,
+                                 prepare_body=d["request"]["prepare_body"], authority=authority,
+                                 counter_agreement=agreement, key_supplier=deferred)
+
+
+def grounding_rejection(draft, candidate):
+    """Bounded diagnostic replay of unchanged pure rules, never a second policy.
+
+    Only the failed typed item and approved-question spans are projected. Free
+    candidate strings, exception messages and full traceback are not retained.
+    """
+    from src.supervisor.application import meaning_policy as policy
+    from src.supervisor.domain.meaning_proposals import MeaningProposal
+    from unittest.mock import patch
+    reasons = {("validate",97):"EVIDENCE_SOURCE_SPAN_TEXT_MISMATCH",
+        ("negation",119):"NEGATION_EVIDENCE_MISMATCH",("negation",121):"NEGATION_EVIDENCE_MISSING",
+        ("add_mention",132):"MENTION_NAME_SHAPE_REJECTED",("add_view",179):"VIEW_EVIDENCE_MISMATCH",
+        ("add_view",183):"ACTOR_EXCLUSION_IS_NOT_VIEW",("add_condition",224):"CONDITION_DOMAIN_KIND_VALUE_MISMATCH",
+        ("add_condition",227):"CONDITION_NEGATION_MISMATCH"}
+    def evidence(value):
+        if value is None:return None
+        start,end=value.start,value.end
+        valid=value.source_kind=="original_query" and value.answer_id is None and 0<=start<end<=len(draft.original_query)
+        return dict(source_kind=value.source_kind,answer_id_present=value.answer_id is not None,
+                    start=start if 0<=start<=len(draft.original_query) else None,end=end if 0<=end<=len(draft.original_query) else None,
+                    supplied_text=value.text if value.text in draft.original_query else None,
+                    supplied_text_length=len(value.text),expected_text=draft.original_query[start:end] if valid else None,
+                    exact_source_match=valid and draft.original_query[start:end]==value.text)
+    found = None
+    schema_valid = False
+    indexes = dict(mentions=0,views=0,conditions=0)
+    def wrap(name,section):
+        original=getattr(policy.Grounding,name)
+        def traced(grounding,*args,**kwargs):
+            nonlocal found
+            if not kwargs.get("proposal"):
+                return original(grounding,*args,**kwargs)
+            index=indexes[section];indexes[section]+=1
+            try:return original(grounding,*args,**kwargs)
+            except (ValueError,TypeError) as error:
+                location=("unknown",0);trace=error.__traceback__
+                while trace is not None:
+                    frame=trace.tb_frame
+                    if frame.f_code.co_filename==policy.__file__ and (frame.f_code.co_name,trace.tb_lineno) in reasons:
+                        location=(frame.f_code.co_name,trace.tb_lineno)
+                    trace=trace.tb_next
+                ev=args[0] if section=="mentions" else args[1] if section=="views" else args[3]
+                neg=args[1] if section=="mentions" else args[2] if section=="views" else args[4]
+                detail=dict(evidence=evidence(ev),negation=evidence(neg))
+                if section=="views":detail["view"]=args[0]
+                if section=="conditions":
+                    detail.update(domain=args[0],kind=args[1],supplied_value=args[2] if args[2] in draft.original_query else None,
+                                  supplied_value_length=len(args[2]),supplied_value_in_question=args[2] in draft.original_query)
+                found=dict(stage="grounding",field=section,index=index,reason=reasons.get(location,"VALIDATOR_REJECTED"),
+                           location=dict(function=location[0],line=location[1]),item=detail)
+                raise
+        return traced
+    try:
+        proposal=MeaningProposal.model_validate(candidate)
+        schema_valid = True
+        with patch.object(policy.Grounding,"add_mention",wrap("add_mention","mentions")),\
+             patch.object(policy.Grounding,"add_view",wrap("add_view","views")),\
+             patch.object(policy.Grounding,"add_condition",wrap("add_condition","conditions")):
+            policy.assess(draft,proposal,source="model_assisted")
+    except (ValueError,TypeError):
+        pass
+    result=found or dict(stage="grounding" if schema_valid else "proposal_schema",field=None,index=None,
+                        reason="VALIDATOR_STAGE_UNKNOWN" if schema_valid else "TYPED_PROPOSAL_REJECTED",location=None,item=None)
+    if len(C.canonical(result).encode())>4096:
+        return dict(stage="grounding",field=None,index=None,reason="DIAGNOSTIC_LIMIT",location=None,item=None)
+    return result
+
+
+def safe_quality(draft, candidate):
+    """Existing grounded validator; only approved question spans are retained."""
+    from src.supervisor.application.meaning_policy import assess
+    if draft.original_query != "현대건설 외국인 말고 3주 수급" or draft.answers or draft.revision != 0:
+        raise Closed("FIRST_REQUEST_ONLY")
+    try:
+        assessed = assess(draft, candidate, source="model_assisted")
+    except (ValueError, TypeError):
+        return dict(status="rejected", assessment=None, rejection=grounding_rejection(draft,candidate))
+    frame = assessed.frame
+    result = dict(status="validated", assessment=dict(
+        mentions=[m.model_dump(mode="json") for m in frame.mentions],
+        requested_views=frame.requested_views, negated_views=frame.negated_views,
+        conditions=[c.model_dump(mode="json") for c in frame.conditions],
+        unresolved_slots=frame.unresolved_slots, interpretation_source=frame.interpretation_source))
+    if len(C.canonical(result).encode()) > 16384:
+        return dict(status="rejected", assessment=None,rejection=dict(stage="projection",field=None,index=None,
+                    reason="QUALITY_PROJECTION_LIMIT",location=None,item=None))
+    for index,condition in enumerate(frame.conditions):
+        if condition.value not in draft.original_query:
+            return dict(status="rejected",assessment=None,rejection=dict(stage="projection",field="conditions",index=index,
+                        reason="QUALITY_VALUE_NOT_IN_APPROVED_QUESTION",location=None,item=None))
+    return result
 
 
 
@@ -934,7 +1180,19 @@ def safe_ledger(snapshot, session):
                 raise Closed("LEDGER_LIMIT")
         else:
             raise Closed("LEDGER_LIMIT")
-        attempts.append(dict(state=state, estimated_nano=estimate))
+        retained = dict(state=state, estimated_nano=estimate)
+        if type(observation) is dict and any(k in observation for k in ("input_tokens", "output_tokens", "total_tokens", "cached_tokens")):
+            usage = {k: observation.get(k) for k in ("input_tokens", "output_tokens", "total_tokens", "cached_tokens")}
+            from src.modules.supervisor.domain.contracts import MEANING_SPEC
+            if (any(type(v) is not int or v < 0 for v in usage.values())
+                or usage["input_tokens"] > 16384 or usage["output_tokens"] > 2048
+                or usage["total_tokens"] != usage["input_tokens"] + usage["output_tokens"]
+                or usage["cached_tokens"] > usage["input_tokens"]
+                or observation.get("price_sha256") != C.digest(MEANING_SPEC["price"])
+                or observation.get("model_sha256") != hashlib.sha256(MEANING_SPEC["model"].encode()).hexdigest()):
+                raise Closed("LEDGER_LIMIT")
+            retained.update(usage=usage, model=MEANING_SPEC["model"])
+        attempts.append(retained)
     return dict(count=snapshot["count"], generation=snapshot["generation"],
                 reserved=snapshot["reserved"], blocked=snapshot["blocked"], attempts=attempts)
 
@@ -955,6 +1213,17 @@ def safe_gateway_diagnostic(value):
             raise Closed("DIAGNOSTIC_INVALID")
         events.append(dict(event))
     return dict(events=events, settlement_uncertain=value["settlement_uncertain"])
+
+
+def observe_failure(observation, error):
+    # These are helper-local semantic gates, not controller or settlement errors.
+    # Preserve only exact helper type and two fixed labels; never exception text.
+    if type(error) is Closed and error.code in {"MEANING_REJECTED", "MEANING_NOT_SUPPLEMENTED"}:
+        if observation.error_code is None:
+            observation.error_code = error.code
+        return
+    observation.failed(C.ControllerError(error.code) if type(error) is Closed
+        and error.code in {"FIRST_SETTLEMENT_UNCONFIRMED", "FINAL_LEDGER_UNCONFIRMED", "DIAGNOSTIC_INVALID"} else error)
 
 async def _run(scope=None, *, source=None, authority=None, journal=None, synthetic=False, hooks=None, clock=None):
     """Private DI only. Missing authority/defaults never create resources or keys."""
@@ -1010,12 +1279,13 @@ async def _run(scope=None, *, source=None, authority=None, journal=None, synthet
                 observation.returned(result)
                 gateway_diagnostic = safe_gateway_diagnostic(result.get("gateway_diagnostic"))
                 session.check()
-                if result["settlement"] != "observed" or result["meaning_status"] != "supplemented":
+                if result["settlement"] != "observed":
                     raise Closed("FIRST_SETTLEMENT_UNCONFIRMED")
+                if result["meaning_status"] != "supplemented":
+                    raise Closed("MEANING_REJECTED" if result["meaning_status"] == "rejected" else "MEANING_NOT_SUPPLEMENTED")
     except BaseException as caught:
         error = caught
-        observation.failed(C.ControllerError(caught.code) if type(caught) is Closed
-                           and caught.code in {"FIRST_SETTLEMENT_UNCONFIRMED", "DIAGNOSTIC_INVALID"} else caught)
+        observe_failure(observation, caught)
     finally:
         snapshot = None
         acked = False
@@ -1045,11 +1315,11 @@ async def _run(scope=None, *, source=None, authority=None, journal=None, synthet
                 if error is not None:
                     # Late ledger rejection is classified before the durable
                     # accounting snapshot; keep an earlier supplier/cancel cause.
-                    observation.failed(C.ControllerError(error.code) if type(error) is Closed
-                        and error.code in {"FIRST_SETTLEMENT_UNCONFIRMED", "FINAL_LEDGER_UNCONFIRMED", "DIAGNOSTIC_INVALID"} else error)
+                    observe_failure(observation, error)
                 account = dict(phase="final_accounting", ledger=ledger, observation="fresh_ledger" if ledger is not None else "unknown",
                                estimated_nano=None, http="unknown", reserved_nano=reservation_total(scope),
-                               diagnostic=observation.snapshot(), gateway_diagnostic=gateway_diagnostic)
+                               diagnostic=observation.snapshot(), gateway_diagnostic=gateway_diagnostic,
+                               quality=getattr(session, "quality", None))
                 journal.persist("claimed", account)
                 await session.call("accounting", consuming=True, cleanup=True, record=account)
                 journal.persist("claimed", dict(phase="closing", external_accounting_ACK=True))
@@ -1100,3 +1370,119 @@ async def run(*args, **kwargs):
         raise
     except Exception:
         raise Closed("SUCCESSOR_FAILED") from None
+
+
+def check_retry3(d, base):
+    """One newly approved diagnostic after observed, closed ordinal2 only."""
+    r=d['retry']
+    keys={'schema','ordinal','prior_retry','evidence','historical_code','readback_binding','record_body','record_body_sha256','record_item_id','record_turn_id',
+          'consent_message_id','carried_nano','total_reserved_nano','current_code'}
+    if (set(r)!=keys or r['schema']!='cf026.successor.retry3.v1' or type(r['ordinal']) is not int or r['ordinal']!=3
+        or type(r['carried_nano']) is not int or r['carried_nano']!=300000000
+        or type(r['total_reserved_nano']) is not int or r['total_reserved_nano']!=350000000
+        or type(r['consent_message_id']) is not str or C.re.fullmatch(r'Sentinel_[a-f0-9]{32}',r['consent_message_id']) is None
+        or type(r['prior_retry']) is not dict or r['prior_retry'].get('ordinal')!=2):
+        raise Closed('RETRY_SCOPE')
+    # Keep all old250m/unknown validation exactly as before.
+    check_retry2(d|{'retry':r['prior_retry']},base)
+    home=base/'.cf037-supervisor-single-revalidation-20261111'
+    expected=dict(inputs=home/'reviewed-successor-inputs.json',journal=home/'successor-journal-retry-2'/'state.json',
+        phases=home/'successor-phases-retry-2.json',runtime=home/'prepared-runtime-manifest.json',source=home/'runtime-source-manifest.json',
+        manifest=home/'preissue-final-manifest.json',result=base/'.cf037-supervisor-observed-rejection-20261111'/'actual-result.json',
+        readback=base/'.cf037-supervisor-grounding-diagnostic-20261111'/'prior-ordinal2-readback.json')
+    if type(r['evidence']) is not dict or set(r['evidence'])!=set(expected):raise Closed('RETRY_EVIDENCE')
+    records={}
+    for name,path in expected.items():
+        pin=r['evidence'][name]
+        if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256'} or pin['path']!=str(path):raise Closed('RETRY_EVIDENCE')
+        records[name]=Artifact(name,path,pin['stamp_json'],pin['sha256']).verify(base)
+    inputs=records['inputs'];prior=inputs['template']['scope_template']
+    if (prior.get('retry')!=r['prior_retry'] or any(prior.get(k)!=d[k] for k in
+        ('namespace','predecessor_bootstrap','predecessor_sha256','artifacts','request','semantic_sha256','price_sha256'))):
+        raise Closed('RETRY_EVIDENCE')
+    runtime=records['runtime'];manifest=records['manifest'];source=records['source']
+    if (inputs.get('runtime')!=runtime or runtime.get('source_manifest')!=source.get('runtime_source_hashes')
+        or runtime.get('source_count')!=281 or len(runtime.get('source_manifest',{}))!=281
+        or runtime.get('successor_sha256')!=prior.get('module_sha256')
+        or runtime.get('source_manifest',{}).get('backend/scripts/cf026_successor.py')!=prior.get('module_sha256')
+        or manifest.get('inputs_sha256')!=r['evidence']['inputs']['sha256']
+        or manifest.get('source_manifest_sha256')!=r['evidence']['source']['sha256']
+        or manifest.get('private_active')!=inputs.get('private_code_sha256')):
+        raise Closed('CODE_DRIFT')
+    code_paths=dict(entry=home/'private_entry.py',helper=base/'.cf037-supervisor-observed-rejection-20261111'/'helper.py')
+    if type(r['historical_code']) is not dict or set(r['historical_code'])!=set(code_paths):raise Closed('CODE_DRIFT')
+    hashes={}
+    for name,path in code_paths.items():
+        pin=r['historical_code'][name]
+        if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256'} or pin['path']!=str(path):raise Closed('CODE_DRIFT')
+        raw,_=C.read_fixed(path,0o600,C.decode(pin['stamp_json']),limit=131072)
+        hashes[name]=hashlib.sha256(raw).hexdigest()
+        if hashes[name]!=pin['sha256']:raise Closed('CODE_DRIFT')
+        if name=='entry' and (raw.count(b'RELEASED = False\n')!=1 or b'RELEASED = True\n' in raw):raise Closed('CODE_DRIFT')
+    if hashes['helper']!=prior['module_sha256'] or hashes['entry']!=manifest['private_inactive']['private_entry.py']:
+        raise Closed('CODE_DRIFT')
+    marker='CF026_SUCCESSOR_RESERVE_ONCE\n';body=r['record_body']
+    if type(body) is not str or not body.startswith(marker) or len(body.encode())>8192 or hashlib.sha256(body.encode()).hexdigest()!=r['record_body_sha256']:
+        raise Closed('RETRY_EVIDENCE')
+    record=C.decode(body[len(marker):]);required={'schema','additional_reserve_nano','authority_sha256','count_cap','delegation','generation_cap',
+        'http_cap','invocation','issued_at','namespace','predecessor_sha256','process_id','retry_cap','retry_ordinal','retry_of_sha256',
+        'scope_sha256','successor_once','synthetic_only','total_reserved_nano'}
+    if (set(record)!=required or record['schema']!='cf026.successor.reserve-once.v1' or record['synthetic_only'] is not False
+        or record['namespace']!=d['namespace'] or record['predecessor_sha256']!=d['predecessor_sha256']
+        or record['invocation']==d['invocation'] or type(record['process_id']) is not int or record['process_id']<=0
+        or record['successor_once']!=C.digest(dict(namespace=d['namespace'],predecessor_bootstrap=d['predecessor_bootstrap'],retry_ordinal=2))
+        or record['retry_of_sha256']!=r['prior_retry']['record_body_sha256']
+        or record['delegation']!='same-invocation-ordered-local-fsync'
+        or record['authority_sha256']!=inputs['authority_sha256']
+        or C.parse_expiry(record['issued_at'])<C.parse_expiry(prior['consent_at'])):raise Closed('RETRY_EVIDENCE')
+    for key,value in dict(additional_reserve_nano=50000000,total_reserved_nano=300000000,retry_ordinal=2,count_cap=1,generation_cap=1,http_cap=2,retry_cap=0).items():
+        if type(record[key]) is not int or record[key]!=value:raise Closed('RETRY_EVIDENCE')
+    for key in ('authority_sha256','invocation','scope_sha256'):
+        if type(record[key]) is not str or C.re.fullmatch('[a-f0-9]{64}',record[key]) is None:raise Closed('RETRY_EVIDENCE')
+    routing=r['readback_binding']
+    if type(routing) is not dict or set(routing)!={'source_thread_id','destination_thread_id'}:raise Closed('RETRY_EVIDENCE')
+    for value in routing.values():
+        if type(value) is not str or str(UUID(value))!=value:raise Closed('RETRY_EVIDENCE')
+    if routing['source_thread_id']==routing['destination_thread_id']:raise Closed('RETRY_EVIDENCE')
+    readback=records['readback'];matches=[]
+    if readback.get('thread',{}).get('id')!=routing['destination_thread_id']:raise Closed('RETRY_EVIDENCE')
+    for turn in readback.get('turns',[]):
+        for item in turn.get('items',[]):
+            text=item.get('output',{}).get('text')
+            if (item.get('type')=='functionCallOutput' and item.get('namespace')=='cloud_threads' and item.get('name')=='send_message'
+                and item.get('output',{}).get('truncated') is False and type(text) is str):
+                match=C.re.fullmatch(r'\s*<codex_delegation>\s*<source_thread_id>([^<>]+)</source_thread_id>\s*<input>([\s\S]*)</input>\s*</codex_delegation>\s*',text)
+                if match and match[1]==routing['source_thread_id'] and match[2]==body:
+                    matches.append((item.get('id'),turn.get('id')))
+    if matches!=[(r['record_item_id'],r['record_turn_id'])]:raise Closed('RETRY_EVIDENCE')
+    journal,phases,result=records['journal'],records['phases'],records['result'];events=journal.get('journal',[])
+    accounts=[e for e in events if e.get('phase')=='final_accounting']
+    if (journal.get('status')!='closed' or journal.get('schema')!='cf026.successor.journal.v1' or journal.get('scope_sha256')!=record['scope_sha256']
+        or journal.get('rights')!=dict(count=1,generation=1) or len(accounts)!=1 or not events or events[-1].get('phase')!='cleanup_confirmed'
+        or len([e for e in events if e.get('phase')=='closing' and e.get('external_accounting_ACK') is True])!=1):raise Closed('RETRY_EVIDENCE')
+    account=accounts[0];ledger=account.get('ledger',{});attempts=ledger.get('attempts',[])
+    if (account.get('reserved_nano')!=300000000 or account.get('observation')!='fresh_ledger' or len(attempts)!=1
+        or any(type(ledger.get(k)) is not int or ledger[k]!=v for k,v in dict(count=1,generation=1,reserved=50000000).items())
+        or ledger.get('blocked') is not False or attempts[0].get('state')!='observed'
+        or account.get('diagnostic',{}).get('verifier',{}).get('meaning_status')!='rejected'
+        or account.get('diagnostic',{}).get('verifier',{}).get('settlement')!='observed'
+        or account.get('quality')!=dict(status='rejected',assessment=None)
+        or account.get('gateway_diagnostic',{}).get('settlement_uncertain') is not False
+        or 'settlement_ACK' not in [e.get('stage') for e in account.get('gateway_diagnostic',{}).get('events',[])]):raise Closed('ACCOUNTING')
+    from src.modules.supervisor.domain.contracts import MEANING_SPEC
+    usage=attempts[0].get('usage',{});price=MEANING_SPEC['price']
+    if (set(usage)!={'input_tokens','output_tokens','total_tokens','cached_tokens'} or any(type(v) is not int or v<0 for v in usage.values())
+        or usage['input_tokens']>16384 or usage['output_tokens']>2048 or usage['cached_tokens']>usage['input_tokens']
+        or usage['total_tokens']!=usage['input_tokens']+usage['output_tokens'] or attempts[0].get('model')!=MEANING_SPEC['model']
+        or type(attempts[0].get('estimated_nano')) is not int
+        or attempts[0]['estimated_nano']!=(usage['input_tokens']-usage['cached_tokens'])*price['input_nano_per_token']+usage['cached_tokens']*price['cached_nano_per_token']+usage['output_tokens']*price['output_nano_per_token']):raise Closed('ACCOUNTING')
+    binding={k:record[k] for k in record if k not in {'schema','synthetic_only','process_id','authority_sha256','delegation','issued_at'}}
+    ack=binding|dict(phase='accounting',authority_sha256=record['authority_sha256'],sequence=6,issued_at=record['issued_at'],consumed=True,record_sha256=C.digest(account))
+    if (phases.get('binding')!=binding or phases.get('ack')!=ack or phases.get('sequence')!=6
+        or phases.get('phases')!=['reserve','issue','start','count','generation','accounting']):raise Closed('ACCOUNTING')
+    direct=result.get('direct_readonly',{})
+    if (result.get('schema')!='cf037.ordinal2.actual-result.v1' or direct.get('accounting')!=account
+        or direct.get('journal_closed') is not True or direct.get('cleanup_confirmed') is not True
+        or direct.get('local_accounting_ack_matches') is not True or direct.get('entry_RELEASED') is not False
+        or direct.get('entry_sha256')!=hashes['entry'] or C.parse_expiry(d['consent_at'])<=C.parse_expiry(record['issued_at'])):
+        raise Closed('RETRY_EVIDENCE')

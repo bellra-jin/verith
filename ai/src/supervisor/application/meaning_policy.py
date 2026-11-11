@@ -357,12 +357,40 @@ class Grounding:
         return Assessment(frame, tuple(remainder), needs, hard)
 
 
+def align_model_proposal(draft, proposal):
+    """Anchor model text only to its unique exact occurrence in the named source.
+
+    Raw offsets retain their strict wire shape but never disambiguate evidence.
+    Dump/revalidate both sides of the transformation; no caller object is mutated.
+    Canonical stored frames and deterministic scans never pass through this seam.
+    """
+    raw = proposal.model_dump(mode='python') if isinstance(proposal, MeaningProposal) else proposal
+    data = MeaningProposal.model_validate(raw).model_dump(mode='python')
+    sources = {('original_query', None): draft.original_query}
+    sources.update({('clarification_answer', answer.answer_id): answer.value for answer in draft.answers})
+    for section in ('mentions', 'views', 'conditions'):
+        for item in data[section]:
+            for field in ('evidence', 'negation'):
+                evidence = item[field]
+                if evidence is None:
+                    continue
+                text = sources.get((evidence['source_kind'], evidence['answer_id']))
+                if text is None:
+                    raise CoreInvalid()
+                start = text.find(evidence['text'])
+                # start+1 includes overlapping occurrences ("aa" in "aaa").
+                if start < 0 or text.find(evidence['text'], start + 1) >= 0:
+                    raise CoreInvalid()
+                evidence['start'], evidence['end'] = start, start + len(evidence['text'])
+    return MeaningProposal.model_validate(data)
+
+
 def assess(draft, proposal=None, *, source='deterministic'):
     draft = Draft.model_validate(draft.model_dump())
     grounding = Grounding(draft)
     grounding.scan()
     if proposal is not None:
-        grounding.apply(MeaningProposal.model_validate(proposal))
+        grounding.apply(align_model_proposal(draft, proposal))
     return grounding.assess(source)
 
 

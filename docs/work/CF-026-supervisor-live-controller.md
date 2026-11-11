@@ -936,3 +936,19 @@ Supervisor policy2 70초/policy1 8초 차이만 남는다. 통합 client와 한 
 
 추가 실제 API/key/DB·flags 활성화·발급/예약은 없고 기존 250m 보수 예약 및
 consumed 실행 증거는 불변이다. PR은 Draft로 유지하고 병합하지 않는다.
+
+### CF037 고정 후속1회 준비
+
+최신 develop의 timeout·정산·진단 변경을 재사용하며, 별도 작업공간에서 fixed ordinal2의 helper와 private 사본을 준비했다. 원150m+timeout50m+closed retry1 unknown50m=250m을 이월하고 추가50m·누적300m을 제안한다. 기존 실행물·원본 원장·승인·once와 실제 불확정 결과를 변경하지 않는다. 새 발급·예약·실제 키·DB·count/generation·설정 활성화는 아직 없다.
+
+현재 무키 검증은 실제 helper/phase 함수·local file lock/fsync와 callback simulation이다. 최초 unit 회차의13개 실패는 spy를 함수로 대체한 뒤 call_count를 참조한 harness 오류와 missing-file의 OSError 기대 누락이었다. 두 harness를 보완한 동일 보호 unit은391개·guard0으로 통과했고 private44개도 통과했다. 이 결과를 실제 DB나 모델 수용으로 표현하지 않는다. 독립 검토에서 발견한 code-root0755/private-root0700 구분을 좁게 보완했으므로 해당 최종 변경의 검증 결과는 아래에 따로 기록한다.
+
+최종 보호 self3/unit397·guard0, private 합성44개가 통과했다. 실제 기존10-artifact·closed retry1 journal/phases/result·정확 서버 원문 readback을 대조하고 최신 source281개 copy/import·live Scope.check까지 무키로 통과했다. source281은 controller 선택의 실제 집합이며 assembly280과 helper1을 구분한다. 새 실행용 private 사본은 비활성이며 실제 공급자 호출·새 예약은 아직 없다. 기존 gateway 반환 뒤의 grounded model-assisted assessment와 fresh ledger의 input/output/total/cached token 정수·고정 모델만 cleanup 전 accounting에 남기고 raw 응답·비밀은 보존하지 않는다. 누락 usage는0으로 만들지 않으며 이 준비 결과는 실제 모델 품질·청구 수용이 아니다. 독립 최종 delta 검토에 남은 blocker는 없고 guard/AI32/controller·과거 실행물은 불변이다.
+
+### CF037 단일 실제 실행 결과와 오류 표시 보완
+
+승인된 한 질문에서 무료 count 응답 검증과 generation 응답·usage·settlement ACK를 관찰했다. 고정 모델의 input804/output499/total1303/cached0, 원장 estimated_nano2,848,500(USD0.0028485)을 보존했다. 이는 토큰 단가 기반 추정이며 실제 청구서 확인이 아니다. 새50m이 소비돼 기존250m을 포함한 보수 예약300m을 유지한다. 정산은 observed·settlement_uncertain=false, 의미는 rejected·quality assessment=null이다. 따라서 이번 생성 결과/정산을 unknown으로 표현하지 않지만 의미 품질 수용은 미완료다.
+
+기존 소스는 정산 미확정과 의미 미수용을 같은 FIRST_SETTLEMENT_UNCONFIRMED로 표시했다. 이를 정산이 observed인 rejected에는 MEANING_REJECTED, 다른 미보완 상태에는 MEANING_NOT_SUPPLEMENTED로 분리했다. 정산이 불명인 기존 실패 gate와 추가 송신 차단·회계/정리 순서는 그대로다. 신규 오류 라벨은 정확 helper 타입·고정 코드만 받으며 예외 문자열은 남기지 않는다. 보호 단일 unit401개·guard0으로 보완 회귀를 통과했다.
+
+보존된 typed-return/grounded assessment 경로로 의미 validator 거절까지 확인할 수 있으나, 후보 원문과 세부 거절 조건은 남아 있지 않아 어느 span/부정/기간 검증이 실패했는지는 확정할 수 없다. 이를 추측하거나 성공으로 표시하지 않는다. 실제 journal closed·local accounting ACK·cleanup_confirmed와 임시 설정 False 원복을 확인했고, 실제 완료 후에는 새 키·DB·provider·예약 동작을 하지 않았다. 환경 전환으로 실제 발급 전 중단된 첫 준비 회차와, 새 동일 ordinal2의 실제 한 번을 구분해 비공개 증거로 보존했다. 반복 record·provider 재시도는 없으며 과거 입력·실행 manifest·once는 수정하지 않았다.

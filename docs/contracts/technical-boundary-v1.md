@@ -29,3 +29,30 @@ Backend가 검증한 preview는 기존 TechnicalChartsReadModel props로 lossles
 ## 공개 연결의 선행조건
 
 실제 engine의 인증/lazy startup·sync/SDK budget, owner-aware root/index/stage-only writer, 전용 owned profile/lifecycle/멱등/snapshot/게시·삭제, Technical usage, 실제 소유 PG가 먼저 필요하다. legacy owner=NULL writer/save·Flow usage로 대신하지 않는다. 이후 public planning/capability/BFF/UI·실제 차트 수용을 연결한다. 현재 결과는 합성 내부 계약/adapter 수용이며 전체 Technical 제품 완료가 아니다.
+# CF-035 내부 stage와 본인 복구
+
+앞의 CF021 비영속 adapter와 CF031 순수 복원은 그대로다. 별도 `TechnicalOwnedReportService`만 검증된
+Principal과 결과에서 재생성하지 않은 독립 `TechnicalReadBinding`, L-bound `FrozenAnalysisResult`를 받는다.
+L.operation은 `technical.owned-stage.v1`, caller TEXT는 정확히
+`{"operation":"technical.owned-stage.v1","boundary_request":<원 B request>}`의 Python canonical JSON이다.
+L은 caller TEXT의 SHA, B는 기존 semantic fingerprint다. 두 fingerprint·context·원문·조건·report/request/trace
+ID를 각각 검증하고 기존 CF031 restore/CF021 chart validator를 재사용한다.
+
+stage는 fresh DB session 검증/잠금 → 기존 root 잠금 → ID/index 충돌·기존 canonical stock 조회 → 순수 projection
+순서다. stock master를 보강하지 않는다. root/신호/차트/위험/해석/검증·immutable snapshot·owned index 하나를
+동일 transaction에 flush만 한다. commit/rollback은 호출자 책임이며 stage 반환은 저장 확정이 아니다.
+기존 report/request 충돌은 덮어쓰지 않고 DB IntegrityError는 호출자가 rollback한다. legacy 생성/AI 호출·공개 save와
+연결하지 않으며 새 execution profile/usage/admission 원장도 없다.
+
+read도 실제 Principal/session lock을 검사한다. SQL에서 root/snapshot owner 일치와 전체 Technical index 정확1개·
+동일 owner를 만족해야 row를 반환한다. legacy NULL owner, missing snapshot/index, NULL/타인/중복 index는 미존재다.
+선택된 snapshot의 canonical TEXT·SHA·binding·ID와 root/모든 자식/index projection을 재검사한다. 저장 당시 session은
+snapshot anchor와 index를 비교하며 현재의 새 로그인 session과 같을 필요는 없다. 변조는 원문 없는 고정 오류다.
+동일 ID read는 commit ACK 불명 뒤 관측 수단이며 자동 재stage·AI·새 ID 생성은 없다.
+
+snapshot TEXT의 배열/숫자/원문은 유지한다. detached preview의 charts만 고정 display_order로 정렬한다. 빈 chart와
+미제공 chart는 기존 coverage로 구분하고 JSONB projection을 정확 bytes의 대체물로 삼지 않는다.
+저장 기대값은 내부 durable anchor이며 전체 DB 임의 변경 권한자에 대한 외부 암호 증명이나 실제 engine/시장자료·
+실행/비용 영수증이 아니다. execution_mode synthetic/cutoff unverified 한계를 유지한다.
+
+공개 Technical 실행·HTTP/BFF/UI·Supervisor launch·사용 한도·실제 모델·삭제/follow-up 연결은 이번 범위가 아니다.

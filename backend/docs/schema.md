@@ -330,3 +330,20 @@ DB clock 기준10초 deadline·finite시각·상태별 결과/hash/error/finishe
 revision `c18001a7e0001`은 `analysis_usage_periods`(KST 기간·최초 한도 snapshot·횟수·held/추정 spend·blocked), `analysis_usage_reservations`(run/owner/attempt/grant·원 기간·고정 가격/상한·잔여 예약), `analysis_provider_calls`(유일한 provider/action/ordinal·UUID·attempted·nullable usage·정제 evidence hash)를 추가한다. 금액은 BIGINT 정수 nanoUSD이며 KIS 비용은 NULL이다. 원문·credential은 없다.
 
 `flow_analysis_runs.budget_reservation_id`는 legacy에 NULL을 유지한다. 새 INSERT는 run ID와 같은 nonnull 참조가 필요하고, 양방향 composite FK 및 deferred constraint trigger가 commit 때 run↔reservation·기간 scope/owner/통화/날짜 관계를 확인한다. 식별·기간 한도·가격 snapshot은 불변이다. attempted True 역행과 확정 증거 교체, 회계 이력 삭제를 거부한다. 기존 report/receipt/synthetic schema·행은 변경하지 않는다. [사용 한도 계약](../../docs/contracts/flow-usage-v1.md)을 따른다. 실제 적용 여부는 [작업 기록](../../docs/work/CF-018-flow-usage-limits.md)과 구분한다.
+# CF-035 내부 Technical owned snapshot
+
+신규 revision `c35001a7e0001`은 `c23001a7e0001` 뒤에 연결한다. 운영 DB에는 적용하지 않았다.
+`technical_reports.owner_user_id`는 nullable UUID FK(`auth_users`, RESTRICT)이며 owner/id index를 둔다.
+기존 NULL owner와 기존 payload는 rewrite하거나 자동 귀속하지 않는다.
+`agent_reports`의 owned Technical 행에는 `(agent_type, agent_report_id)` partial UNIQUE
+(`agent_type='technical' AND owner_user_id IS NOT NULL`)를 추가한다. 기존 owned 중복이면 migration이 실패한다.
+
+`technical_report_snapshots`는 report_id PK/FK(CASCADE)로 root와 1:1이다. owner_user_id FK와 저장 당시
+owner_session_id UUID를 보존하며, 역사 session UUID에는 auth_sessions FK를 두지 않는다. 현재 인증은 별도로 검증한다.
+format, request/trace UUID, L/B context TEXT, caller input TEXT, input/result schema, canonical input/result TEXT,
+input/result/binding SHA-256와 DB 생성시각을 저장한다. UTF-8 크기 제한은 context 각4KiB, caller32KiB,
+input16KiB, result2MiB다. DB는 필수값·JSON object·SHA 형식/실제 TEXT digest·format/schema를 검사하고,
+UPDATE trigger로 snapshot 변경을 거절한다. root 삭제의 CASCADE는 유지한다.
+
+이 표는 실행·예산 원장이 아니다. root/자식의 JSONB projection과 정확 TEXT를 구분한다. downgrade는 owned
+root/snapshot/index가 있으면 거절하며 기존 데이터나 소유자를 자동 정리하지 않는다.

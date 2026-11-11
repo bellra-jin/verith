@@ -557,3 +557,317 @@ async def test_invalid_typed_stock_prose_stays_unrecognized_and_fixed_frame_reje
     changed['mentions'].append(dict(text=d.original_query,negated=False,evidence=ev(d.original_query,d.original_query)))
     altered=M.MeaningFrame.model_validate(changed)
     with pytest.raises(M.CoreInvalid):G.validate_fixed_frame(d,altered)
+
+
+# CF042: real AccessBoundary + CoreRoute + dependency + PreparationService.post.
+# Only auth/session/persistence/AI IO is fake; timers execute against an accelerated clock.
+class CF042Clock:
+    scale = .01
+    def __init__(self):
+        self.loop = asyncio.get_running_loop()
+        self.anchor = self.loop.time()
+        self.absolute, self.relative = [], []
+    def time(self):
+        return self.anchor + (self.loop.time() - self.anchor) / self.scale
+    def __getattr__(self, name):
+        return getattr(self.loop, name)
+    def install(self, patcher):
+        timeout, timeout_at = asyncio.timeout, asyncio.timeout_at
+        def absolute(deadline):
+            self.absolute.append(deadline)
+            return timeout_at(self.anchor + (deadline - self.anchor) * self.scale)
+        def relative(seconds):
+            self.relative.append(seconds)
+            return timeout(seconds * self.scale)
+        patcher.setattr(asyncio, 'get_running_loop', lambda: self)
+        patcher.setattr(asyncio, 'timeout_at', absolute)
+        patcher.setattr(asyncio, 'timeout', relative)
+
+
+async def cf042_public(monkeypatch, *, work=0, auth_delay=0, auth_error=None, middleware=True):
+    from datetime import datetime, timezone
+    from fastapi import FastAPI, HTTPException
+    from src.modules.supervisor.api import router as R
+    from src.modules.auth.api import router as auth_router
+    from src.modules.auth.application.session_service import AuthenticationRequired
+    from src.modules.supervisor.application.preparation_service import PreparationService
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    from src.shared.http.access_boundary import AccessBoundary
+    first = await P.start_v2(draft())
+    plan = B.Plan.model_validate(P.continuation_v2(draft(), first.frame, resolution()).plan.model_dump(mode='json'))
+    value = B.PreparationRequest(prepare_key=str(uuid4()), draft=B.Draft.model_validate(draft().model_dump(mode='json')))
+    h = NS(rows={}, events=[], scopes=[], scope_times=[], deadlines=[], initial_auth=0, admissions=0, ai=0, ai_cancelled=0, closed=0, current_user=uuid4(), clock=CF042Clock(), body=value.model_dump(mode='json'))
+    h.plan = plan
+    h.session = NS(rollback=AsyncMock(), commit=AsyncMock(), flush=AsyncMock())
+    stamp = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    async def session():
+        try:
+            yield h.session
+        finally:
+            await h.session.rollback()
+            h.closed += 1
+    async def principal(request, db, *, mutation=False):
+        h.initial_auth += 1
+        await asyncio.sleep(auth_delay * h.clock.scale)
+        if auth_error == 'unauth':
+            raise AuthenticationRequired()
+        if auth_error in {'csrf', 'owner'}:
+            raise HTTPException(403)
+        return NS(user_id=h.current_user)
+    async def fresh_auth(service):
+        h.events.append('fresh_auth')
+    async def by_key(db, owner, key):
+        return next((r for r in h.rows.values() if r.owner_user_id == owner and r.prepare_key_digest == key), None)
+    async def admit(db, values):
+        h.admissions += 1
+        row = NS(**values, redacted_at=None, consumed_binding_id=None, frame_json=None, frame_sha256=None, plan_json=None, plan_sha256=None)
+        h.rows[row.id] = row
+        return row
+    async def lineage(db, owner, id):
+        row = h.rows.get(id)
+        if row is None or row.owner_user_id != owner:
+            raise repo.PreparationConflict('RESOURCE_NOT_FOUND', 404)
+        return [row]
+    async def build(service, *args, **kwargs):
+        h.ai += 1
+        h.events.append('ai_started')
+        try:
+            await asyncio.sleep(work * h.clock.scale)
+        except asyncio.CancelledError:
+            h.ai_cancelled += 1
+            raise
+        h.events.append('ai_returned')
+        return plan, 'deterministic'
+    original_post = PreparationService.post
+    async def post(service, body, request_id, **kwargs):
+        h.deadlines.append(kwargs.get('deadline'))
+        return await original_post(service, body, request_id, **kwargs)
+    monkeypatch.setattr(R.settings, 'FLOW_ANALYSIS_ENABLED', True)
+    monkeypatch.setattr(auth_router, 'configured', lambda: True)
+    monkeypatch.setattr(R, 'request_principal', principal)
+    monkeypatch.setattr(PreparationService, 'auth', fresh_auth)
+    monkeypatch.setattr(PreparationService, 'build', build)
+    monkeypatch.setattr(PreparationService, 'post', post)
+    monkeypatch.setattr(repo, 'by_key', by_key)
+    monkeypatch.setattr(repo, 'admit', admit)
+    monkeypatch.setattr(repo, 'lineage', lineage)
+    monkeypatch.setattr(repo, 'clock', AsyncMock(return_value=stamp))
+    monkeypatch.setattr(repo, 'cleanup_owner', AsyncMock())
+    h.reserve = AsyncMock(side_effect=AssertionError('No meaning reservation in boundary-only test'))
+    h.epoch_create = AsyncMock(side_effect=AssertionError('No epoch creation in boundary-only test'))
+    monkeypatch.setattr(repo.DurableMeaningBudget, 'authorize', h.reserve)
+    monkeypatch.setattr(repo, 'verifier_epoch', h.epoch_create)
+    app = FastAPI()
+    app.include_router(R.router)
+    app.dependency_overrides[R.get_session] = session
+    target = AccessBoundary(app) if middleware else app
+    async def capture(scope, receive, send):
+        h.scopes.append(scope)
+        h.scope_times.append(h.clock.time())
+        await target(scope, receive, send)
+    h.app = capture
+    async def request(*, method='POST', path='/api/supervisor/core/preparations', body_delay=0, raw=None, body=None, state=None):
+        async def with_state(scope, receive, send):
+            if state is not None:
+                scope['state'] = state(h.clock)
+            await h.app(scope, receive, send)
+        async def stream():
+            await asyncio.sleep(body_delay * h.clock.scale)
+            yield raw if raw is not None else json.dumps(body if body is not None else h.body).encode()
+        with monkeypatch.context() as timers:
+            h.clock.install(timers)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=with_state), base_url='http://localhost:8200') as client:
+                return await client.request(method, path, content=stream() if method == 'POST' else None,
+                    headers={'Content-Type': 'application/json'} if method == 'POST' else {})
+    h.request = request
+    return h
+
+
+async def test_cf042_public_preparation_survives_old15_and_replay_get_add_no_AI(monkeypatch):
+    h = await cf042_public(monkeypatch, work=30, auth_delay=2)
+    response = await h.request(body_delay=2)
+    assert response.status_code == 200
+    state = h.scopes[0]['state']
+    assert state['core_deadline'] - state['core_preparation_started_at'] == 75
+    assert state['core_admission_deadline'] - state['core_preparation_started_at'] == 15
+    assert h.deadlines == [state['core_deadline']] and h.clock.time() > state['core_admission_deadline']
+    assert h.admissions == h.ai == h.closed == 1
+    assert h.session.commit.await_count >= 2 and h.session.rollback.await_count >= 2
+    assert 'private' in response.headers['cache-control'] and 'no-store' in response.headers['cache-control']
+    replay = await h.request()
+    read = await h.request(method='GET', path='/api/supervisor/core/preparations/' + response.json()['data']['preparation_id'])
+    assert replay.status_code == read.status_code == 200
+    assert replay.json()['data'] == read.json()['data'] == response.json()['data']
+    assert h.admissions == h.ai == 1 and h.closed == 3
+    h.reserve.assert_not_awaited()
+    h.epoch_create.assert_not_awaited()
+    h.current_user = uuid4()
+    foreign = await h.request(method='GET', path='/api/supervisor/core/preparations/' + response.json()['data']['preparation_id'])
+    assert foreign.status_code == 404 and h.ai == 1
+
+
+@pytest.mark.parametrize('body_delay,auth_delay', [(20, 0), (8, 10), (0, 20)])
+async def test_cf042_body_and_initial_auth_share_first15(monkeypatch, body_delay, auth_delay):
+    h = await cf042_public(monkeypatch, auth_delay=auth_delay)
+    response = await h.request(body_delay=body_delay)
+    assert response.status_code == 504 and response.json()['error']['code'] == 'DEADLINE_EXCEEDED'
+    assert h.ai == h.admissions == 0
+    assert h.closed == (0 if body_delay == 20 else 1)
+    if h.closed:
+        h.session.rollback.assert_awaited()
+
+
+async def test_cf042_total75_cancels_AI_and_closes_session_without_late_adoption(monkeypatch):
+    h = await cf042_public(monkeypatch, work=100)
+    response = await h.request()
+    assert response.status_code == 504 and response.json()['error']['code'] == 'DEADLINE_EXCEEDED'
+    assert h.ai == h.ai_cancelled == h.admissions == h.closed == 1
+    assert 'ai_returned' not in h.events and all(row.state != 'ready' for row in h.rows.values())
+    h.session.rollback.assert_awaited()
+    assert 'no-store' in response.headers['cache-control']
+
+
+@pytest.mark.parametrize('kind', ['unauth', 'csrf', 'owner'])
+async def test_cf042_initial_security_denials_never_admit_or_call_AI(monkeypatch, kind):
+    h = await cf042_public(monkeypatch, auth_error=kind)
+    response = await h.request()
+    assert response.status_code == (401 if kind == 'unauth' else 403)
+    assert h.ai == h.admissions == 0 and h.closed == 1
+
+
+@pytest.mark.parametrize('path', ['/api/supervisor/core/preparations?x=1', '/api/supervisor/core/preparations/', '/api/supervisor/core/preparations/extra'])
+async def test_cf042_bad_target_never_admits(monkeypatch, path):
+    h = await cf042_public(monkeypatch)
+    response = await h.request(path=path)
+    assert response.status_code == 422 and h.initial_auth == h.ai == h.admissions == 0
+
+
+@pytest.mark.parametrize('raw', [b'{', b'x' * 16385])
+async def test_cf042_bad_or_oversize_body_never_authenticates(monkeypatch, raw):
+    h = await cf042_public(monkeypatch)
+    response = await h.request(raw=raw)
+    assert response.status_code == 422 and h.initial_auth == h.ai == h.admissions == 0
+
+
+async def test_cf042_shorter_outer_deadline_is_not_extended(monkeypatch):
+    h = await cf042_public(monkeypatch, work=20)
+    response = await h.request(state=lambda clock: {'core_deadline': clock.time() + 5})
+    assert response.status_code == 504 and h.ai == h.ai_cancelled == 1
+    state = h.scopes[0]['state']
+    assert h.deadlines == [state['core_deadline']]
+    assert state['core_deadline'] - state['core_preparation_started_at'] < 6
+
+
+async def test_cf042_direct_route_keeps_short_fallback_in_real_service(monkeypatch):
+    h = await cf042_public(monkeypatch, work=30, middleware=False)
+    response = await h.request()
+    assert response.status_code == 504 and h.ai == h.ai_cancelled == h.closed == 1
+    assert 'core_preparation_started_at' not in h.scopes[0]['state']
+    assert h.deadlines == [h.scopes[0]['state']['core_deadline']]
+
+
+@pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf'), float('-inf'), True, '75'])
+async def test_cf042_service_bad_absolute_deadline_precedes_admission(monkeypatch, value):
+    from src.modules.supervisor.application.preparation_service import PreparationService
+    from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+    session = NS(rollback=AsyncMock())
+    service = PreparationService(session, principal=NS(), client=NS())
+    service.auth = AsyncMock()
+    with pytest.raises(PreparationConflict) as error:
+        await service.post(NS(), uuid4(), deadline=value)
+    assert error.value.code == 'DEADLINE_EXCEEDED' and error.value.status == 504
+    service.auth.assert_not_awaited()
+    session.rollback.assert_awaited_once()
+
+
+async def test_cf042_private_direct_service_preserves_relative75(monkeypatch):
+    from src.modules.supervisor.application.preparation_service import PreparationService
+    class Stop(RuntimeError): pass
+    session = NS(rollback=AsyncMock(side_effect=Stop))
+    service = PreparationService(session, principal=NS(), client=NS())
+    clock = CF042Clock()
+    with monkeypatch.context() as timers:
+        clock.install(timers)
+        with pytest.raises(Stop):
+            await service.post(NS(), uuid4())
+    assert clock.relative == [75] and not clock.absolute
+
+
+async def test_cf042_direct_absolute_service_still_caps_at75(monkeypatch):
+    from src.modules.supervisor.application.preparation_service import PreparationService
+    h = await cf042_public(monkeypatch, work=100)
+    service = PreparationService(h.session, principal=NS(user_id=h.current_user), client=NS())
+    with monkeypatch.context() as timers:
+        h.clock.install(timers)
+        started = h.clock.time()
+        with pytest.raises(TimeoutError):
+            await service.post(B.PreparationRequest.model_validate(h.body), uuid4(), deadline=started + 1000)
+    assert 75 <= h.clock.absolute[0] - started < 76
+    assert h.ai == h.ai_cancelled == 1 and 'ai_returned' not in h.events
+    h.session.rollback.assert_awaited()
+
+
+@pytest.mark.parametrize('kind', ['nonfinite', 'future_start', 'missing_start_expired_admission', 'bad_admission'])
+async def test_cf042_invalid_direct_route_context_cannot_grant_longer_time(monkeypatch, kind):
+    h = await cf042_public(monkeypatch, middleware=False)
+    def state(clock):
+        now = clock.time()
+        if kind == 'nonfinite': return {'core_deadline': float('inf')}
+        if kind == 'missing_start_expired_admission': return {'core_admission_deadline': now - 1}
+        return {'core_preparation_started_at': now + 1 if kind == 'future_start' else now,
+                'core_deadline': now + 75, 'core_admission_deadline': float('nan') if kind == 'bad_admission' else now + 15}
+    response = await h.request(state=state)
+    assert response.status_code == 504 and h.initial_auth == h.admissions == h.ai == 0
+
+
+async def test_cf042_external_cancel_propagates_and_cleans_dependency(monkeypatch):
+    h = await cf042_public(monkeypatch, work=100)
+    task = asyncio.create_task(h.request())
+    for _ in range(100):
+        if h.ai: break
+        await asyncio.sleep(.001)
+    assert h.ai == 1
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert h.ai_cancelled == h.closed == 1 and 'ai_returned' not in h.events
+    assert all(row.state != 'ready' for row in h.rows.values())
+    h.session.rollback.assert_awaited()
+
+
+@pytest.mark.parametrize('method,suffix,seconds,body_kind', [
+    ('GET', '/preparations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 15, None),
+    ('DELETE', '/preparations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 15, None),
+    ('GET', '/requests/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 15, None),
+    ('POST', '/prepare', 15, 'draft'),
+    ('POST', '/requests', 140, 'confirm'),
+    ('POST', '/preparations/extra', 15, None),
+    ('PUT', '/preparations', 15, None),
+])
+async def test_cf042_other_core_routes_keep_their_original_limits(monkeypatch, method, suffix, seconds, body_kind):
+    from src.modules.supervisor.application.service import SupervisorService
+    h = await cf042_public(monkeypatch)
+    outcome = dict(supervisor_id=str(uuid4()), plan=None, plan_status='deleted', effective_scope=None, flow=None, views=[], coverage='deleted')
+    monkeypatch.setattr(SupervisorService, 'prepare', AsyncMock(return_value=h.plan))
+    monkeypatch.setattr(SupervisorService, 'post', AsyncMock(return_value=outcome))
+    monkeypatch.setattr(SupervisorService, 'get', AsyncMock(return_value=outcome))
+    body = h.body['draft'] if body_kind == 'draft' else None
+    if body_kind == 'confirm':
+        body = dict(client_key=str(uuid4()), draft=h.body['draft'], expected_plan_hash=h.plan.plan_hash,
+                    consent=dict(allow_flow=True, allow_partial=False, waived_conditions=[]))
+    response = await h.request(method=method, path='/api/supervisor/core' + suffix, body=body)
+    state = h.scopes[-1]['state']
+    assert abs(state['core_deadline'] - h.scope_times[-1] - seconds) < 1
+    assert 'core_admission_deadline' not in state and 'core_preparation_started_at' not in state
+    assert h.ai == h.admissions == 0
+    assert response.status_code in {200, 404, 422}
+
+
+def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
+    import ast, hashlib
+    from src.shared.http.access_boundary import AccessBoundary
+    tree = ast.parse(Path(sys.modules[AccessBoundary.__module__].__file__).read_text())
+    klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AccessBoundary')
+    fn = next(n for n in klass.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '__call__')
+    fn.body = [n for n in fn.body if not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
+    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'

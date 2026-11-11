@@ -446,3 +446,29 @@ POST하거나 새 key를 만들지 않는다. hash/storage await 중 취소도 s
 실제 기존 grounded validator가 거절한 위치에서 고정 이유/필드/항목 index와 승인된 질문에 정확히 대조된 최소 span·유한 enum만 기존16KiB quality projection 안에 남긴다. 분류할 수 없는 실제 실패는 고정 미상 코드로 표시한다. 임의 후보 text/value·raw 응답·예외/traceback·credential은 보존하지 않으며 validator/prompt/schema를 변경하지 않는다. 진단용 순수 재검사는 추가 provider 요청이 아니다.
 
 첫 질문 하나의 count1/generation1/HTTP2·자동 retry0, 시작/ready120초·lease600초와 기존 callback/preload/cleanup 제한을 유지한다. 실제 ordinal3 lease는 2026-11-11T21:00:00Z를 넘지 않는다. 소비/ACK/응답 불명은 추가 송신 없이350m과 증거를 보존한다. 무키 입력 검증은 실제 발급·모델 품질 수용이나 청구 확인을 대신하지 않는다.
+
+
+## CF042 · 공개 준비 POST의 공통 절대 기한
+
+exact `POST /api/supervisor/core/preparations`는 AccessBoundary 최초 진입의 monotonic 시각을 한 번 정하고,
+전체75초와 body/초기 Principal·CSRF·owner 인증15초를 같은 시작점에서 계산한다. body 수신에 쓴 시간은
+초기 인증과 전체 처리 모두에 포함하며 parsing 뒤 타이머를 새로 시작하지 않는다. 기존16KiB·media/encoding·
+path/method/query·configured/auth gate는 유지한다.
+
+CoreRoute와 초기 service dependency는 내부 scope의 같은 전체/입구 절대 기한을 사용한다. 준비 endpoint는
+기존 `preparations(value)`를 그대로 쓰고 `.post(..., deadline=실효 절대시각)`의 내부 keyword로 전달한다.
+PreparationService는 유한 기한을 진입 시 검증하고 caller와 진입+75초 중 이른 값만 사용한다. 만료/비정상
+기한은 admission/AI 전에 고정 deadline 오류로 닫는다. middleware 없는 직접 route는 기존15초 이하의
+fallback만 허용하고 그 값도 service에 전달한다. 기한 인자를 생략한 private/direct service의 기존 상대75초는 보존한다.
+
+GET/DELETE·legacy prepare15초와 confirm140초, Flow/Fundamental 및 AIClient70/AI65/meaning60/provider55초는
+변경하지 않는다. 외부의 더 짧은 기한·취소가 우선하며 winner commit ACK·고정 key/TTL/lineage·fresh owner·
+rollback/unknown·session context 정리도 그대로다. timeout은 미사용 환급이나 자동 재송신 근거가 아니다.
+
+집중 검증은 실제 middleware·CoreRoute·초기 dependency·PreparationService.post와 명시 fake auth/session/DB/AI,
+테스트만의 축소 monotonic clock·실제 timeout/cancel 경로를 사용한다. 다른 AccessBoundary branch 보존의 AST
+대조는 source 증거로 분리한다. 실제 DB/Google/provider·production gateway/epoch 활성화 수용은 아니다.
+
+이번 absolute deadline은 Backend route→PreparationService.post의 내부 전달이다. exchange/build의 기존 AI wire에는
+이 monotonic 값이 포함되지 않고 production phase provider도 없다. Backend의 바깥 취소가 실제 외부 provider
+작업 중단이나 과금0을 보장하지 않으며, 그 연결은 production 조립의 미완료 선행조건으로 남는다.

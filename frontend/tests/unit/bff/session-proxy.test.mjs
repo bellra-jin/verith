@@ -176,7 +176,7 @@ test('CF022 exact core BFF keeps16KiB/64KiB bounds and prepare16s versus confirm
  const oversized=await proxy.sessionProxy(new Request('https://app.unit/api/supervisor/core/prepare',{method:'POST',body:'x'.repeat(16385),headers:{'Content-Type':'application/json'}}),'/api/supervisor/core/prepare');assert.equal(oversized.status,422);assert.equal(seen.length,2);
 });
 
-test('CF023 exact preparation POST/GET/DELETE preserve CSRF/owner boundary and sixteen-second deadline',async()=>{
+test('CF034 preparation POST95/body16 preserves GET/DELETE16 and CSRF/owner boundary',async()=>{
  const seen=[],timeouts=[],id=randomUUID();
  const handlers=load('src/app/api/private/[...path]/route.ts',async(url,init)=>{seen.push([url,init]);return Response.json({safe:true});},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:{timeout:ms=>{timeouts.push(ms);return new AbortController().signal;}}});
  const base='supervisor/core/preparations',ctx=p=>({params:Promise.resolve({path:p.split('/')})});
@@ -184,10 +184,42 @@ test('CF023 exact preparation POST/GET/DELETE preserve CSRF/owner boundary and s
   const request=new Request('https://app.unit/api/private/'+target,{method,headers:{'content-type':'application/json',Cookie:'synthetic',Origin:'https://app.unit','x-csrf-token':'fresh','x-user-id':'spoof','x-flow-service-token':'spoof'},...(method==='POST'?{body:'{}'}:{})});
   const response=await handlers[method](request,ctx(target));assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'private, no-store');
  }
- assert.deepEqual(timeouts,[16000,16000,16000]);assert.equal(seen.length,3);
+ assert.deepEqual(timeouts,[95000,16000,16000,16000]);assert.equal(seen.length,3);
  for(const [url,init] of seen){assert.match(url,/^http:\/\/backend.unit\/api\/supervisor\/core\/preparations/);assert.equal(init.redirect,'manual');assert.equal(init.headers.get('x-csrf-token'),'fresh');assert.equal(init.headers.get('x-flow-service-token'),null);assert.equal(init.headers.get('x-user-id'),null);}
  for(const [method,target] of [['GET',base],['DELETE',base],['POST',base+'/'+id],['GET',base+'/'+id+'/extra'],['POST',base+'?x=1']]){
   assert.equal((await handlers[method](new Request('https://app.unit/api/private/'+target,{method}),ctx(target.split('?')[0]))).status,422);
  }
  assert.equal(seen.length,3);
+});
+
+function preparationDeadlineClock(){
+ let now=0;const alarms=[];
+ return {timeout(ms){const c=new AbortController();alarms.push({at:now+ms,c});return c.signal;},advance(ms){now+=ms;for(const a of alarms)if(a.at<=now&&!a.c.signal.aborted)a.c.abort();}};
+}
+const preparationPost=()=>new Request('https://app.unit/api/private/supervisor/core/preparations',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+test('CF034 real BFF survives body timer expiration after a finished body and response after16s',async()=>{
+ const clock=preparationDeadlineClock();let release,entered;const started=new Promise(r=>{entered=r;});let upstream;
+ const proxy=load('src/shared/server/session-proxy.ts',async(_url,init)=>{upstream=init.signal;entered();return new Promise(r=>{release=r;});},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:clock});
+ const pending=proxy.sessionProxy(preparationPost(),'/api/supervisor/core/preparations');await started;
+ clock.advance(20000);assert.equal(upstream.aborted,false);release(Response.json({safe:true}));
+ const result=await pending;assert.equal(result.status,200);assert.equal(result.headers.get('cache-control'),'private, no-store');
+});
+for(const phase of ['upstream','response-stream'])test('CF034 real BFF total95 closes '+phase+' without a renewed timeout',async()=>{
+ const clock=preparationDeadlineClock();let entered,cancelled=0,calls=0;const started=new Promise(r=>{entered=r;});
+ const proxy=load('src/shared/server/session-proxy.ts',async(_url,init)=>{
+  calls++;
+  if(phase==='upstream'){entered();return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('synthetic timeout')),{once:true}));}
+  return new Response(new ReadableStream({pull(){entered();},cancel(){cancelled++;}}));
+ },{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:clock});
+ const pending=proxy.sessionProxy(preparationPost(),'/api/supervisor/core/preparations');await started;clock.advance(95000);
+ const result=await pending;assert.equal(result.status,504);assert.equal((await result.json()).error.code,'DEADLINE_EXCEEDED');assert.equal(calls,1);
+ if(phase==='response-stream')assert.equal(cancelled,1);
+});
+test('CF034 real BFF body16 closes before upstream0 with504, retaining16KiB limit',async()=>{
+ const clock=preparationDeadlineClock();let calls=0,cancelled=0;
+ const proxy=load('src/shared/server/session-proxy.ts',async()=>{calls++;throw Error('no upstream');},{env:{FLOW_ANALYSIS_ENABLED:'true'},AbortSignal:clock});
+ const request=new Request('https://app.unit/api/private/supervisor/core/preparations',{method:'POST',headers:{'content-type':'application/json'},duplex:'half',body:new ReadableStream({start(){},cancel(){cancelled++;}})});
+ const pending=proxy.sessionProxy(request,'/api/supervisor/core/preparations');clock.advance(16000);
+ const result=await pending;assert.equal(result.status,504);assert.equal((await result.json()).error.code,'DEADLINE_EXCEEDED');assert.equal(calls,0);assert.equal(cancelled,1);
+ const large=await proxy.sessionProxy(new Request('https://app.unit/api/private/supervisor/core/preparations',{method:'POST',headers:{'content-type':'application/json'},body:'x'.repeat(16385)}),'/api/supervisor/core/preparations');assert.equal(large.status,422);assert.equal(calls,0);
 });

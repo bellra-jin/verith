@@ -367,6 +367,8 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   if(kind==='confirm'&&!pending.current){const p=planRef.current,c=consentRef.current;
   if(!p||!['ready','scope_confirmation'].includes(p.status)||!c.allow||p.partial&&!c.partial||p.required_waivers.some(id=>!c.waivers.includes(id)))return;
   }
+  const selectedPreparation=kind==='prepare'&&!(nextDraft&&parentId)?preparing.current:null;
+  const preparationMethod=selectedPreparation?.preparation_id?'get':'post';
   const ticket=intent.current.begin();
   if(ticket===null)return;
   const rev=++generation.current,target=window.location.href,c=new AbortController();
@@ -379,29 +381,39 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   setBusy(true);
   setError('');
   timer.current.stop();
-  const current=()=>active.current&&rev===generation.current&&intent.current.accepts(ticket)&&window.location.href===target&&verifiedHref.current===target&&document.visibilityState!=='hidden';
-  const t=setTimeout(()=>c.abort(),kind==='confirm'?145000:16000);
+  const sameContext=()=>active.current&&rev===generation.current&&intent.current.accepts(ticket)&&window.location.href===target&&verifiedHref.current===target&&document.visibilityState!=='hidden';
+  const current=()=>sameContext()&&!c.signal.aborted;
+  const t=setTimeout(()=>{
+   c.abort();
+   if(sameContext()){
+    planFocus.current.invalidate();
+    setError('응답을 확인하지 못했습니다. 확정한 입력과 키는 유지됩니다.');
+    intent.current.finish(ticket);
+    commandPending.current=false;setBusy(false);
+   }
+  },kind==='confirm'?145000:preparationMethod==='post'?130000:16000);
   try{
    if(kind==='prepare'){
     clearConsent();
     planRef.current=null;
     setPlan(null);
     const value=nextDraft??draftRef.current;
-    let saved=preparing.current;
-    if(nextDraft&&parentId){saved=null;}
+    let saved=selectedPreparation;
     if(!saved){
      saved=await newPreparation(value,parentId);
      if(!current())return;
-     await writePreparation(sessionStorage,user,saved);
+     await writePreparation(sessionStorage,user,saved,current);
      if(!current())return;
      preparing.current=saved;
     }
-    const result=await preparationRequest(saved.preparation_id?'get':'post',saved.preparation_id??saved.body,user,c.signal,current);
+    if((saved.preparation_id?'get':'post')!==preparationMethod)throw new CoreHttpError(409);
+    const result=await preparationRequest(preparationMethod,saved.preparation_id??saved.body,user,c.signal,current);
     if(!current())return;
     if(result.plan)await planValue(result.plan,saved.body.draft);
     if(!current())return;
     const updated=await bindPreparation(saved,result.preparation_id);
-    await writePreparation(sessionStorage,user,updated);
+    if(!current())return;
+    await writePreparation(sessionStorage,user,updated,current);
     if(!current())return;
     preparing.current=updated;
     preparationRef.current=result;
@@ -439,7 +451,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
     }
     navigate('/research?supervisor_id='+result.supervisor_id,true);
    }
-  }catch(e){if(current()){
+  }catch(e){if(sameContext()){
   planFocus.current.invalidate();
   if(kind==='confirm'&&e instanceof CoreHttpError&&e.status===409&&['PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED'].includes(e.code)&&!known.current){
    // The server checks binding replay first. This explicit rejection proves first adoption did not create our binding.
@@ -454,8 +466,9 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   onAccountChange(user,authEpoch);
   }}}
   finally{clearTimeout(t);
+  const ownsPending=rev===generation.current&&intent.current.accepts(ticket);
   intent.current.finish(ticket);
-  if(rev===generation.current){commandPending.current=false;setBusy(false);}
+  if(ownsPending){commandPending.current=false;setBusy(false);}
   }
  }
  async function answer(slot:Answer['slot'],value:string){if(verification.current.pending||draftRef.current.revision>=4||draftRef.current.answers.length>=8)return;

@@ -162,6 +162,7 @@ const reviewedWorkspace=path.dirname(path.dirname(project));
 const reviewedCodeRoots=Object.freeze([
  path.join(reviewedWorkspace,'verith-supervisor-core','frontend'),
  path.join(reviewedWorkspace,'verith-supervisor-verification','frontend'),
+ path.join(reviewedWorkspace,'verith-supervisor-preparation-deadline','frontend'),
  path.join(reviewedWorkspace,'verith-technical-boundary','frontend'),
  path.join(reviewedWorkspace,'verith-technical-read-boundary','frontend'),
  path.join(reviewedWorkspace,'verith-technical-chart-display','frontend'),

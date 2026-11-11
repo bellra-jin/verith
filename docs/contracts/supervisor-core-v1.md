@@ -400,3 +400,31 @@ wire 송신 증거가 아니다. 응답 관측·count 검증·usage·정산 ACK�
 실제 helper의 정확한 Closed 타입·등록 code만 고정 오류로 전달하고 후기 정산
 gate도 최종 회계 전에 보존한다. 이 변경은 무키 회귀 수용이며 기존 250m 보수
 예약을 환불하거나 실제 생성 결과·비용·모델 품질을 확인한 것이 아니다.
+
+## CF034 준비 POST의 Frontend 외곽 기한
+
+policy2 Backend preparation 75초에 맞춰 정확한 preparations POST의 BFF 전체
+기한은 진입부터 95초, 실제 POST를 선택한 화면 action은 시작부터 130초다.
+forward·응답 chunk·hash/storage 작업 뒤에 기한을 다시 시작하지 않는다.
+입력 body는 별도로 진입부터 16초이며 request 16KiB/decoded response 64KiB,
+Cookie/Origin/CSRF·identity encoding·redirect·private no-store 보호는 그대로다.
+body 만료는 upstream 호출 없이 고정 504로 닫고, body를 다 읽은 뒤에는 그
+짧은 body 신호가 정상 upstream 대기를 취소하지 않는다.
+
+POST 전후 session 확인은 각각 fetch와 JSON decode를 합쳐 최대 15초이며 outer
+취소와 교집합을 사용한다. 정상/오류/timeout/취소 뒤 local timer/listener를
+제거하고, 늦은 200이나 owner 변경을 채택하지 않는다. 공유 Flow 인증 함수는
+변경하지 않는다. ID가 있는 준비 GET 복구는 화면/BFF 16초, DELETE·legacy
+prepare·재인증 15초·confirm 145초 등 기존 제한은 유지한다.
+
+화면은 action 이름이 아니라 고정 body/ID와 새 child 조건으로 실제 method를
+동기 선택한다. 선택한 method와 준비 결과가 달라지면 HTTP 전에 닫는다.
+timeout·503·응답 불명 뒤에는 같은 owner의 body/key/digest를 보존하고 자동으로
+POST하거나 새 key를 만들지 않는다. hash/storage await 중 취소도 stale 결과를
+채택하지 않으며, timeout 안내·자기 pending 해제와 새 작업의 잠금을 구분한다.
+기존 generation/URL/visibility/owner·동의·focus 검사는 보존한다.
+
+브라우저 abort는 로컬 대기/채택 중단이다. 현재 BFF의 client disconnect가 Backend
+또는 model 요청까지 취소한다는 보장은 추가하지 않는다. 이 회귀는 실제 함수와
+주입 IO/가짜 시계의 무키 검증이며 React mount·실제 로그인·Backend/PG·공급자·
+청구 확인이 아니다. 기존 250m 보수 예약과 consumed 실행 기록은 변경하지 않는다.

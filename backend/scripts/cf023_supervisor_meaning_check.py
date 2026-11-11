@@ -861,3 +861,255 @@ async def verify_meaning_assembly(proof):
             tb=tb.tb_next
         safe_print({'phase':'cf024_assembly_failure','frames':frames[-8:]})
         raise
+
+
+async def verify_meaning_flow_crosspath(proof):
+    """Fixed synthetic-only owned-PG preparation -> authenticated adoption -> fake Flow.
+
+    This separate entry leaves CF024's No Flow result and live factory unchanged.
+    No caller-selected mode, key, transport, approval or ledger is accepted.
+    """
+    from scripts.runner_owned_database import RunnerOwnedDatabase
+    if type(proof) is not RunnerOwnedDatabase:
+        raise assembly_error()
+    proof.verify_ownership()
+    from scripts.cf003_admission_check import isolated_application, check
+    from scripts.cf002_interactive_login import safe_print
+    try:
+        with isolated_application(proof) as observed:
+            result = await _verify_meaning_flow_crosspath(proof)
+            check(not any(observed.values()), 'CF029 forbidden access')
+            return result | {'observed_denials': dict(observed)}
+    except BaseException as error:
+        frames=[];tb=error.__traceback__
+        while tb:
+            if tb.tb_frame.f_code.co_filename==__file__:
+                frames.append({'source':'meaning_flow_checker','function':tb.tb_frame.f_code.co_name,'line':tb.tb_lineno})
+            tb=tb.tb_next
+        safe_print({'phase':'cf029_crosspath_failure','frames':frames[-8:]})
+        raise
+
+
+async def _verify_meaning_flow_crosspath(proof):
+    import copy
+    from contextlib import ExitStack
+    from unittest.mock import patch
+    from uuid import uuid4
+    import httpx
+    from sqlalchemy import select, text
+    from db.models.auth.models import AuthUser
+    from db.models.common.stock import Stock
+    from db.models.supervisor.preparation import SupervisorMeaningPreparation as Preparation, SupervisorMeaningEpoch as Epoch
+    from db.models.supervisor.request_binding import SupervisorRequestBinding as Binding
+    from db.session import get_session
+    from src.api.main import app
+    from src.shared.config import settings
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    from src.modules.auth.api import router as auth
+    from src.modules.auth.application.session_service import issue_session, csrf_token
+    from src.modules.supervisor.api import router as routes
+    from src.modules.supervisor.domain.contracts import canonical, sha, MEANING_SPEC, MEANING_SPEC_SHA256, validate_plan, Draft
+    from src.modules.flow.api.schemas import FlowReportEnvelope
+    from scripts.cf002_interactive_login import owned_session, safe_print
+    from scripts.cf003_admission_check import check
+    from scripts.cf012_analysis_check import flow_app, engine_result
+
+    load_meaning()
+    groups=[];dispatch=[];stages=[];snapshots={}
+    token='cf029-fake-flow-service-token-at-least32'
+    tables=('flow_analysis_runs','analysis_usage_reservations','flow_reports','analysis_provider_calls','analysis_usage_periods')
+
+    def mark(label):
+        groups.append(label)
+        safe_print({'phase':'cf029_crosspath','label':label,'status':'passed'})
+
+    async def sql(query, params=None):
+        async with owned_session(proof) as session:
+            return await session.scalar(text(query), params or {})
+
+    async def totals():
+        return {table: await sql('SELECT count(*) FROM '+table) for table in tables}
+
+    async def epoch_snapshot():
+        async with owned_session(proof) as session:
+            row=await session.scalar(select(Epoch).where(Epoch.id==binding.epoch_id))
+            return copy.deepcopy(epoch_state(row))
+
+    async def unchanged(expected):
+        check(await epoch_snapshot()==held_snapshot,'CF029 meaning unknown hold unchanged')
+        check(await totals()==expected,'CF029 Flow counters unchanged')
+        check(sum(s.count('mock_count') for s in stages)==2 and sum(s.count('mock_generation') for s in stages)==2 and sum(s.count('synthetic_key_supplied') for s in stages)==2,'CF029 meaning sends unchanged')
+
+    async def user():
+        async with owned_session(proof) as session:
+            value=AuthUser(id=uuid4());session.add(value);await session.flush()
+            cookie,principal=await issue_session(session,value)
+            await session.commit()
+            return cookie,principal
+
+    primary,other=await user(),await user()
+    async with owned_session(proof) as session:
+        session.add(Stock(stock_code='000720',stock_name='현대건설',market='KOSPI'))
+        await session.commit()
+    check(await sql('SELECT count(*) FROM supervisor_meaning_test_epochs')==0,'CF029 new disposable epoch required')
+    check(await sql('SELECT count(*) FROM supervisor_meaning_preparations')==0,'CF029 empty preparations required')
+    before=await totals();check(not any(before.values()),'CF029 fresh Flow tables')
+    binding=await capture_synthetic_epoch(proof,primary[1])
+    def request():
+        return dict(prepare_key=str(uuid4()),parent_preparation_id=None,draft=dict(original_query='현대건설 수급',answers=[],revision=0,selected_ticker=None,candidate_ref=None))
+    first_body=request();last_body=request()
+    first=await run_meaning_assembly(mode='synthetic',proof=proof,binding=binding,principal=primary[1],prepare_body=first_body)
+    stages.append(list(first['stages']))
+    check(first['state']=='ready' and first['meaning_status']=='supplemented' and first['settlement']=='observed','CF029 actual supplemented ready assembly')
+    check(first['stages']==['preflight_verified','claim_ACK_identity_verified','count_reservation_ACK','synthetic_key_supplied','mock_count','generation_reservation_ACK','mock_generation','settlement_ACK','preparation_owner_readback'],'CF029 exact ready stage order')
+    snapshots['ready']=await epoch_snapshot()
+    check(snapshots['ready']['count']==snapshots['ready']['generation']==1 and snapshots['ready']['reserved']==50000000 and not snapshots['ready']['blocked'] and snapshots['ready']['active'] is None,'CF029 first observed accounting')
+    check(await totals()==before and not dispatch,'CF029 ready No Flow')
+    async with owned_session(proof) as session:
+        first_row=(await session.scalars(select(Preparation).where(Preparation.owner_user_id==primary[1].user_id,Preparation.prepare_key_digest==hashlib.sha256(first_body['prepare_key'].encode()).digest()))).one()
+        first_id=str(first_row.id)
+    async def early_sessions():
+        async with owned_session(proof) as session:
+            yield session
+    early_overrides=dict(app.dependency_overrides);app.dependency_overrides[get_session]=early_sessions
+    try:
+        with patch.object(settings,'FLOW_ANALYSIS_ENABLED',True),patch.object(settings,'FLOW_SERVICE_TOKEN',token),patch.dict('os.environ',{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':token}):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://localhost:8200') as c:
+                early=await c.get('/api/supervisor/core/preparations/'+first_id,headers={'cookie':auth.SESSION_COOKIE+'='+primary[0]})
+        check(early.status_code==200 and early.headers.get('cache-control')=='private, no-store','CF029 ready owner ASGI GET before unknown')
+        early_view=early.json()['data']
+        check(early_view['state']=='ready' and early_view['meaning_status']=='supplemented' and early_view['plan']['plan_hash']==first['plan_hash'],'CF029 ready owner plan before unknown')
+    finally:
+        app.dependency_overrides.clear();app.dependency_overrides.update(early_overrides)
+    check(await epoch_snapshot()==snapshots['ready'] and await totals()==before,'CF029 first owner GET no meaning or Flow accounting')
+    last=await run_meaning_assembly(mode='synthetic',proof=proof,binding=binding,principal=other[1],prepare_body=last_body,scenario='missing_usage')
+    stages.append(list(last['stages']))
+    check(last['state']=='clarification' and last['settlement']=='hold' and 'hold_ACK' in last['stages'],'CF029 last unknown clarification')
+    held_snapshot=await epoch_snapshot();snapshots['unknown']=held_snapshot
+    check(held_snapshot['count']==held_snapshot['generation']==2 and held_snapshot['reserved']==100000000 and held_snapshot['blocked'] and held_snapshot['active'] is not None and len(held_snapshot['attempts'])==2,'CF029 same epoch unknown durable hold')
+    observations=[v['observation'] for v in held_snapshot['attempts'].values()]
+    check(sorted(v['state'] for v in observations)==['observed','unknown'] and next(v['estimated_nano'] for v in observations if v['state']=='observed')==120000,'CF029 observed estimate distinct from unknown')
+    async with owned_session(proof) as session:
+        last_row=(await session.scalars(select(Preparation).where(Preparation.owner_user_id==other[1].user_id,Preparation.prepare_key_digest==hashlib.sha256(last_body['prepare_key'].encode()).digest()))).one()
+        check(last_row.epoch_id==binding.epoch_id and last_row.state=='clarification' and str(last_row.attempt_id)==held_snapshot['active'] and held_snapshot['attempts'][str(last_row.attempt_id)]['observation']['state']=='unknown','CF029 exact second owner unknown active attempt')
+    mark('same_epoch_actual_supplemented_ready_then_unknown_hold')
+
+    # Resolve only the actual owner+prepare-key row, never guessed IDs or replacement plans.
+    async with owned_session(proof) as session:
+        row=(await session.scalars(select(Preparation).where(Preparation.owner_user_id==primary[1].user_id,Preparation.prepare_key_digest==hashlib.sha256(first_body['prepare_key'].encode()).digest()))).one()
+        preparation_id=str(row.id)
+        check(row.epoch_id==binding.epoch_id and row.root_id==row.id and row.parent_id is None and row.semantic_sha256==first['semantic_sha256']==MEANING_SPEC_SHA256 and row.semantic_json==canonical(MEANING_SPEC) and row.draft_json==canonical(first_body['draft']),'CF029 exact ready owner draft spec')
+        ready_plan=row.plan_json
+        check(hashlib.sha256(ready_plan.encode()).hexdigest()==row.plan_sha256,'CF029 stored plan integrity')
+
+    flow=flow_app(lambda request,context:engine_result(request,context))
+    def client(*args,**kwargs):
+        value=AIClient(*args,**kwargs,transport=httpx.ASGITransport(app=flow))
+        original=value.analyze_flow
+        async def analyze(payload):
+            dispatch.append(payload['analysis_id'])
+            return await original(payload)
+        async def no_plan(payload):
+            check(False,'CF029 confirmation and GET cannot regenerate meaning')
+        value.analyze_flow=analyze;value.plan_supervisor_core=no_plan
+        return value
+    async def sessions():
+        async with owned_session(proof) as session:
+            yield session
+    async def call(method,path,body=None,identity=primary,headers=None):
+        h={}
+        if identity is not None:
+            cookie,principal=identity
+            h={'origin':'http://localhost:3200','cookie':auth.SESSION_COOKIE+'='+cookie,'x-csrf-token':csrf_token(principal)}
+        h.update(headers or {})
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://localhost:8200') as c:
+            return await c.request(method,path,json=body,headers=h)
+    def response(value,status=200,code=None):
+        check(value.status_code==status,'CF029 fixed HTTP status')
+        check(value.headers.get('cache-control')=='private, no-store','CF029 private response')
+        result=value.json()
+        if code:
+            check(result['data'] is None and result['error']['code']==code,'CF029 safe rejection')
+        else:
+            check(result['error'] is None,'CF029 success envelope')
+        return result['data']
+    def flow_response(value,status=200,report_id=None):
+        # Legacy report routes return FlowReportEnvelope/detail, not Supervisor data/error.
+        check(value.status_code==status,'CF029 fixed report HTTP status')
+        check(value.headers.get('cache-control')=='private, no-store','CF029 private report response')
+        result=value.json()
+        if status==200:
+            check(set(result)=={'report_id','report'},'CF029 report envelope')
+            envelope=FlowReportEnvelope.model_validate(result)
+            check(str(envelope.report_id)==report_id,'CF029 same stored report identity')
+        elif status==404:
+            check(result=={'detail':'report not found'},'CF029 report owner rejection')
+        elif status==401:
+            check(result=={'detail':{'code':'AUTH_REQUIRED','message':'인증이 필요합니다.'}},'CF029 report auth rejection')
+        else:
+            check(False,'CF029 unsupported report response expectation')
+        return result
+    previous=dict(app.dependency_overrides);app.dependency_overrides[get_session]=sessions
+    try:
+      with ExitStack() as stack:
+        for name,value in dict(AI_SERVICE_URL='http://synthetic.invalid',FLOW_ANALYSIS_ENABLED=True,FLOW_SERVICE_TOKEN=token,FLOW_USAGE_LIMITS_ENABLED='true',FLOW_SUPPORTED_TICKERS='000720',FLOW_USER_DAILY_REQUEST_LIMIT='2',FLOW_SERVICE_DAILY_REQUEST_LIMIT='2',FLOW_SERVICE_DAILY_BUDGET_USD='2').items():
+            stack.enter_context(patch.object(settings,name,value))
+        stack.enter_context(patch.dict('os.environ',{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':token}))
+        stack.enter_context(patch.object(routes,'AIClient',client))
+        view=response(await call('GET','/api/supervisor/core/preparations/'+preparation_id))
+        check(view==early_view and preparation_id==first_id and canonical(view['plan'])==ready_plan,'CF029 same owner ASGI ready plan after unknown')
+        plan=validate_plan(view['plan'],Draft.model_validate(first_body['draft']))
+        check(plan.plan_hash==first['plan_hash'],'CF029 assembly and HTTP plan match')
+        confirmation=dict(client_key=str(uuid4()),preparation_id=preparation_id,draft=first_body['draft'],expected_plan_hash=plan.plan_hash,consent=dict(allow_flow=True,allow_partial=plan.partial,waived_conditions=plan.required_waivers))
+        mark('owner_key_lookup_actual_ASGI_preparation_same_plan')
+
+        negatives=[('missing_consent',422,'INPUT_INVALID',primary,{}),('no_flow',422,'INPUT_INVALID',primary,{}),('stale',409,'PLAN_STALE',primary,{}),('other_owner',404,'RESOURCE_NOT_FOUND',other,{}),('no_session',401,'AUTH_REQUIRED',None,{}),('invalid_session',401,'AUTH_REQUIRED',primary,{'cookie':auth.SESSION_COOKIE+'=cf029-invalid-session'}),('csrf',401,'AUTH_REQUIRED',primary,{'x-csrf-token':'cf029-invalid-csrf'}),('origin',401,'AUTH_REQUIRED',primary,{'origin':'http://invalid.example'})]
+        for label,status,code,identity,headers in negatives:
+            value=copy.deepcopy(confirmation);value['client_key']=str(uuid4())
+            if label=='missing_consent':value.pop('consent')
+            elif label=='no_flow':value['consent']['allow_flow']=False
+            elif label=='stale':value['expected_plan_hash']='0'*64
+            response(await call('POST','/api/supervisor/core/requests',value,identity,headers),status,code)
+            await unchanged(before)
+            check(not dispatch and await sql('SELECT count(*) FROM supervisor_request_bindings')==0,'CF029 negative admission0 binding0 dispatch0')
+        mark('consent_plan_owner_session_CSRF_origin_before_Flow')
+
+        check(await totals()==before,'CF029 fresh period before budget rejection')
+        with patch.object(settings,'FLOW_SERVICE_DAILY_BUDGET_USD','0.01'):
+            response(await call('POST','/api/supervisor/core/requests',confirmation),429,'USAGE_LIMIT_EXCEEDED')
+        await unchanged(before)
+        check(not dispatch,'CF029 denied Flow dispatch0')
+        async with owned_session(proof) as session:
+            bound=(await session.scalars(select(Binding).where(Binding.owner_user_id==primary[1].user_id,Binding.client_key_digest==hashlib.sha256(confirmation['client_key'].encode()).digest()))).one()
+            supervisor_id=str(bound.id)
+            check(str(bound.preparation_id)==preparation_id,'CF029 denied binding references actual preparation')
+        denied=response(await call('GET','/api/supervisor/core/requests/'+supervisor_id))
+        check(denied['flow'] is None and denied['views'][0]['state']=='not_admitted','CF029 committed binding not admitted after rollback')
+        snapshots['budget_denied']=await totals()
+        mark('Flow_budget429_full_usage_rollback_binding_preserved')
+
+        # No period row is changed/deleted to retry: normal settings create the first one.
+        check(await totals()==before,'CF029 no persisted period before same-key retry')
+        stored=response(await call('POST','/api/supervisor/core/requests',confirmation))
+        check(stored['supervisor_id']==supervisor_id and stored['flow']['state']=='stored' and len(dispatch)==1,'CF029 same-key coordinator stores once')
+        after=await totals();snapshots['stored']=after
+        check(after['flow_analysis_runs']==after['analysis_usage_reservations']==after['flow_reports']==1 and after['analysis_provider_calls']==9 and after['analysis_usage_periods']==2,'CF029 single run reservation report and nine reserved slots')
+        check(await sql('SELECT count(*) FROM analysis_usage_reservations WHERE max_nano=913500000')==1,'CF029 fixed Flow test reservation')
+        check(await sql("SELECT count(*) FROM analysis_provider_calls WHERE state='not_called'")==9,'CF029 nine slots are not external calls')
+        report_id=stored['flow']['report_id']
+        report=flow_response(await call('GET','/api/flow/reports/'+report_id),report_id=report_id)
+        check(response(await call('POST','/api/supervisor/core/requests',confirmation))==stored,'CF029 confirmation replay same stored result')
+        check(response(await call('GET','/api/supervisor/core/requests/'+supervisor_id))==stored,'CF029 owner request GET same stored binding')
+        check(flow_response(await call('GET','/api/flow/reports/'+report_id),report_id=report_id)==report,'CF029 owner report content unchanged')
+        response(await call('GET','/api/supervisor/core/requests/'+supervisor_id,identity=other),404,'RESOURCE_NOT_FOUND')
+        response(await call('GET','/api/supervisor/core/requests/'+supervisor_id,identity=None),401,'AUTH_REQUIRED')
+        flow_response(await call('GET','/api/flow/reports/'+report_id,identity=other),404)
+        flow_response(await call('GET','/api/flow/reports/'+report_id,identity=None),401)
+        consumed=response(await call('GET','/api/supervisor/core/preparations/'+preparation_id))
+        check(consumed['state']=='consumed' and consumed['plan'] is None and consumed['consumed_binding_id']==supervisor_id,'CF029 original preparation consumed reference')
+        check(await sql("SELECT count(*) FROM supervisor_meaning_preparations WHERE id=:id AND state='consumed' AND draft_json IS NULL AND frame_json IS NULL AND plan_json IS NULL AND continuation_json IS NULL",{'id':__import__('uuid').UUID(preparation_id)})==1,'CF029 consumed root sensitive redaction')
+        await unchanged(after);check(len(dispatch)==1,'CF029 replay GET extra dispatch0')
+        mark('same_confirmation_retry_stored_replay_owner_GET_extra_calls0')
+        return dict(groups=groups,meaning_mock_count=2,meaning_mock_generation=2,synthetic_supplier=2,fake_flow_dispatch=1,flow_before=before,flow_budget_denied=snapshots['budget_denied'],flow_after=after,meaning_epoch_snapshots={k:snapshots[k] for k in ('ready','unknown')},meaning_epoch_sha256=sha(held_snapshot),meaning_epoch_final_sha256=sha(await epoch_snapshot()),real_provider_requests=0,real_credential_reads=0,google_requests=0,note='PreparationService private initial preparation; actual authenticated ASGI GET/confirmation/report; fake Flow only. Nine provider rows are not_called reservations.')
+    finally:
+        app.dependency_overrides.clear();app.dependency_overrides.update(previous)

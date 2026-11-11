@@ -621,3 +621,174 @@ async def test_live_preflight_cannot_promote_fake_or_expired_scope_to_key_read(i
     with pytest.raises(CounterUnavailable):
         await C._run_meaning_assembly(mode='live',proof=None,binding=binding,principal=scope.principal,prepare_body=scope.body,deadline=scope.deadline,authority=authority,counter_agreement=agreed,key_supplier=source)
     source.supplier.assert_not_awaited();forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize('proof',[None,object(),NS()])
+async def test_crosspath_rejects_non_owned_proof_before_application_or_IO(proof,monkeypatch):
+    inner=AsyncMock();monkeypatch.setattr(C,'_verify_meaning_flow_crosspath',inner)
+    with pytest.raises(CounterUnavailable):await C.verify_meaning_flow_crosspath(proof)
+    inner.assert_not_awaited()
+
+
+@pytest.mark.parametrize('option',['mode','key_supplier','transport','authority','binding'])
+async def test_crosspath_has_no_live_or_external_input_options(option):
+    with pytest.raises(TypeError):await C.verify_meaning_flow_crosspath(None,**{option:object()})
+
+
+@pytest.mark.parametrize('failure',[None,RuntimeError(PRIVATE),asyncio.CancelledError()])
+async def test_crosspath_wrapper_owned_identity_isolation_and_cancel_cleanup(failure,monkeypatch):
+    """Callback simulation of wrapper cleanup, no PG/auth claim."""
+    from contextlib import contextmanager
+    from scripts import cf003_admission_check as admission,cf002_interactive_login as runner
+    from scripts.runner_owned_database import RunnerOwnedDatabase
+    proof=object.__new__(RunnerOwnedDatabase);events=[];logs=[]
+    monkeypatch.setattr(RunnerOwnedDatabase,'verify_ownership',lambda value:events.append('ownership'))
+    @contextmanager
+    def isolated(value):
+        assert value is proof;events.append('enter')
+        try:yield {'forbidden':0}
+        finally:events.append('exit')
+    monkeypatch.setattr(admission,'isolated_application',isolated)
+    monkeypatch.setattr(runner,'safe_print',logs.append)
+    inner=AsyncMock(return_value={'synthetic':True},side_effect=failure);monkeypatch.setattr(C,'_verify_meaning_flow_crosspath',inner)
+    if failure is None:
+        assert await C.verify_meaning_flow_crosspath(proof)=={'synthetic':True,'observed_denials':{'forbidden':0}}
+    else:
+        with pytest.raises(type(failure)):await C.verify_meaning_flow_crosspath(proof)
+        assert PRIVATE not in repr(logs)
+    assert events==['ownership','enter','exit'];inner.assert_awaited_once_with(proof)
+
+
+def crosspath_ast():
+    tree=ast.parse((ROOT/'backend/scripts/cf023_supervisor_meaning_check.py').read_text())
+    return next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='_verify_meaning_flow_crosspath')
+
+
+@pytest.mark.parametrize('cancelled',[False,True])
+async def test_first_owner_GET_scopes_synthetic_feature_token_and_restores_after_cancel(cancelled):
+    """Execute actual early-GET scope with HTTP callback, not authenticated PG."""
+    import os
+    node=next(n for n in crosspath_ast().body if isinstance(n,ast.Try) and any(isinstance(v,ast.Name) and v.id=='early' for v in ast.walk(n)))
+    settings=NS(FLOW_ANALYSIS_ENABLED=False,FLOW_SERVICE_TOKEN='original-synthetic')
+    original_env=dict(os.environ);dependency=object();original_override=object()
+    app=NS(dependency_overrides={dependency:object()});early_overrides={dependency:original_override};seen=[]
+    plan={'plan_hash':'a'*64};first={'plan_hash':'a'*64};token='cf029-test-synthetic-token'
+    class Client:
+        def __init__(self,**kw):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def get(self,*args,**kwargs):
+            assert settings.FLOW_ANALYSIS_ENABLED is True and settings.FLOW_SERVICE_TOKEN==token
+            assert os.environ['FLOW_ANALYSIS_ENABLED']=='true' and os.environ['FLOW_SERVICE_TOKEN']==token
+            seen.append(True)
+            if cancelled:raise asyncio.CancelledError()
+            return NS(status_code=200,headers={'cache-control':'private, no-store'},json=lambda:{'data':{'state':'ready','meaning_status':'supplemented','plan':plan}})
+    def check(value,label):assert value,label
+    namespace=dict(check=check,settings=settings,patch=patch,token=token,httpx=NS(AsyncClient=Client,ASGITransport=lambda **kw:object()),app=app,first_id=str(uuid4()),primary=('synthetic-cookie',None),auth=NS(SESSION_COOKIE='synthetic-session'),first=first,early_overrides=early_overrides)
+    function=ast.AsyncFunctionDef(name='exercise',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=[node],decorator_list=[])
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[])),'<actual-early-GET-scope>','exec'),namespace)
+    if cancelled:
+        with pytest.raises(asyncio.CancelledError):await namespace['exercise']()
+    else:await namespace['exercise']()
+    assert seen==[True] and settings.FLOW_ANALYSIS_ENABLED is False and settings.FLOW_SERVICE_TOKEN=='original-synthetic'
+    assert dict(os.environ)==original_env and app.dependency_overrides==early_overrides
+
+
+@pytest.mark.parametrize('status',[200,404,401])
+def test_crosspath_legacy_report_decoder_uses_actual_contract_and_stored_identity(status):
+    """Execute the checker's actual decoder with synthetic HTTP responses; no PG claim."""
+    from src.modules.flow.api.schemas import FlowReportEnvelope
+    node=next(n for n in crosspath_ast().body if isinstance(n,ast.FunctionDef) and n.name=='flow_response')
+    def check(value,label):assert value,label
+    namespace=dict(check=check,FlowReportEnvelope=FlowReportEnvelope)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),'<crosspath-legacy-report-decoder>','exec'),namespace)
+    decode=namespace['flow_response'];report_id=str(uuid4())
+    expected={200:{'report_id':report_id,'report':{'fixed':'stored-payload'}},404:{'detail':'report not found'},401:{'detail':{'code':'AUTH_REQUIRED','message':'인증이 필요합니다.'}}}[status]
+    def response(value,*,code=status,private=True):return httpx.Response(code,json=value,headers={'cache-control':'private, no-store'} if private else {})
+    assert decode(response(expected),status,report_id)==expected
+    for invalid in ({'data':expected,'error':None},{'detail':{'code':'RESOURCE_NOT_FOUND'}},{'report_id':str(uuid4()),'report':{}}):
+        with pytest.raises(AssertionError):decode(response(invalid),status,report_id)
+    with pytest.raises(AssertionError):decode(response(expected,code=503),status,report_id)
+    with pytest.raises(AssertionError):decode(response(expected,private=False),status,report_id)
+
+
+@pytest.mark.parametrize('changed',['none','meaning','Flow','count','generation','supplier'])
+async def test_crosspath_observation_guard_rejects_extra_calls_or_unknown_hold_mutation(changed):
+    """Execute actual nested guard against simulated observations, not SQL."""
+    node=next(n for n in crosspath_ast().body if isinstance(n,ast.AsyncFunctionDef) and n.name=='unchanged')
+    held={'blocked':True,'active':'fixed-unknown','reserved':100000000,'count':2,'generation':2}
+    actual=dict(held);expected={'runs':1,'reservations':1,'reports':1};totals=dict(expected)
+    stages=[['mock_count','mock_generation','synthetic_key_supplied'] for _ in range(2)]
+    if changed=='meaning':actual['blocked']=False
+    elif changed=='Flow':totals['runs']=2
+    elif changed!='none':stages[0].append({'count':'mock_count','generation':'mock_generation','supplier':'synthetic_key_supplied'}[changed])
+    def check(value,label):assert value,label
+    namespace=dict(check=check,epoch_snapshot=AsyncMock(return_value=actual),held_snapshot=held,totals=AsyncMock(return_value=totals),stages=stages)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),'<crosspath-observation-guard>','exec'),namespace)
+    if changed=='none':await namespace['unchanged'](expected)
+    else:
+        with pytest.raises(AssertionError):await namespace['unchanged'](expected)
+
+
+def test_crosspath_source_keeps_two_assemblies_same_epoch_and_adopts_actual_owner_plan():
+    node=crosspath_ast();source=ast.unparse(node)
+    calls=[n for n in ast.walk(node) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)]
+    assert len([n for n in calls if n.func.id=='capture_synthetic_epoch'])==1
+    assemblies=[n for n in calls if n.func.id=='run_meaning_assembly']
+    assert len(assemblies)==2
+    assert all(next(k.value.value for k in n.keywords if k.arg=='mode')=='synthetic' for n in assemblies)
+    assert next(k.value.value for k in assemblies[-1].keywords if k.arg=='scenario')=='missing_usage'
+    assert all(n.lineno<next(n.lineno for n in node.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='call') for n in assemblies)
+    assert 'Preparation.owner_user_id == primary[1].user_id' in source and 'Preparation.prepare_key_digest' in source
+    assert 'validate_plan(view[\'plan\'], Draft.model_validate(first_body[\'draft\']))' in source
+    assert "value['client_key'] = str(uuid4())" in source
+    confirmations=[n for n in ast.walk(node) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='call' and len(n.args)>=3 and isinstance(n.args[2],ast.Name) and n.args[2].id=='confirmation']
+    assert len(confirmations)==3  # 429, same key/body retry, replay
+    assert "patch.dict('os.environ'" in source and 'app.dependency_overrides.update(previous)' in source
+    assert 'DELETE' not in source and 'verify_live' not in source
+
+
+@pytest.mark.parametrize('flag,checker,phase',[('--verify-supervisor-meaning-flow-db','verify_meaning_flow_crosspath','supervisor_meaning_flow_db_check'),('--verify-supervisor-meaning-assembly-db','verify_meaning_assembly','supervisor_meaning_assembly_db_check')])
+def test_actual_CLI_parser_DB_only_routing_bounded_dispatch_and_cleanup(flag,checker,phase,monkeypatch):
+    """Actual main AST with DI callbacks, no Docker/SQL/bootstrap/server invocation."""
+    import argparse
+    from contextlib import ExitStack,contextmanager
+    from scripts import cf003_admission_check as admission
+    tree=ast.parse((ROOT/'backend/scripts/cf002_interactive_login.py').read_text())
+    main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    events=[];logs=[];proof=NS(safe_receipt=lambda:dict(resource_id='synthetic-owned',container_id='0'*64,created_at='synthetic',host='127.0.0.1',port=1234,persistent_mounts=[],cleanup_owner='synthetic',nonce=PRIVATE))
+    owner=NS(create=lambda:(events.append('create') or proof),cleanup=lambda:events.append('remove'),receipt=object(),resource_id='synthetic-owned')
+    docker=NS(close=lambda:events.append('docker-close'))
+    @contextmanager
+    def home(value):
+        assert value is docker;events.append('home-enter')
+        try:yield
+        finally:events.append('home-exit')
+    monkeypatch.setattr(admission,'owned_postgres_home',home)
+    async def migrate(value,**kw):assert value is proof;events.append(('migrate',kw))
+    async def verify(value):assert value is proof;events.append(checker);return {'simulation':True}
+    monkeypatch.setattr(C,checker,verify)
+    def forbidden(*a,**kw):raise AssertionError('No frontend/Google/ports/server fall-through')
+    async def wait_for(coro,timeout):
+        events.append(('timeout',timeout));return await coro
+    def run(coro):return asyncio.run(coro)
+    namespace=dict(argparse=argparse,__doc__='synthetic CLI routing',ExitStack=ExitStack,signal=NS(SIGINT=2,SIGTERM=15,SIG_IGN=0,signal=lambda *a:None),LocalDocker=lambda:docker,OwnedPostgres=lambda value:owner,ensure_local_ports_free=forbidden,prepare_projects=forbidden,migrate_owned=migrate,asyncio=NS(run=run,wait_for=wait_for),safe_print=logs.append)
+    monkeypatch.setattr(sys,'argv',['cf002_interactive_login.py',flag])
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[main],type_ignores=[])),'<actual-CF029-CLI-main>','exec'),namespace)
+    namespace['main']()
+    assert events==['home-enter','create',('timeout',90),('migrate',{'target':'head'}),('timeout',120),checker,'remove','home-exit','docker-close']
+    assert [v for v in logs if v['phase']==phase]==[{'phase':phase,'simulation':True}]
+    assert PRIVATE not in repr(logs)
+
+
+def test_new_CLI_flag_is_mutually_exclusive_and_in_all_owned_failure_cleanup_branches():
+    tree=ast.parse((ROOT/'backend/scripts/cf002_interactive_login.py').read_text())
+    main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    for node in ast.walk(main):
+        if isinstance(node,ast.If):
+            attrs={n.attr for n in ast.walk(node.test) if isinstance(n,ast.Attribute)}
+            if 'verify_supervisor_meaning_assembly_db' in attrs and len(attrs)>1:
+                assert 'verify_supervisor_meaning_flow_db' in attrs
+    source=ast.unparse(main)
+    assert "mode.add_argument('--verify-supervisor-meaning-flow-db', action='store_true')" in source
+    assert "'cf029_failure_diagnostic' if args.verify_supervisor_meaning_flow_db" in source

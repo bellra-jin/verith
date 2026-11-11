@@ -865,7 +865,7 @@ test('CF028 actual protected invocation retains separate code/metadata roots and
  assert.equal(cap.packageSnapshot.snapshot,path.join(process.cwd(),'package.json'));
  if(provenance.codeRoot!==cap.packageSnapshot.sourceRoot){
   const workspace=path.dirname(path.dirname(provenance.codeRoot));
-  assert.ok(['verith-supervisor-core','verith-supervisor-verification','verith-supervisor-preparation-deadline','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display','verith-technical-chart-browser','verith-technical-owned-read'].map(name=>path.join(workspace,name,'frontend')).includes(provenance.codeRoot));
+  assert.ok(['verith-supervisor-core','verith-supervisor-verification','verith-supervisor-preparation-deadline','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display','verith-technical-chart-browser','verith-technical-owned-read','verith-supervisor-fundamental-navigation'].map(name=>path.join(workspace,name,'frontend')).includes(provenance.codeRoot));
   assert.equal(cap.dependency,path.join(workspace,'verith','frontend','node_modules'));
  }
  console.log('CF028_ROOT_PROVENANCE '+JSON.stringify({codeRootKind:path.basename(path.dirname(provenance.codeRoot)),split:provenance.codeRoot!==cap.packageSnapshot.sourceRoot,manifestSHA:provenance.manifestSHA,workerPackageOwned:cap.packageSnapshot.snapshot===path.join(process.cwd(),'package.json')}));
@@ -1001,4 +1001,30 @@ test('CF036 fixed browser target validates only owned pages/API queries and nonc
 test('CF036 separate owned counts preserve the original terminal receipt schema',async()=>{
  const caller=await import('../../scripts/check-local-ports.mjs'),proof={nonce:'synthetic',pid:123,cwd:'/owned',port:12345},value={schema:'cf036.browser-counts.v1',...proof,counts:{listGET:2,detailGET:3,modePOST:1},mode:'normal'};
  assert.deepEqual(caller.validateOwnedChartCounts(value,proof),value);for(const mutate of [v=>v.counts.listGET=-1,v=>v.counts.unapproved=1,v=>v.pid++,v=>v.mode='other',v=>v.extra=true]){const bad=structuredClone(value);mutate(bad);assert.throws(()=>caller.validateOwnedChartCounts(bad,proof),/owned counts mismatch/);}
+});
+
+test('CF041 caller adds exactly one Fundamental navigation sibling and preserves metadata denials',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';({metadataRootFor,reviewedCodeRoots});',workspace='/synthetic/workspace',project=path.join(workspace,'verith-supervisor-fundamental-navigation','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,canonical=root,uid=1234,mode=0o40755}={}){const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);return vm.runInNewContext(code,{project,path,fs:{realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(){return {uid,mode};}},process:{getuid:()=>1234}},{timeout:100});}
+ const actual=check(project),expected=['verith-supervisor-core','verith-supervisor-verification','verith-supervisor-preparation-deadline','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display','verith-technical-chart-browser','verith-technical-owned-read','verith-supervisor-fundamental-navigation'].map(name=>path.join(workspace,name,'frontend'));
+ assert.deepEqual(Array.from(actual.reviewedCodeRoots),expected);assert.equal(actual.metadataRootFor(project,dependency),path.dirname(dependency));
+ for(const root of [path.join(workspace,'verith-supervisor-fundamental-navigation-extra','frontend'),path.join(workspace,'prefix-verith-supervisor-fundamental-navigation','frontend'),'/other/verith-supervisor-fundamental-navigation/frontend'])assert.throws(()=>check(root).metadataRootFor(root,dependency),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/node_modules').metadataRootFor(project,'/other/node_modules'),/unreviewed metadata root/);
+ for(const changed of [{target:'/other/node_modules'},{canonical:'/other/root'},{uid:9999},{mode:0o40777}])assert.throws(()=>check(project,dependency,changed).metadataRootFor(project,dependency),/identity mismatch|untrusted/);
+});
+
+test('CF041 exact navigation marker never widens the existing raw research or API validator',async()=>{
+ const source=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8'),tree=ts.createSourceFile('fixture.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),declaration=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='fundamentalNavigationTarget');assert.ok(declaration);
+ const target=vm.runInNewContext(declaration.getText(tree)+';fundamentalNavigationTarget;',{}, {timeout:100});
+ assert.equal(target('/fundamental','GET').status,200);
+ for(const method of ['POST','PUT','PATCH','DELETE','HEAD','OPTIONS','get'])assert.equal(target('/fundamental',method).status,405);
+ for(const value of ['/fundamental?','/fundamental?analysis_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','/fundamental?owner=x','/fundamental#x','/fundamental/','/fundamental/child','/fundamental/../research','/fundamental\\x','/fundamentally'])assert.equal(target(value,'GET').status,422);
+ for(const value of ['/research','/research?supervisor_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','/api/auth/session','/bundle.js','/chat.css'])assert.equal(target(value,'GET'),null);
+ const {validateFixtureTarget}=await import('../helpers/supervisor-fixture.mjs');
+ assert.equal(validateFixtureTarget('/fundamental').status,404);assert.equal(validateFixtureTarget('/research').status,200);
+ for(const value of ['//fundamental','/%66undamental','http://other.invalid/fundamental','/research?fundamental=x','/bundle.js?x=1','/api/auth/session?x=1','/research/../fundamental'])assert.notEqual(validateFixtureTarget(value).status,200);
+ assert.match(source,/const research=validateFixtureTarget\(req.url\)/);assert.match(source,/fundamentalNavigationTarget\(req.url,req.method\)/);
+ const {createHash}=await import('node:crypto');assert.equal(createHash('sha256').update(fs.readFileSync('tests/helpers/supervisor-fixture.mjs')).digest('hex'),'007043dfc14f7bc3f24af75b93563fe6e0cc21dc14552d225baf38669fee6dcc');
 });

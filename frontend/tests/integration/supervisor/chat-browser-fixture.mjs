@@ -393,6 +393,11 @@ function readBody(req,limit){
   req.on('data',data);req.once('end',end);req.once('error',error);req.once('aborted',aborted);
  });
 }
+function fundamentalNavigationTarget(target,method){
+ if(typeof target!=='string'||!target.startsWith('/fundamental'))return null;
+ if(target!=='/fundamental')return {status:422};
+ return {status:method==='GET'?200:405};
+}
 async function handle(req,res){
  res.setHeader('Cache-Control','no-store');
  res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'`);
@@ -420,6 +425,12 @@ async function handle(req,res){
   await respondFixtureWatchAck(res,record,body.action);return;
  }
  if(!terminal.open()){json({},409);return;}
+ const navigation=fundamentalNavigationTarget(req.url,req.method);
+ if(navigation!==null){
+  if(navigation.status!==200){json({},navigation.status);return;}
+  res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
+  res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CF041 재무 탐색 목적지</title><link rel="stylesheet" href="/chat.css"><main class="supervisor-chat"><h1>재무 화면 탐색 목적지</h1><p>합성 탐색 목적지이며 실제 재무 화면·인증·분석 수용을 뜻하지 않습니다.</p><a href="/research">리서치 대화로 돌아가기</a></main>');return;
+ }
  if(research.status===422){json({},422);return;}
  const apiRoot='/api/private/supervisor/core/';
  const method=req.url==='/research'||research.kind==='research'||['/bundle.js','/chat.css','/fixture-counts','/api/auth/session'].includes(req.url)?['GET']:req.url==='/fixture-control'||req.url===apiRoot+'preparations'||req.url===apiRoot+'requests'?['POST']:/^\/api\/private\/supervisor\/core\/preparations\/[0-9a-f-]{36}$/.test(req.url)?['GET','DELETE']:/^\/api\/private\/supervisor\/core\/requests\/[0-9a-f-]{36}$/.test(req.url)?['GET']:null;

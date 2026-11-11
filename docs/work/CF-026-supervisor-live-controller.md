@@ -952,3 +952,23 @@ consumed 실행 증거는 불변이다. PR은 Draft로 유지하고 병합하지
 기존 소스는 정산 미확정과 의미 미수용을 같은 FIRST_SETTLEMENT_UNCONFIRMED로 표시했다. 이를 정산이 observed인 rejected에는 MEANING_REJECTED, 다른 미보완 상태에는 MEANING_NOT_SUPPLEMENTED로 분리했다. 정산이 불명인 기존 실패 gate와 추가 송신 차단·회계/정리 순서는 그대로다. 신규 오류 라벨은 정확 helper 타입·고정 코드만 받으며 예외 문자열은 남기지 않는다. 보호 단일 unit401개·guard0으로 보완 회귀를 통과했다.
 
 보존된 typed-return/grounded assessment 경로로 의미 validator 거절까지 확인할 수 있으나, 후보 원문과 세부 거절 조건은 남아 있지 않아 어느 span/부정/기간 검증이 실패했는지는 확정할 수 없다. 이를 추측하거나 성공으로 표시하지 않는다. 실제 journal closed·local accounting ACK·cleanup_confirmed와 임시 설정 False 원복을 확인했고, 실제 완료 후에는 새 키·DB·provider·예약 동작을 하지 않았다. 환경 전환으로 실제 발급 전 중단된 첫 준비 회차와, 새 동일 ordinal2의 실제 한 번을 구분해 비공개 증거로 보존했다. 반복 record·provider 재시도는 없으며 과거 입력·실행 manifest·once는 수정하지 않았다.
+
+### CF037 B5 진단 보완과 ordinal3 준비
+
+기존 실제 validator의 순수 판정 경로에서 실패한 고정 위치·필드/index·이유와 질문에 대조한 최소 근거를 보존하도록 보완했다. schema 거절과 분류 불가능한 grounding 실패를 구분하며, 승인된 질문에 없는 임의 값·원문 응답·예외/traceback·비밀은 투영하지 않는다. validator와 prompt/schema·gateway/verifier·AI32·controller·worker/guard는 변경하지 않았다.
+
+고정 ordinal3은 원150m·timeout50m·unknown50m에 observed ordinal2의50m을 더한300m을 이월하고 새50m·누적350m을 제안한다. ordinal2의 실제 원문/readback·입력·journal/phases·usage/정산 ACK·meaning rejected·closed/cleanup/False와 실행 당시 source/runtime을 독립 pin으로 대조한다. 기존 retry2의250m 검증과 원본 소비 기록은 보존한다. 첫 질문 count1/generation1/HTTP2·자동 retry0과120초 시작/입력·600초 lease를 유지하고 실제 종료 상한은 오늘21:00 UTC다.
+
+최종 보호 self3·단일 unit432개가 통과했고 guard 위반0·parent exit0·자기 임시 root 제거를 확인했다. private 합성45개는 키 내용 읽기/네트워크·DB 연결/예상 밖 subprocess0·비활성 설정·실제 예약0으로 통과했다. 실제 source281개 copy/import와 원본10-artifact 및 폐쇄된 ordinal2 증거 대조·Scope.check도 무키로 통과하고 자기 사본을 제거했다. 앞선 unit425/private44는 중간 source 결과이며 최종 수와 합산하지 않는다. 최초 입력 조립은 현재 helper와 과거 manifest를 비교해 실패했고, 현재 파일을 과거 실행물로 취급하지 않도록 보존된 실행 당시 helper를 대조한 뒤 통과했다. 실패 로그도 보존한다.
+
+현재 ordinal3 private 사본은 False이며 신규 발급·예약·키 읽기·DB·count/generation·설정 활성화는 없다. 기존300m은 보수 예약이며 실제 청구액이 아니다. 입력·진단 검증을 실제 모델 품질 통과로 표현하지 않는다. 실제 한 번은 최종 입력 대조 후 같은 invocation의 단일 durable record·실제 readback·stdin 전달로 조율하며, 불명/거절 뒤 추가 송신하지 않는다.
+
+### B5 실제 결과와 정리
+
+앞 절의 미실행 상태는 준비 완료 시점의 이력이다. 최초 인계 명령은 clean env의 필수 PATH를 누락해 runtime 환경 검사에서 ready 전에 종료됐다. source copy·journal·발급·예약·키·DB·API는 없었다. 기존 허용 PATH를 명시한 무키 preflight 통과 후 코드·입력·private 해시를 바꾸지 않고 실제 최초 ordinal3 한 번을 수행했다. 두 번째 실행권이나 provider 자동 재시도는 없었다.
+
+실제 count1·generation1의 응답과 usage input804/output285/total1089/cached0, estimated_nano1,885,500(USD0.0018855), settlement observed/ACK·settlement_uncertain=false를 관찰했다. 누적350m은 보수 예약이며 실제 청구서 금액이 아니다. 의미 결과는 MEANING_REJECTED로 종료돼 모델 의미 품질 수용은 실패했다.
+
+거절은 views 항목0의 기존 validate 판정에서 EVIDENCE_SOURCE_SPAN_TEXT_MISMATCH로 확인됐다. 제안된 overview 근거는 원문 start0/end15를 가리켰지만 supplied_text는 ‘현대건설 외국인’이어서 실제 원문 구간 ‘현대건설 외국인 말고 3주 ’와 일치하지 않았다. 근거 불일치를 fail-closed로 거절한 결과이며 overview나 조건 해석을 성공으로 채택하지 않는다. 이 기록을 후보가 남지 않은 이전 ordinal2의 원인이라고 소급 단정하지 않는다.
+
+최종 journal closed·6개 phase·delegated local accounting ACK·cleanup_confirmed, entry False/원래 hash·PID 부재·자기 source copy 부재를 확인했다. 실제 원문/readback·입력/source/실행 hash·usage/진단·정리 증거는 별도 비공개 결과로 보존하고 공개 Git에 넣지 않는다. 추가 외부 호출·발급·ordinal4는 하지 않았다. 이번 결과는 production Supervisor→Flow 전체 또는 Technical 엔진 인수가 아니다.

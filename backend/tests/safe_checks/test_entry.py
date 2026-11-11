@@ -947,6 +947,61 @@ class CF031Boundary(unittest.TestCase):
             self.assertNotIn(name, sys.modules)
 
 
+class CF035Boundary(unittest.TestCase):
+    def test_exact_selection_and_unchanged_origin_inputs(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root = Path(__file__).resolve().parents[3]
+        self.assertEqual(c.CF035_TESTS,('tests/unit/test_cf035_technical_owned_storage.py',))
+        self.assertEqual(len(c.CF035_COMPAT),6)
+        for name,digest in (c.CF035_COMPAT | c.CF035_INPUTS).items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed = c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw = b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):
+            selection = c.selected_sources(root,technical_owned_only=True)
+        self.assertEqual({p for p in selection if p.startswith('ai/')},set(c.CF035_COMPAT))
+        self.assertEqual({p for p in selection if p.startswith('frontend/')},
+                         {'frontend/tests/fixtures/cf031-technical-boundary-read.json'})
+        self.assertNotIn('backend/scripts/cf026_successor.py',selection)
+        self.assertNotIn('backend/scripts/cf026_supervisor_live_controller.py',selection)
+        self.assertTrue(c.CF035_SOURCES <= set(selection))
+
+    def test_fixed_modes_and_db_only_dispatch_without_bootstrap(self):
+        import ast
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('technical-owned-self','technical-owned-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertTrue(run.call_args.kwargs['technical_owned_only'])
+                self.assertFalse(run.call_args.kwargs['technical_read_only'])
+                self.assertEqual(run.call_args.args[1],('self-test' if mode.endswith('self') else 'unit',))
+        source = (Path(__file__).resolve().parents[2]/'scripts/cf002_interactive_login.py').read_text()
+        tree = ast.parse(source)
+        conditions = [n for n in ast.walk(tree) if isinstance(n,ast.If) and
+                      isinstance(n.test,ast.Attribute) and n.test.attr == 'verify_technical_owned_db']
+        self.assertEqual(len(conditions),1)
+        block = ast.unparse(conditions[0])
+        self.assertIn('timeout=180',block)
+        self.assertIn('verify_technical_owned(proof)',block)
+        self.assertIsInstance(conditions[0].body[-1],ast.Return)
+        self.assertIn('args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db',source)
+        self.assertIn('--verify-technical-owned-db',source)
+
+    def test_real_six_file_loader_and_worker_guard_unchanged(self):
+        import sys
+        from scripts.safe_checks_bootstrap import valid_flow_origins
+        from tests.unit import test_cf035_technical_owned_storage as unit
+        unit.load_flow_compat()
+        self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        for name in ('src.shared.config','src.api.main','src.agents.technical.application.agent',
+                     'src.modules.technical.application.report_service','openai'):
+            self.assertNotIn(name,sys.modules)
+
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -963,6 +1018,7 @@ if __name__ == "__main__":
     controller_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf026_self_only",False)
     technical_boundary_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf021_self_only",False)
     technical_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf031_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    technical_owned_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf035_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

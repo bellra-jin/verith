@@ -20,6 +20,8 @@ from db.models.technical.report_risk_note import TechnicalReportRiskNote
 from db.models.technical.report_signal import TechnicalReportSignal
 from db.models.technical.report_verification import TechnicalReportVerification
 from db.models.technical.technical_report import TechnicalReport
+from db.models.common.agent_report import AgentReport
+from db.models.technical.report_snapshot import TechnicalReportSnapshot
 
 
 async def ensure_stock(session: AsyncSession, *, stock_code: str, stock_name: str) -> None:
@@ -68,6 +70,44 @@ async def add_report(
 async def get_report(session: AsyncSession, report_id: UUID) -> TechnicalReport | None:
     """root 조회(없으면 None). read model projection 이 output_payload 를 읽는다."""
     return await session.get(TechnicalReport, report_id)
+
+
+def owned_statement(report_id, owner_user_id):
+    """Filter root and snapshot owners and ALL Technical indexes before loading."""
+    indexes = (select(AgentReport.agent_report_id)
+        .where(AgentReport.agent_type == 'technical')
+        .group_by(AgentReport.agent_report_id)
+        .having(func.count() == 1,
+                func.count().filter(AgentReport.owner_user_id == owner_user_id) == 1))
+    return (select(TechnicalReport, TechnicalReportSnapshot)
+        .join(TechnicalReportSnapshot, TechnicalReportSnapshot.report_id == TechnicalReport.id)
+        .where(TechnicalReport.id == report_id, TechnicalReport.owner_user_id == owner_user_id,
+               TechnicalReportSnapshot.owner_user_id == owner_user_id, TechnicalReport.id.in_(indexes))
+        .execution_options(populate_existing=True))
+
+
+async def get_owned_storage(session, report_id, owner_user_id):
+    return (await session.execute(owned_statement(report_id, owner_user_id))).one_or_none()
+
+
+async def storage_root_for_update(session, report_id):
+    return await session.scalar(select(TechnicalReport).where(TechnicalReport.id == report_id)
+                                .with_for_update().execution_options(populate_existing=True))
+
+
+async def technical_indexes(session, report_id):
+    return list(await session.scalars(select(AgentReport).where(
+        AgentReport.agent_type == 'technical', AgentReport.agent_report_id == report_id)
+        .execution_options(populate_existing=True)))
+
+
+async def storage_children(session, report_id):
+    groups = []
+    for model in (TechnicalReportSignal, TechnicalReportChart, TechnicalReportRiskNote,
+                  TechnicalReportInterpretation, TechnicalReportVerification):
+        groups.append(list(await session.scalars(select(model).where(model.report_id == report_id)
+                      .execution_options(populate_existing=True))))
+    return groups
 
 
 async def get_stock(session: AsyncSession, stock_code: str) -> Stock | None:

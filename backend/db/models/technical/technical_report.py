@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, String, Text, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.base import Base
@@ -17,6 +17,9 @@ class TechnicalReport(Base):
     __tablename__ = "technical_reports"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("auth_users.id", ondelete="RESTRICT"), nullable=True
+    )
     # 항상 존재하는 실행 메타데이터 → NOT NULL.
     request_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     client_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -50,6 +53,7 @@ class TechnicalReport(Base):
     output_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
     __table_args__ = (
+        Index("ix_technical_reports_owner_id", "owner_user_id", "id"),
         Index(
             "ix_technical_reports_client_session_id_created_at",
             "client_session_id",

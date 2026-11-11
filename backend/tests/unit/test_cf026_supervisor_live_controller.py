@@ -2900,3 +2900,160 @@ def test_semantic_gate_diagnostic_accepts_only_exact_helper_type():
         assert PRIVATE not in C.canonical(observation.snapshot())
     observation=C.AttemptObservation(0);S.observe_failure(observation,S.Closed('MEANING_REJECTED'))
     assert observation.snapshot()['failure_code']=='MEANING_REJECTED'
+
+
+def retry3_inputs(tmp_path):
+    scope,source,witness,journal,clock=retry2_inputs(tmp_path);d=scope.data
+    home=tmp_path.resolve()/'.cf037-supervisor-single-revalidation-20261111';home.mkdir(mode=0o700)
+    (home/'successor-journal-retry-2').mkdir(mode=0o700)
+    diag=tmp_path.resolve()/'.cf037-supervisor-observed-rejection-20261111';diag.mkdir(mode=0o700)
+    current=tmp_path.resolve()/'.cf037-supervisor-grounding-diagnostic-20261111';current.mkdir(mode=0o700)
+    evidence={};code={}
+    def pin(name,path,value):
+        write(path,value)
+        evidence[name]=dict(path=str(path),stamp_json=C.canonical(C.regular(path,0o600)),sha256=C.hashlib.sha256(path.read_bytes()).hexdigest())
+    prior=C.decode(C.canonical(d));prior['consent_at']=(clock.wall()-timedelta(seconds=90)).isoformat()
+    sources={'backend/scripts/cf026_successor.py':d['module_sha256']}
+    for i in range(280):sources['synthetic/historical-source-'+str(i)+'.py']='f'*64
+    runtime=dict(source_manifest=sources,source_count=281,successor_sha256=d['module_sha256'])
+    old_entry=b'RELEASED = False\n';entry=home/'private_entry.py';write(entry,old_entry)
+    helper=diag/'helper.py';write(helper,Path(S.__file__).read_bytes())
+    for name,path in [('entry',entry),('helper',helper)]:
+        code[name]=dict(path=str(path),stamp_json=C.canonical(C.regular(path,0o600)),sha256=C.hashlib.sha256(path.read_bytes()).hexdigest())
+    active=dict(private_entry=C.hashlib.sha256(old_entry.replace(b'False',b'True')).hexdigest())
+    private_active={'private_entry.py':active['private_entry']}
+    inputs=dict(template=dict(scope_template=prior),runtime=runtime,authority_sha256='2'*64,private_code_sha256=private_active)
+    pin('inputs',home/'reviewed-successor-inputs.json',inputs)
+    pin('runtime',home/'prepared-runtime-manifest.json',runtime)
+    pin('source',home/'runtime-source-manifest.json',dict(runtime_source_hashes=sources))
+    pin('manifest',home/'preissue-final-manifest.json',dict(inputs_sha256=evidence['inputs']['sha256'],source_manifest_sha256=evidence['source']['sha256'],
+        private_active=private_active,private_inactive={'private_entry.py':code['entry']['sha256']}))
+    record=dict(schema='cf026.successor.reserve-once.v1',additional_reserve_nano=50000000,authority_sha256='2'*64,count_cap=1,generation_cap=1,http_cap=2,retry_cap=0,
+        invocation='3'*64,issued_at=(clock.wall()-timedelta(seconds=60)).isoformat(),namespace=d['namespace'],predecessor_sha256=d['predecessor_sha256'],
+        process_id=9,retry_ordinal=2,retry_of_sha256=d['retry']['record_body_sha256'],scope_sha256='4'*64,
+        successor_once=S.once_identity(scope),synthetic_only=False,total_reserved_nano=300000000,delegation='same-invocation-ordered-local-fsync')
+    usage=dict(input_tokens=100,output_tokens=10,total_tokens=110,cached_tokens=0)
+    ledger=dict(count=1,generation=1,reserved=50000000,blocked=False,attempts=[dict(state='observed',estimated_nano=120000,model=MEANING_SPEC['model'],usage=usage)])
+    account=dict(phase='final_accounting',reserved_nano=300000000,observation='fresh_ledger',ledger=ledger,
+        diagnostic=dict(verifier=dict(meaning_status='rejected',settlement='observed')),quality=dict(status='rejected',assessment=None),
+        gateway_diagnostic=dict(events=[dict(stage='settlement_ACK',elapsed_ms=100)],settlement_uncertain=False))
+    pin('journal',home/'successor-journal-retry-2'/'state.json',dict(schema='cf026.successor.journal.v1',status='closed',scope_sha256=record['scope_sha256'],rights=dict(count=1,generation=1),
+        journal=[account,dict(phase='closing',external_accounting_ACK=True),dict(phase='cleanup_confirmed')]))
+    binding={k:record[k] for k in record if k not in {'schema','synthetic_only','process_id','authority_sha256','delegation','issued_at'}}
+    ack=binding|dict(phase='accounting',authority_sha256=record['authority_sha256'],sequence=6,issued_at=record['issued_at'],consumed=True,record_sha256=C.digest(account))
+    pin('phases',home/'successor-phases-retry-2.json',dict(binding=binding,ack=ack,sequence=6,phases=['reserve','issue','start','count','generation','accounting']))
+    pin('result',diag/'actual-result.json',dict(schema='cf037.ordinal2.actual-result.v1',direct_readonly=dict(accounting=account,journal_closed=True,cleanup_confirmed=True,
+        local_accounting_ack_matches=True,entry_RELEASED=False,entry_sha256=code['entry']['sha256'])))
+    body='CF026_SUCCESSOR_RESERVE_ONCE\n'+C.canonical(record)
+    pin('readback',current/'prior-ordinal2-readback.json',dict(schemaVersion=1,thread=dict(id='20000000-0000-4000-8000-000000000002'),turns=[dict(id='synthetic-ordinal2-turn',items=[
+        dict(type='functionCallOutput',id='synthetic-ordinal2-item',namespace='cloud_threads',name='send_message',output=dict(truncated=False,
+          text='<codex_delegation><source_thread_id>20000000-0000-4000-8000-000000000001</source_thread_id><input>'+body+'</input></codex_delegation>'))])]))
+    d['retry']=dict(schema='cf026.successor.retry3.v1',ordinal=3,prior_retry=d['retry'],evidence=evidence,historical_code=code,readback_binding=dict(source_thread_id='20000000-0000-4000-8000-000000000001',destination_thread_id='20000000-0000-4000-8000-000000000002'),record_body=body,
+        record_body_sha256=C.hashlib.sha256(body.encode()).hexdigest(),record_item_id='synthetic-ordinal2-item',record_turn_id='synthetic-ordinal2-turn',
+        consent_message_id='Sentinel_'+'5'*32,carried_nano=300000000,total_reserved_nano=350000000,current_code=d['retry']['current_code'])
+    scope,journal=successor_reseal_fixture(scope,journal,document_change=lambda v:v.update(d))
+    return scope,source,witness,journal,clock
+
+
+def test_retry3_carries_observed_closed_300m_and_one_new350m(tmp_path):
+    scope,source,witness,journal,clock=retry3_inputs(tmp_path);hooks=retry2_success_hooks(scope)
+    before={Path(x['path']):Path(x['path']).read_bytes() for x in scope.data['retry']['evidence'].values()}
+    with patch.object(V,'verify_live',wraps=successor_verifier_spy) as verify:
+        result=asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,synthetic=True,hooks=hooks,clock=clock))
+    assert result['total_reserved_nano']==350000000 and witness.ack['retry_ordinal']==3
+    assert witness.ack['total_reserved_nano']==350000000 and verify.call_count==1
+    assert before=={p:p.read_bytes() for p in before}
+    assert hooks.cleaned==1 and journal.state['status']=='closed'
+    with pytest.raises(S.Closed):asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,synthetic=True,hooks=hooks,clock=clock))
+    assert hooks.created==1
+
+
+@pytest.mark.parametrize('field,value',[('ordinal',4),('carried_nano',250000000),('total_reserved_nano',300000000),('consent_message_id','bad')])
+def test_retry3_scope_drift_rejects_before_consumption(tmp_path,field,value):
+    scope,source,witness,journal,clock=retry3_inputs(tmp_path);d=scope.data;d['retry'][field]=value
+    with pytest.raises((S.Closed,C.ControllerError)):S.Scope(C.canonical(d),scope.artifacts).check(source,witness.capability(),synthetic=True)
+    assert not witness.calls
+
+
+@pytest.mark.parametrize('name',['inputs','journal','phases','runtime','source','manifest','result','readback'])
+def test_retry3_missing_closed_history_never_reissues(tmp_path,name):
+    scope,source,witness,journal,clock=retry3_inputs(tmp_path);Path(scope.data['retry']['evidence'][name]['path']).unlink()
+    with pytest.raises((S.Closed,C.ControllerError,OSError)):scope.check(source,witness.capability(),synthetic=True)
+    assert not witness.calls
+
+
+@pytest.mark.parametrize('phase',['reserve','start','count','generation','accounting'])
+def test_retry3_ack_loss_has_no_automatic_provider_retry(tmp_path,phase):
+    scope,source,witness,journal,clock=retry3_inputs(tmp_path);hooks=retry2_success_hooks(scope);witness.fail=phase
+    with patch.object(V,'verify_live',wraps=successor_verifier_spy) as verify,pytest.raises(S.Closed):
+        asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,synthetic=True,hooks=hooks,clock=clock))
+    assert verify.call_count<=1 and witness.calls.count('generation')<=1
+    assert witness.ack['total_reserved_nano']==350000000
+    if phase=='accounting':assert hooks.preserved==1 and hooks.cleaned==0
+
+
+def test_live_deadline_can_shorten_but_never_extend_whole_lease():
+    clock=SuccessorClock();clock.now=datetime(2026,11,11,20,59,tzinfo=timezone.utc)
+    lease=S.Lease(clock.wall().isoformat(),(clock.wall()-timedelta(seconds=1)).isoformat(),clock,not_after='2026-11-11T21:00:00+00:00')
+    assert lease.check()==60
+    clock.advance(60)
+    with pytest.raises(S.Closed):lease.check()
+
+
+@pytest.mark.parametrize('fault,reason',[('span','EVIDENCE_SOURCE_SPAN_TEXT_MISMATCH'),('negation','NEGATION_EVIDENCE_MISSING'),
+    ('view','ACTOR_EXCLUSION_IS_NOT_VIEW'),('condition','CONDITION_DOMAIN_KIND_VALUE_MISMATCH')])
+def test_grounding_reason_is_actual_fixed_validator_location(fault,reason):
+    proposal=approved_quality_candidate().model_dump(mode='json');draft=M.Draft(original_query='현대건설 외국인 말고 3주 수급',answers=[],revision=0)
+    if fault=='span':proposal['mentions'][0]['evidence']['start']=1
+    elif fault=='negation':proposal['conditions'][0]['negation']=None
+    elif fault=='view':proposal['views'][0]=dict(view='flow',evidence=proposal['conditions'][0]['evidence'],negation=proposal['conditions'][0]['negation'])
+    else:proposal['conditions'][1]['value']=PRIVATE
+    result=S.safe_quality(draft,proposal)
+    assert result['status']=='rejected' and result['rejection']['reason']==reason
+    assert result['rejection']['location']['line']>0 and result['rejection']['index']>=0
+    assert PRIVATE not in C.canonical(result)
+
+
+def test_invalid_candidate_free_values_and_huge_positions_are_not_preserved():
+    candidate=approved_quality_candidate().model_dump(mode='json');candidate['mentions'][0]['evidence'].update(start=10**100,end=10**100+1,text=PRIVATE)
+    draft=M.Draft(original_query='현대건설 외국인 말고 3주 수급',answers=[],revision=0)
+    result=S.safe_quality(draft,candidate);e=result['rejection']['item']['evidence']
+    assert e['start'] is None and e['end'] is None and e['supplied_text'] is None
+    assert PRIVATE not in C.canonical(result) and len(C.canonical(result).encode())<4096
+
+
+def test_grounding_unclassified_post_schema_failure_stays_unknown():
+    from src.supervisor.application import meaning_policy as policy
+    draft=M.Draft(original_query='현대건설 외국인 말고 3주 수급',answers=[],revision=0)
+    with patch.object(policy.Grounding,'assess',side_effect=M.CoreInvalid()):
+        value=S.safe_quality(draft,approved_quality_candidate())
+    assert value['rejection']['stage']=='grounding' and value['rejection']['reason']=='VALIDATOR_STAGE_UNKNOWN'
+    assert value['rejection']['location'] is None
+    value=S.safe_quality(draft,{})
+    assert value['rejection']['stage']=='proposal_schema' and value['rejection']['reason']=='TYPED_PROPOSAL_REJECTED'
+
+
+def test_quality_projection_invalid_value_has_fixed_reason_without_value():
+    from src.supervisor.application import meaning_policy as policy
+    draft=M.Draft(original_query='현대건설 외국인 말고 3주 수급',answers=[],revision=0)
+    frame=policy.assess(draft,approved_quality_candidate(),source='model_assisted').frame
+    bad=frame.model_copy(update=dict(conditions=[frame.conditions[0].model_copy(update=dict(value=PRIVATE))]))
+    with patch.object(policy,'assess',return_value=NS(frame=bad)):
+        result=S.safe_quality(draft,approved_quality_candidate())
+    assert result['rejection']['reason']=='QUALITY_VALUE_NOT_IN_APPROVED_QUESTION'
+    assert PRIVATE not in C.canonical(result)
+
+
+@pytest.mark.parametrize('fault',['unknown','unclosed','usage','readback','route'])
+def test_retry3_resealed_observed_history_cannot_downgrade_to_unknown(tmp_path,fault):
+    scope,source,witness,journal,clock=retry3_inputs(tmp_path);d=scope.data
+    name='readback' if fault=='readback' else 'journal'
+    pin=d['retry']['evidence'][name];p=Path(pin['path']);v=C.decode(p.read_bytes())
+    if fault=='unknown':v['journal'][0]['ledger']['attempts'][0]['state']='unknown'
+    elif fault=='unclosed':v['status']='claimed'
+    elif fault=='usage':v['journal'][0]['ledger']['attempts'][0]['usage']['input_tokens']=True
+    elif fault=='readback':v['turns'][0]['items'][0]['output']['truncated']=True
+    else:d['retry']['readback_binding']['source_thread_id']='20000000-0000-4000-8000-000000000003'
+    write(p,v);pin.update(stamp_json=C.canonical(C.regular(p,0o600)),sha256=C.hashlib.sha256(p.read_bytes()).hexdigest())
+    with pytest.raises(S.Closed):S.Scope(C.canonical(d),scope.artifacts).check(source,witness.capability(),synthetic=True)
+    assert not witness.calls

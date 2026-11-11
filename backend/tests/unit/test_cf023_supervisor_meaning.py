@@ -559,6 +559,12 @@ async def test_invalid_typed_stock_prose_stays_unrecognized_and_fixed_frame_reje
     with pytest.raises(M.CoreInvalid):G.validate_fixed_frame(d,altered)
 
 
+def cf043_principal(user=None):
+    from datetime import datetime, timezone, timedelta
+    from src.modules.auth.application.session_service import Principal
+    return Principal(user or uuid4(), uuid4(), datetime.now(timezone.utc) + timedelta(days=1), b'c' * 32)
+
+
 # CF042: real AccessBoundary + CoreRoute + dependency + PreparationService.post.
 # Only auth/session/persistence/AI IO is fake; timers execute against an accelerated clock.
 class CF042Clock:
@@ -613,7 +619,7 @@ async def cf042_public(monkeypatch, *, work=0, auth_delay=0, auth_error=None, mi
             raise AuthenticationRequired()
         if auth_error in {'csrf', 'owner'}:
             raise HTTPException(403)
-        return NS(user_id=h.current_user)
+        return cf043_principal(h.current_user)
     async def fresh_auth(service):
         h.events.append('fresh_auth')
     async def by_key(db, owner, key):
@@ -784,19 +790,20 @@ async def test_cf042_private_direct_service_preserves_relative75(monkeypatch):
     from src.modules.supervisor.application.preparation_service import PreparationService
     class Stop(RuntimeError): pass
     session = NS(rollback=AsyncMock(side_effect=Stop))
-    service = PreparationService(session, principal=NS(), client=NS())
+    service = PreparationService(session, principal=cf043_principal(), client=NS())
+    body = B.PreparationRequest(prepare_key=str(uuid4()), draft=B.Draft.model_validate(draft().model_dump(mode='json')))
     clock = CF042Clock()
     with monkeypatch.context() as timers:
         clock.install(timers)
         with pytest.raises(Stop):
-            await service.post(NS(), uuid4())
+            await service.post(body, uuid4())
     assert clock.relative == [75] and not clock.absolute
 
 
 async def test_cf042_direct_absolute_service_still_caps_at75(monkeypatch):
     from src.modules.supervisor.application.preparation_service import PreparationService
     h = await cf042_public(monkeypatch, work=100)
-    service = PreparationService(h.session, principal=NS(user_id=h.current_user), client=NS())
+    service = PreparationService(h.session, principal=cf043_principal(h.current_user), client=NS())
     with monkeypatch.context() as timers:
         h.clock.install(timers)
         started = h.clock.time()
@@ -871,3 +878,348 @@ def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
     fn = next(n for n in klass.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '__call__')
     fn.body = [n for n in fn.body if not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'
+
+
+# CF043: actual post/build/exchange/dispatch guard + actual Principal SQL construction.
+# Session/row return values and the AI ASGI transport are explicit synthetic IO.
+async def cf043_service(monkeypatch, *, source=None, ambiguous=False):
+    from datetime import datetime, timezone
+    from src.modules.supervisor.application import preparation_service as PS
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    h = NS(rows={}, phases=[], sent=[], events=[], commits=0, rollbacks=0, in_tx=False,
+           revoked=False, on_commit=None, on_clock=None, on_send=None, clock_calls=0, validations=[], lineage_calls=[], closed=0,
+           db_now=datetime(2026, 11, 11, tzinfo=timezone.utc), epoch=uuid4())
+    h.principal = cf043_principal()
+    h.body = B.PreparationRequest(prepare_key=str(uuid4()), draft=B.Draft.model_validate((source or draft()).model_dump(mode='json')))
+    async def scalar(statement):
+        assert statement.get_execution_options()['populate_existing'] is True
+        assert statement._for_update_arg is not None and statement._for_update_arg.read is True
+        params = statement.compile().params
+        assert h.principal.user_id in params.values() and h.principal.session_id in params.values()
+        h.validations.append(statement)
+        h.in_tx = True
+        return None if h.revoked else NS()
+    async def commit():
+        h.commits += 1
+        h.events.append(('commit', h.commits))
+        h.in_tx = False
+        if h.on_commit is not None:
+            await h.on_commit(h.commits)
+    async def rollback():
+        h.rollbacks += 1
+        h.in_tx = False
+        h.events.append(('rollback', h.rollbacks))
+    session = NS(scalar=scalar, commit=commit, rollback=rollback, flush=AsyncMock())
+    h.session = session
+    async def by_key(db, owner, key):
+        h.in_tx = True
+        return next((row for row in h.rows.values() if row.owner_user_id == owner and row.prepare_key_digest == key), None)
+    async def clock(db):
+        h.clock_calls += 1
+        h.in_tx = True
+        if h.on_clock is not None:
+            return await h.on_clock(h.clock_calls)
+        return h.db_now
+    async def admit(db, values):
+        h.in_tx = True
+        row = NS(**{name: values.get(name) for name in PS.DISPATCH_FIELDS})
+        h.rows[row.id] = row
+        h.events.append(('admit', row.id))
+        return row
+    async def lineage(db, owner, id, *, lock=True):
+        assert lock is True
+        h.lineage_calls.append((owner, id, lock))
+        h.in_tx = True
+        rows = []
+        while id is not None:
+            row = h.rows.get(id)
+            if row is None or row.owner_user_id != owner:
+                raise repo.PreparationConflict('RESOURCE_NOT_FOUND', 404)
+            rows.append(row)
+            id = row.parent_id
+        return list(reversed(rows))
+    async def resolve(lookup):
+        h.events.append(('resolve', lookup))
+        if ambiguous:
+            return B.Resolution(status='ambiguous', reason='ambiguous_alias', stock=None, candidates=[
+                B.Candidate(stock_code=code, stock_name=name, market='KOSPI', match_type='ambiguous_group')
+                for code, name in [('005930', '합성 삼성전자'), ('000660', '합성 하이닉스')]])
+        return B.Resolution.model_validate(resolution().model_dump(mode='json'))
+    real_client = AIClient('http://synthetic.invalid', 8, transport=httpx.ASGITransport(app=APP), service_token=TOKEN)
+    async def send(payload):
+        assert h.in_tx is False  # Actual guard/resolver commit ACK must precede HTTP.
+        phase = payload['data']['phase']
+        h.phases.append(phase)
+        h.sent.append(copy.deepcopy(payload))
+        h.events.append(('send', phase, h.commits))
+        if h.on_send is not None:
+            await h.on_send(payload)
+        return await real_client.plan_supervisor_core(payload)
+    monkeypatch.setattr(repo, 'by_key', by_key)
+    monkeypatch.setattr(repo, 'admit', admit)
+    monkeypatch.setattr(repo, 'lineage', lineage)
+    monkeypatch.setattr(repo, 'clock', clock)
+    monkeypatch.setattr(repo, 'cleanup_owner', AsyncMock())
+    h.reserve = AsyncMock(side_effect=AssertionError('No budget reserve in dispatch guard tests'))
+    h.epoch_create = AsyncMock(side_effect=AssertionError('No epoch creation in dispatch guard tests'))
+    monkeypatch.setattr(repo.DurableMeaningBudget, 'authorize', h.reserve)
+    monkeypatch.setattr(repo, 'verifier_epoch', h.epoch_create)
+    h.service = PS.PreparationService(session, principal=h.principal, client=NS(plan_supervisor_core=send),
+        resolver_factory=lambda session: NS(resolve=resolve), epoch_id=h.epoch)
+    from fastapi import FastAPI
+    from src.modules.supervisor.api import router as R
+    from src.modules.auth.api import router as auth_router
+    from src.shared.http.access_boundary import AccessBoundary
+    async def sessions():
+        try:
+            yield session
+        finally:
+            await rollback()
+            h.closed += 1
+    monkeypatch.setattr(R.settings, 'FLOW_ANALYSIS_ENABLED', True)
+    monkeypatch.setattr(auth_router, 'configured', lambda: True)
+    monkeypatch.setattr(R, 'request_principal', AsyncMock(return_value=h.principal))
+    monkeypatch.setattr(R, 'AIClient', lambda *args, **kwargs: h.service.client)
+    supervisor_service = R.SupervisorService
+    monkeypatch.setattr(R, 'SupervisorService', lambda *args, **kwargs:
+        supervisor_service(*args, **kwargs, resolver_factory=h.service.resolver_factory))
+    app = FastAPI(); app.include_router(R.router)
+    app.dependency_overrides[R.get_session] = sessions
+    h.app = AccessBoundary(app)
+    return h
+
+
+async def test_cf043_real_root_guard_order_replay_and_GET(monkeypatch):
+    h = await cf043_service(monkeypatch)
+    result = await h.service.post(h.body, uuid4())
+    assert result['state'] == 'ready' and h.phases == ['start', 'continue']
+    assert [event for event in h.events if event[0] == 'send'] == [('send', 'start', 2), ('send', 'continue', 4)]
+    assert len(h.validations) >= 5 and all(owner == h.principal.user_id for owner, id, lock in h.lineage_calls)
+    replay = await h.service.post(h.body, uuid4())
+    observed = await h.service.get(__import__('uuid').UUID(result['preparation_id']))
+    assert replay == observed == result and h.phases == ['start', 'continue']
+    h.reserve.assert_not_awaited(); h.epoch_create.assert_not_awaited()
+
+
+@pytest.mark.parametrize('at', [1, 2, 4])
+async def test_cf043_uncertain_admit_or_guard_ACK_stops_next_phase(monkeypatch, at):
+    h = await cf043_service(monkeypatch)
+    async def fail(number):
+        if number == at: raise OSError('synthetic ACK unavailable')
+    h.on_commit = fail
+    with pytest.raises(OSError): await h.service.post(h.body, uuid4())
+    assert h.phases == ([] if at < 4 else ['start']) and h.in_tx is False and h.rollbacks >= 2
+
+
+@pytest.mark.parametrize('stage', [1, 3])
+@pytest.mark.parametrize('field', ['revoked', 'owner', 'attempt', 'request', 'draft', 'semantic_json', 'semantic_sha', 'epoch', 'key', 'root', 'depth'])
+async def test_cf043_fresh_drift_stops_next_phase(monkeypatch, stage, field):
+    from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+    from src.modules.auth.application.session_service import AuthenticationRequired
+    h = await cf043_service(monkeypatch)
+    async def drift(number):
+        if number != stage: return
+        row = next(iter(h.rows.values()))
+        names = {'owner':'owner_user_id', 'attempt':'attempt_id', 'request':'request_digest', 'draft':'draft_digest',
+                 'semantic_json':'semantic_json', 'semantic_sha':'semantic_sha256', 'epoch':'epoch_id',
+                 'key':'prepare_key_digest', 'root':'root_id', 'depth':'depth'}
+        if field == 'revoked': h.revoked = True
+        elif field in {'owner', 'attempt', 'epoch', 'root'}: setattr(row, names[field], uuid4())
+        elif field == 'key': row.prepare_key_digest = b'x' * 32
+        elif field == 'depth': row.depth = 3
+        else: setattr(row, names[field], 'x' * 64)
+    h.on_commit = drift
+    with pytest.raises((PreparationConflict, AuthenticationRequired)):
+        await h.service.post(h.body, uuid4())
+    assert h.phases == ([] if stage == 1 else ['start'])
+    assert h.in_tx is False
+
+
+@pytest.mark.parametrize('stage', [1, 3])
+async def test_cf043_observed_delete_preserves_safe_view_and_no_next_send(monkeypatch, stage):
+    h = await cf043_service(monkeypatch)
+    async def delete(number):
+        if number == stage:
+            row = next(iter(h.rows.values()))
+            row.state = 'deleted'; row.redacted_at = h.db_now
+            row.draft_json = row.frame_json = row.plan_json = row.continuation_json = None
+    h.on_commit = delete
+    result = await h.service.post(h.body, uuid4())
+    assert result['state'] == 'deleted' and result['plan'] is None
+    assert h.phases == ([] if stage == 1 else ['start']) and h.in_tx is False
+
+
+async def test_cf043_late_delete_real_route_returns200_not_new409(monkeypatch):
+    from fastapi import FastAPI
+    from src.modules.supervisor.api import router as R
+    h = await cf043_service(monkeypatch)
+    async def during_start(payload):
+        if payload['data']['phase'] == 'start':
+            row = next(iter(h.rows.values())); row.state = 'deleted'; row.redacted_at = h.db_now
+            row.draft_json = row.frame_json = row.plan_json = row.continuation_json = None
+    h.on_send = during_start
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=h.app), base_url='http://localhost:8200') as client:
+        response = await client.post('/api/supervisor/core/preparations', json=h.body.model_dump(mode='json'))
+    assert response.status_code == 200 and response.json()['data']['state'] == 'deleted'
+    assert response.json()['data']['plan'] is None and h.phases == ['start'] and h.closed == 1
+
+
+@pytest.mark.parametrize('delay_at', ['clock', 'commit', 'payload'])
+async def test_cf043_TTL_is_anchored_before_clock_and_rechecked_at_send(monkeypatch, delay_at):
+    from datetime import timedelta
+    from src.modules.supervisor.application import preparation_service as PS
+    h = await cf043_service(monkeypatch)
+    base = h.db_now
+    async def clock(number):
+        if number == 1: return base
+        if number == 2:
+            captured = base + timedelta(seconds=599.99)
+            if delay_at == 'clock': await asyncio.sleep(.025)
+            return captured
+        return base + timedelta(seconds=601)
+    h.on_clock = clock
+    async def commit(number):
+        if delay_at == 'commit' and number == 2: await asyncio.sleep(.025)
+    h.on_commit = commit
+    original = PS.canonical
+    def canonical(value):
+        if delay_at == 'payload' and isinstance(value, dict) and value.get('phase') == 'start':
+            __import__('time').sleep(.025)
+        return original(value)
+    monkeypatch.setattr(PS, 'canonical', canonical)
+    result = await h.service.post(h.body, uuid4())
+    assert result['state'] == 'expired' and result['plan'] is None and h.phases == []
+
+
+async def test_cf043_absolute_deadline_and_cancel_during_guard_send_zero(monkeypatch):
+    h = await cf043_service(monkeypatch)
+    async def commit(number):
+        if number == 2: await asyncio.sleep(.1)
+    h.on_commit = commit
+    with pytest.raises(TimeoutError):
+        await h.service.post(h.body, uuid4(), deadline=asyncio.get_running_loop().time() + .03)
+    assert h.phases == [] and h.in_tx is False and h.rollbacks >= 2
+
+
+async def test_cf043_first_await_body_and_nested_answer_mutation_cannot_change_wire(monkeypatch):
+    source = draft('삼성전자 주식 정보', answers=[dict(answer_id=str(uuid4()), slot='views', value='수급')])
+    h = await cf043_service(monkeypatch, source=source)
+    original = copy.deepcopy(h.body.model_dump(mode='json'))
+    first_rollback = h.session.rollback
+    mutated = False
+    async def rollback():
+        nonlocal mutated
+        if not mutated:
+            mutated = True
+            h.body.draft.original_query = '다른 질문'
+            h.body.draft.answers[0].value = '차트'
+            h.body.draft.selected_ticker = '000660'
+        await first_rollback()
+    h.session.rollback = rollback
+    result = await h.service.post(h.body, uuid4())
+    assert result['state'] == 'ready' and h.phases == ['start', 'continue']
+    assert all(payload['data']['draft'] == original['draft'] for payload in h.sent)
+    assert next(iter(h.rows.values())).draft_json == M.canonical(original['draft'])
+
+
+async def test_cf043_valid_child_uses_frozen_ancestors_and_NULL_leaf_source(monkeypatch):
+    h = await cf043_service(monkeypatch, source=draft('005930 수급'), ambiguous=True)
+    root = await h.service.post(h.body, uuid4())
+    assert root['plan']['status'] == 'needs_stock_selection'
+    child = B.PreparationRequest(prepare_key=str(uuid4()), parent_preparation_id=root['preparation_id'],
+        draft=h.body.draft.model_copy(update={'selected_ticker':'005930', 'candidate_ref':root['plan']['candidate_ref']}))
+    result = await h.service.post(child, uuid4())
+    assert result['state'] == 'ready' and h.phases == ['start', 'continue', 'continue']
+    leaf = h.rows[__import__('uuid').UUID(result['preparation_id'])]
+    assert leaf.draft_json is None and leaf.parent_id is not None
+    bad = child.model_copy(update={'prepare_key':str(uuid4()), 'draft':child.draft.model_copy(update={'selected_ticker':'999999'})})
+    from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+    with pytest.raises(PreparationConflict): await h.service.post(bad, uuid4())
+    assert h.phases == ['start', 'continue', 'continue']
+
+
+async def test_cf043_actual_lineage_SQL_retains_owner_freshness_and_lock():
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    owner, root_id, leaf_id = uuid4(), uuid4(), uuid4()
+    root = NS(id=root_id, parent_id=None, root_id=root_id, depth=0)
+    leaf = NS(id=leaf_id, parent_id=root_id, root_id=root_id, depth=1)
+    observed = []
+    async def scalar(statement):
+        assert statement.get_execution_options()['populate_existing'] is True
+        params = statement.compile().params; assert owner in params.values()
+        observed.append(statement)
+        return leaf if leaf_id in params.values() else root
+    async def scalars(statement):
+        assert statement.get_execution_options()['populate_existing'] is True
+        assert statement._for_update_arg is not None
+        assert owner in statement.compile().params.values()
+        observed.append(statement)
+        return NS(all=lambda:[root, leaf])
+    result = await repo.lineage(NS(scalar=scalar, scalars=scalars), owner, leaf_id)
+    assert result == [root, leaf] and len(observed) == 3
+
+
+@pytest.mark.parametrize('stage', [1, 3])
+async def test_cf043_post_ACK_DB_TTL_expiry_stops_next_phase(monkeypatch, stage):
+    from datetime import timedelta
+    h = await cf043_service(monkeypatch)
+    async def expire(number):
+        if number == stage: h.db_now += timedelta(seconds=601)
+    h.on_commit = expire
+    result = await h.service.post(h.body, uuid4())
+    assert result['state'] == 'expired' and result['plan'] is None
+    assert h.phases == ([] if stage == 1 else ['start'])
+
+
+async def test_cf043_child_ancestor_mutation_after_ACK_cannot_send_continue(monkeypatch):
+    from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+    h = await cf043_service(monkeypatch, source=draft('005930 수급'), ambiguous=True)
+    root = await h.service.post(h.body, uuid4())
+    child = B.PreparationRequest(prepare_key=str(uuid4()), parent_preparation_id=root['preparation_id'],
+        draft=h.body.draft.model_copy(update={'selected_ticker':'005930', 'candidate_ref':root['plan']['candidate_ref']}))
+    target = h.commits + 1
+    async def corrupt(number):
+        if number == target:
+            h.rows[__import__('uuid').UUID(root['preparation_id'])].frame_json = '{}'
+    h.on_commit = corrupt
+    with pytest.raises(PreparationConflict): await h.service.post(child, uuid4())
+    assert h.phases == ['start', 'continue']
+    assert [row for row in h.rows.values() if row.parent_id is not None][0].draft_json is None
+
+
+async def test_cf043_public_cancel_during_guard_keeps_zero_send_and_session_cleanup(monkeypatch):
+    h = await cf043_service(monkeypatch)
+    reached, release = asyncio.Event(), asyncio.Event()
+    async def hold(number):
+        if number == 2:
+            reached.set()
+            await release.wait()
+    h.on_commit = hold
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=h.app), base_url='http://localhost:8200') as client:
+        task = asyncio.create_task(client.post('/api/supervisor/core/preparations', json=h.body.model_dump(mode='json')))
+        try:
+            await asyncio.wait_for(reached.wait(), 1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError): await task
+        finally:
+            release.set()
+            if not task.done(): task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert h.phases == [] and h.in_tx is False and h.closed == 1 and h.rollbacks >= 2
+
+
+@pytest.mark.parametrize('field', ['semantic', 'epoch'])
+async def test_cf043_child_ancestor_must_match_independent_current_spec_and_epoch(monkeypatch, field):
+    from src.modules.supervisor.infrastructure.preparation_repository import PreparationConflict
+    h = await cf043_service(monkeypatch, source=draft('005930 수급'), ambiguous=True)
+    root = await h.service.post(h.body, uuid4())
+    row = h.rows[__import__('uuid').UUID(root['preparation_id'])]
+    if field == 'semantic':
+        row.semantic_json = '{}'; row.semantic_sha256 = B.sha({})
+    else:
+        row.epoch_id = uuid4()
+    child = B.PreparationRequest(prepare_key=str(uuid4()), parent_preparation_id=root['preparation_id'],
+        draft=h.body.draft.model_copy(update={'selected_ticker':'005930', 'candidate_ref':root['plan']['candidate_ref']}))
+    with pytest.raises(PreparationConflict): await h.service.post(child, uuid4())
+    assert h.phases == ['start', 'continue']

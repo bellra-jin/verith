@@ -2,13 +2,14 @@
 import asyncio
 import hashlib
 import math
+from dataclasses import dataclass, field
 from datetime import timedelta
 from uuid import UUID, uuid4
 
-from src.modules.auth.application.session_service import AuthenticationRequired, validate_principal
+from src.modules.auth.application.session_service import AuthenticationRequired, Principal, validate_principal
 from src.modules.stocks.application.resolver_service import StockResolverService
 from src.modules.supervisor.domain.contracts import (
-    CoreInvalid, Draft, MeaningRunOutput, Plan, PreparationView, Resolution, Stock,
+    CoreInvalid, Draft, MeaningRunOutput, Plan, PreparationRequest, PreparationView, Resolution, Stock,
     VERSION, MEANING_SPEC, MEANING_SPEC_SHA256, candidate_ref, canonical, decode,
     sha, validate_plan,
 )
@@ -53,6 +54,31 @@ def assembled(rows):
     return draft, plan
 
 
+# All fields are immutable primitives, UUID/datetime or tuples; no ORM survives as authority.
+DISPATCH_FIELDS = ('id', 'owner_user_id', 'prepare_key_digest', 'request_digest', 'draft_digest',
+    'semantic_json', 'semantic_sha256', 'root_id', 'parent_id', 'depth', 'attempt_id', 'epoch_id',
+    'state', 'meaning_status', 'draft_json', 'frame_json', 'frame_sha256', 'plan_json',
+    'plan_sha256', 'continuation_json', 'created_at', 'expires_at', 'redacted_at', 'consumed_binding_id')
+
+
+def dispatch_projection(row):
+    return tuple(getattr(row, name) for name in DISPATCH_FIELDS)
+
+
+@dataclass(frozen=True, repr=False)
+class PreparationDispatch:
+    principal: Principal = field(repr=False)
+    body_json: str = field(repr=False)
+    identity: tuple = field(repr=False)
+    ancestors: tuple = field(repr=False)
+    fixed_json: str | None = field(repr=False)
+    deadline: float
+
+
+class PreparationClosed(Exception):
+    """Internal control flow: read the existing terminal view, never send another phase."""
+
+
 class PreparationService:
     def __init__(self, session, *, principal, client, resolver_factory=StockResolverService, epoch_id=None):
         self.session = session
@@ -64,7 +90,55 @@ class PreparationService:
     async def auth(self):
         await validate_principal(self.session, self.principal, lock=True)
 
-    async def exchange(self, payload, request_id, trace):
+    async def dispatch_guard(self, dispatch):
+        if not isinstance(dispatch, PreparationDispatch):
+            raise PreparationConflict()
+        if asyncio.get_running_loop().time() >= dispatch.deadline:
+            raise TimeoutError()
+        identity = dict(zip(DISPATCH_FIELDS, dispatch.identity))
+        try:
+            await validate_principal(self.session, dispatch.principal, lock=True)
+            rows = await repo.lineage(self.session, dispatch.principal.user_id, identity['id'])
+            if len(rows) != len(dispatch.ancestors) + 1 or rows[-1].id != identity['id'] or any(row.owner_user_id != dispatch.principal.user_id for row in rows):
+                raise PreparationConflict()
+            before_clock = asyncio.get_running_loop().time()
+            stamp = await repo.clock(self.session)
+            if repo.closure(rows, stamp)[0] is not None:
+                raise PreparationClosed()
+            if any(row.semantic_json != identity['semantic_json'] or row.semantic_sha256 != identity['semantic_sha256']
+                   or row.epoch_id != identity['epoch_id'] or row.draft_digest != identity['draft_digest'] for row in rows):
+                raise PreparationConflict()
+            if dispatch_projection(rows[-1]) != dispatch.identity or tuple(dispatch_projection(row) for row in rows[:-1]) != dispatch.ancestors:
+                raise PreparationConflict()
+            if dispatch.ancestors:
+                _, fixed = assembled(rows[:-1])
+                if canonical(fixed.model_dump(mode='json')) != dispatch.fixed_json:
+                    raise PreparationConflict()
+            ttl_deadline = before_clock + max(0, (min(row.expires_at for row in rows) - stamp).total_seconds())
+            await self.session.commit()  # Confirmed ACK releases SQL locks before HTTP.
+        except BaseException:
+            await self.session.rollback()
+            raise
+        now = asyncio.get_running_loop().time()
+        if now >= dispatch.deadline:
+            raise TimeoutError()
+        if now >= ttl_deadline:
+            raise PreparationClosed()
+        return ttl_deadline
+
+    async def exchange(self, payload, request_id, trace, *, dispatch=None):
+        ttl_deadline = await self.dispatch_guard(dispatch)
+        payload = decode(canonical(payload))
+        body = PreparationRequest.model_validate(decode(dispatch.body_json))
+        identity = dict(zip(DISPATCH_FIELDS, dispatch.identity))
+        if payload.get('phase') not in {'start', 'continue'} or payload.get('policy_version') != POLICY or payload.get('attempt_id') != str(identity['attempt_id']):
+            raise PreparationConflict()
+        payload['draft'] = body.draft.model_dump(mode='json')
+        now = asyncio.get_running_loop().time()
+        if now >= dispatch.deadline:
+            raise TimeoutError()
+        if now >= ttl_deadline:
+            raise PreparationClosed()
         value = await self.client.plan_supervisor_core(dict(schema_version=VERSION, request_id=str(request_id), trace_id=str(trace), data=payload, error=None))
         if type(value) is not dict or set(value) != {'schema_version', 'request_id', 'trace_id', 'data', 'error'} or value['schema_version'] != VERSION or value['request_id'] != str(request_id) or value['trace_id'] != str(trace) or value['error'] is not None:
             raise CoreInvalid()
@@ -93,11 +167,11 @@ class PreparationService:
             await self.session.commit()
             return resolution
 
-    async def build(self, draft, attempt, request_id, *, fixed=None):
+    async def build(self, draft, attempt, request_id, *, fixed=None, dispatch=None):
         trace = uuid4()
         common = dict(policy_version=POLICY, draft=draft.model_dump(mode='json'), attempt_id=str(attempt))
         if fixed is None:
-            result = await self.exchange(dict(**common, phase='start'), request_id, trace)
+            result = await self.exchange(dict(**common, phase='start'), request_id, trace, dispatch=dispatch)
             frame = result.frame
             if frame.original_query != draft.original_query or frame.answers != draft.answers or frame.revision != draft.revision:
                 raise CoreInvalid()
@@ -121,7 +195,7 @@ class PreparationService:
         reference = candidate_ref(draft, resolution, policy_version=POLICY)
         if draft.selected_ticker is not None and (resolution.status != 'ambiguous' or draft.selected_ticker not in {c.stock_code for c in resolution.candidates}):
             raise PreparationConflict('PLAN_STALE', 409)
-        result = await self.exchange(dict(**common, phase='continue', frame=frame.model_dump(mode='json'), resolution=resolution.model_dump(mode='json')), request_id, trace)
+        result = await self.exchange(dict(**common, phase='continue', frame=frame.model_dump(mode='json'), resolution=resolution.model_dump(mode='json')), request_id, trace, dispatch=dispatch)
         if result.action != 'final' or result.lookup is not None or result.frame != frame or result.plan is None:
             raise CoreInvalid()
         plan = validate_plan(result.plan.model_dump(mode='json'), draft)
@@ -180,34 +254,44 @@ class PreparationService:
         id = None
         claimed = False
         try:
+            entered = asyncio.get_running_loop().time()
             if deadline is None:
+                effective_deadline = entered + 75
                 timeout = asyncio.timeout(75)  # Existing private/direct service contract.
             else:
                 now = asyncio.get_running_loop().time()
                 if type(deadline) not in {int, float} or type(deadline) is float and not math.isfinite(deadline) or deadline <= now:
                     raise PreparationConflict('DEADLINE_EXCEEDED', 504)
-                timeout = asyncio.timeout_at(min(deadline, now + 75))
+                effective_deadline = min(deadline, now + 75)
+                timeout = asyncio.timeout_at(effective_deadline)
             async with timeout:
+                body_json = canonical(PreparationRequest.model_validate(body.model_dump(mode='json')).model_dump(mode='json'))
+                body = PreparationRequest.model_validate(decode(body_json))
+                if type(self.principal) is not Principal or self.epoch_id is not None and type(self.epoch_id) is not UUID:
+                    raise AuthenticationRequired()
+                principal = Principal(self.principal.user_id, self.principal.session_id, self.principal.expires_at, bytes(self.principal.token_digest))
+                owner, epoch_id = principal.user_id, self.epoch_id
+                key = hashlib.sha256(body.prepare_key.encode()).digest()
+                digest, draft_digest = digest_text(body_json), sha(draft_identity(body.draft))
+                semantic_json, semantic_hash = canonical(MEANING_SPEC), MEANING_SPEC_SHA256
                 await self.session.rollback()
                 await self.auth()
-                key = hashlib.sha256(body.prepare_key.encode()).digest()
-                digest = sha(body.model_dump(mode='json'))
-                existing = await repo.by_key(self.session, self.principal.user_id, key)
+                existing = await repo.by_key(self.session, owner, key)
                 if existing is not None:
                     if existing.request_digest != digest:
                         raise PreparationConflict('IDEMPOTENCY_CONFLICT', 409)
-                    rows = await repo.lineage(self.session, self.principal.user_id, existing.id)
+                    rows = await repo.lineage(self.session, owner, existing.id)
                     value = await self.view(rows)
                     await self.session.commit()
                     return value
-                await repo.cleanup_owner(self.session, self.principal.user_id)
+                await repo.cleanup_owner(self.session, owner)
                 stamp = await repo.clock(self.session)
                 id = uuid4()
                 fixed = None
                 parent = None
                 root_id, depth, expires = id, 0, stamp + timedelta(minutes=10)
                 if body.parent_preparation_id is not None:
-                    rows = await repo.lineage(self.session, self.principal.user_id, UUID(body.parent_preparation_id))
+                    rows = await repo.lineage(self.session, owner, UUID(body.parent_preparation_id))
                     closed, _ = repo.closure(rows, stamp)
                     if closed is not None:
                         raise PreparationConflict('PREPARATION_' + closed.upper(), 409)
@@ -220,26 +304,34 @@ class PreparationService:
                         raise PreparationConflict('PLAN_STALE', 409)
                     root_id, depth, expires = rows[0].id, parent.depth + 1, min(expires, parent.expires_at)
                 attempt = uuid4()
-                row = await repo.admit(self.session, dict(id=id, owner_user_id=self.principal.user_id,
-                    prepare_key_digest=key, request_digest=digest, draft_digest=sha(draft_identity(body.draft)),
-                    semantic_json=canonical(MEANING_SPEC), semantic_sha256=MEANING_SPEC_SHA256,
+                values = dict(id=id, owner_user_id=owner,
+                    prepare_key_digest=key, request_digest=digest, draft_digest=draft_digest,
+                    semantic_json=semantic_json, semantic_sha256=semantic_hash,
                     root_id=root_id, parent_id=parent.id if parent is not None else None, depth=depth,
-                    attempt_id=attempt, epoch_id=self.epoch_id, state='pending', meaning_status='pending',
+                    attempt_id=attempt, epoch_id=epoch_id, state='pending', meaning_status='pending',
                     draft_json=canonical(body.draft.model_dump(mode='json')) if parent is None else None,
-                    continuation_json=None, created_at=stamp, expires_at=expires))
+                    continuation_json=None, created_at=stamp, expires_at=expires)
+                ancestors = tuple(dispatch_projection(row) for row in rows) if parent is not None else ()
+                fixed_json = canonical(fixed.model_dump(mode='json')) if fixed is not None else None
+                dispatch = PreparationDispatch(principal, body_json, tuple(values.get(name) for name in DISPATCH_FIELDS), ancestors, fixed_json, effective_deadline)
+                row = await repo.admit(self.session, values)
                 if row is None:
-                    row = await repo.by_key(self.session, self.principal.user_id, key)
+                    row = await repo.by_key(self.session, owner, key)
                     if row is None or row.request_digest != digest:
                         raise PreparationConflict('IDEMPOTENCY_CONFLICT', 409)
-                    value = await self.view(await repo.lineage(self.session, self.principal.user_id, row.id))
+                    value = await self.view(await repo.lineage(self.session, owner, row.id))
                     await self.session.commit()
                     return value
                 # Snapshot identifiers before commit expiration. Unknown ACK never starts AI.
                 await self.session.commit()
                 claimed = True
-                plan, status = await self.build(body.draft, attempt, request_id, fixed=fixed)
+                try:
+                    fixed = Plan.model_validate(decode(fixed_json)) if fixed_json is not None else None
+                    plan, status = await self.build(body.draft, attempt, request_id, fixed=fixed, dispatch=dispatch)
+                except PreparationClosed:
+                    return await self.get(id)
                 await self.auth()
-                rows = await repo.lineage(self.session, self.principal.user_id, id)
+                rows = await repo.lineage(self.session, owner, id)
                 row = rows[-1]
                 stamp = await repo.clock(self.session)
                 if repo.closure(rows, stamp)[0] is not None:
@@ -270,7 +362,7 @@ class PreparationService:
                 # Separate failure transaction cannot resurrect a closed lineage or repeat extraction.
                 try:
                     await self.auth()
-                    rows = await repo.lineage(self.session, self.principal.user_id, id)
+                    rows = await repo.lineage(self.session, owner, id)
                     row = rows[-1]
                     if repo.closure(rows, await repo.clock(self.session))[0] is None and row.state == 'pending':
                         row.state = row.meaning_status = 'failed' if isinstance(error, (CoreInvalid, PreparationConflict)) else 'unknown'

@@ -348,7 +348,7 @@ async def test_preparation_real_post_ASGI_survives_old_15_second_scaled_boundary
     from src.modules.supervisor.application.preparation_service import PreparationService
     from src.modules.supervisor.infrastructure import preparation_repository as repo
     from src.shared.infrastructure.clients.ai_client import AIClient
-    session=NS(rollback=AsyncMock(),commit=AsyncMock(),flush=AsyncMock())
+    session=NS(rollback=AsyncMock(),commit=AsyncMock(),flush=AsyncMock(),scalar=AsyncMock(return_value=NS()))
     principal_value=principal();request=body();now=datetime.now(timezone.utc);rows=[];calls=[]
     class SlowSyntheticGateway:
         async def propose(self,*args,**kwargs):
@@ -359,6 +359,7 @@ async def test_preparation_real_post_ASGI_survives_old_15_second_scaled_boundary
     service=PreparationService(session,principal=principal_value,client=client,epoch_id=uuid4())
     async def admit(db,value):
         row=NS(**value);row.redacted_at=None;row.consumed_binding_id=None
+        row.frame_json=row.frame_sha256=row.plan_json=row.plan_sha256=None
         rows.append(row);return row
     resolution=B.Resolution(status='resolved',reason='exact_match',stock=B.Stock(stock_code='000720',stock_name='현대건설',market='KOSPI'),candidates=[])
     relative=[];absolute=[];original=asyncio.timeout;original_at=asyncio.timeout_at
@@ -376,6 +377,8 @@ async def test_preparation_real_post_ASGI_survives_old_15_second_scaled_boundary
         result=await service.post(request,uuid4())
     assert result['state'] in {'ready','clarification','unsupported'} and calls==['propose']
     assert relative[0]==75 and 70 in relative and session.commit.await_count>=2
+    assert session.scalar.await_count==2  # Real fresh Principal SQL in both dispatch guards.
+    assert session.commit.await_count>=4  # Claim, start guard, continue guard, final result.
     assert any(14<seconds<=15 for seconds in absolute)
     assert any(64<seconds<=65 for seconds in absolute) and any(59<seconds<=60 for seconds in absolute)
 

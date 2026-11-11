@@ -139,3 +139,7 @@ unknown 직후와 최종 의미 epoch SHA가 일치했다. 예약 slot9를 외�
 
 최신 정확4파일·고정9파일·AI32·직접 로그3개의 최종 독립 읽기 대조를 완료했고 미해결 blocker는 없었다.
 이는 source/로그 검토이며 독립 검사 재실행은 아니다. 게시 심사와 원격 exact-head CI는 이후 별도 단계다.
+
+### CF037 PR CI 호환 보완
+
+첫 PR CI는 meaning assembly를 포함한 앞선 보호 검사를 통과했으나 Technical owned self의 기존 조건 문자열 검사에서 실패했다. DB-only 조건에 추가한 flag가 기존 두 flag 사이에 놓여 생긴 소스 호환 문제였다. 여섯 조건의 동일한 OR 항을 순서만 조정해 기존 인접 표현과 모든 새 분기를 함께 보존했다. 보호 검사나 assertion은 변경하지 않았다. 보완 후 보호 Technical owned self 3개와 meaning assembly unit 103개가 통과했고 guard 위반은 0, 검사 소유 임시 root는 제거됐다. 최초 로컬 비상승 실행은 OS canary에서 exit 78로 중단되어 worker가 시작되지 않았으며, 기존 보호를 유지한 정식 실행에서 통과했다. 실제 PG 검증은 앞선 회차의 근거이며 이번 동치 순서 보완으로 새 DB를 생성하지 않았다.

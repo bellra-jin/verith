@@ -190,8 +190,9 @@ export async function readPreparation(store:Storage,user:string):Promise<Prepare
  if(raw.length>32768)throw new CoreHttpError(422);
  return preparePendingValue(JSON.parse(raw));
 }
-export async function writePreparation(store:Storage,user:string,value:PreparePending){
+export async function writePreparation(store:Storage,user:string,value:PreparePending,current:()=>boolean=()=>true){
  const checked=await preparePendingValue(value);
+ if(!current())throw new CoreHttpError(409);
  store.setItem(preparationKey(user),JSON.stringify(checked));
 }
 export async function preparationValue(raw:unknown,draft?:Draft):Promise<Preparation>{
@@ -203,8 +204,23 @@ export async function preparationValue(raw:unknown,draft?:Draft):Promise<Prepara
 }
 export async function preparationRequest(kind:'post'|'get'|'delete',payload:PrepareBody|string,user:string,signal:AbortSignal,current:()=>boolean):Promise<Preparation>{
  const guard=()=>{if(signal.aborted||!current())throw new CoreHttpError(409);};
+ const postSession=async()=>{
+  guard();
+  const controller=new AbortController(),until=performance.now()+15000;
+  let stop=()=>{};
+  const cancelled=new Promise<never>((_,reject)=>{stop=()=>{controller.abort();reject(new CoreHttpError(503));};});
+  signal.addEventListener('abort',stop,{once:true});
+  const timer=setTimeout(stop,15000);
+  try{
+   if(signal.aborted){stop();return await cancelled;}
+   const value=await Promise.race([fetchSession(controller.signal),cancelled]);
+   guard();
+   if(controller.signal.aborted||performance.now()>=until)throw new CoreHttpError(503);
+   return value;
+  }finally{clearTimeout(timer);signal.removeEventListener('abort',stop);}
+ };
  guard();
- const session=await fetchSession(signal);
+ const session=await (kind==='post'?postSession():fetchSession(signal));
  guard();
  if(session.user_id!==canonicalUuid(user))throw new AnalysisAccountChanged();
  const path='/api/private/supervisor/core/preparations'+(kind==='post'?'':'/'+canonicalUuid(String(payload)));
@@ -216,8 +232,9 @@ export async function preparationRequest(kind:'post'|'get'|'delete',payload:Prep
  if(!response.ok){const code=object(wire.error)&&typeof wire.error.code==='string'?wire.error.code:'SERVICE_UNAVAILABLE';throw new CoreHttpError(response.status,['PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED','MEANING_LIMIT_EXCEEDED','IDEMPOTENCY_CONFLICT','PLAN_STALE'].includes(code)?code:'SERVICE_UNAVAILABLE');}
  if(wire.error!==null)throw new CoreHttpError(502);
  const value=await preparationValue(wire.data,kind==='post'?(payload as PrepareBody).draft:undefined);
+ guard();
  if(kind!=='post'&&canonicalUuid(value.preparation_id)!==canonicalUuid(String(payload)))throw new CoreHttpError(502);
- const after=await fetchSession(signal);
+ const after=await (kind==='post'?postSession():fetchSession(signal));
  guard();
  if(after.user_id!==canonicalUuid(user))throw new AnalysisAccountChanged();
  return value;

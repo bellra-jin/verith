@@ -43,7 +43,9 @@ export async function sessionProxy(request: Request, path: string, query = '') {
   const guarded=demo||analysis;
   const reject=core?coreProxyError:analysis?analysisProxyError:demoProxyError;
   if(analysis&&!(fundamental?fundamentalAnalysisEnabled():flowAnalysisEnabled()))return reject('FEATURE_UNAVAILABLE',403);
-  const analysisSignal=analysis?AbortSignal.timeout(core?(path==='/api/supervisor/core/requests'&&request.method==='POST'?145000:16000):planning?12000:fundamental?70000:130000):undefined;
+  const preparationPost=path==='/api/supervisor/core/preparations'&&request.method==='POST';
+  const analysisSignal=analysis?AbortSignal.timeout(core?(preparationPost?95000:path==='/api/supervisor/core/requests'&&request.method==='POST'?145000:16000):planning?12000:fundamental?70000:130000):undefined;
+  const bodySignal=preparationPost?AbortSignal.timeout(16000):analysisSignal;
   if(demo && !flowDemoEnabled())return demoProxyError('FEATURE_UNAVAILABLE',403);
   const base = sessionBackendUrl();
   const headers = new Headers({'Cache-Control': 'private, no-store', Vary: 'Cookie, Origin'});
@@ -84,9 +86,9 @@ export async function sessionProxy(request: Request, path: string, query = '') {
       const reader=request.body?.getReader();const chunks:Uint8Array[]=[];let size=0;
       try {
         if(!reader)return reject('INPUT_INVALID',422);
-        while(true){const chunk=await boundedRead(reader,analysisSignal);if(chunk.done)break;size+=chunk.value.byteLength;if(size>(core?16384:4096)){await reader.cancel();return reject('INPUT_INVALID',422);}chunks.push(chunk.value);}
+        while(true){const chunk=await boundedRead(reader,bodySignal);if(chunk.done)break;size+=chunk.value.byteLength;if(size>(core?16384:4096)){await reader.cancel();return reject('INPUT_INVALID',422);}chunks.push(chunk.value);}
         const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}body=bytes.buffer;
-      }catch{return reject((core||planning)&&analysisSignal?.aborted?'DEADLINE_EXCEEDED':'INPUT_INVALID',(core||planning)&&analysisSignal?.aborted?504:422);}finally{try{reader?.releaseLock();}catch{ /* cancelled read */ }}
+      }catch{return reject((core||planning)&&(bodySignal?.aborted||analysisSignal?.aborted)?'DEADLINE_EXCEEDED':'INPUT_INVALID',(core||planning)&&(bodySignal?.aborted||analysisSignal?.aborted)?504:422);}finally{try{reader?.releaseLock();}catch{ /* cancelled read */ }}
     }
   }
   const forwarded = new Headers({Accept:'application/json',...((core||planning)?{'Accept-Encoding':'identity'}:{})});

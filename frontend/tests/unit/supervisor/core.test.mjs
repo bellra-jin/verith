@@ -1,8 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';import ts from 'typescript';import {webcrypto} from 'node:crypto';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const shared=JSON.parse(fs.readFileSync('tests/fixtures/cf022-supervisor-core.json','utf8'));
-function load(fetcher=()=>{throw Error('Unexpected network');}){
- const cache={};function mod(file){if(cache[file])return cache[file];const m={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:m,exports:m.exports,URL,URLSearchParams,Response,Request,Headers,TextEncoder,TextDecoder,AbortController,AbortSignal,crypto:webcrypto,fetch:fetcher,require(id){if(id==='@/features/flow/lib/analysis-request')return mod('src/features/flow/lib/analysis-request.ts');throw Error('Closed module registry');}},{timeout:100});cache[file]=m.exports;return m.exports;}
+function load(fetcher=()=>{throw Error('Unexpected network');},runtime={}){
+ const cache={};function mod(file){if(cache[file])return cache[file];const m={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:m,exports:m.exports,URL,URLSearchParams,Response,Request,Headers,TextEncoder,TextDecoder,AbortController,AbortSignal,performance,setTimeout,clearTimeout,crypto:webcrypto,fetch:fetcher,...runtime,require(id){if(id==='@/features/flow/lib/analysis-request')return mod('src/features/flow/lib/analysis-request.ts');throw Error('Closed module registry');}},{timeout:100});cache[file]=m.exports;return m.exports;}
  return {h:mod('src/features/supervisor/lib/supervisor-request.ts'),flow:mod('src/features/flow/lib/analysis-request.ts')};
 }
 const draft={original_query:'삼성전자 수급과 차트',answers:[],revision:0};
@@ -246,6 +246,125 @@ function actualSessionFunction(name,context={},callback=false){
  const text=callback?'const actual='+selected.getText(tree)+';module.exports=actual;':selected.getText(tree).replace(/^export /,'')+';module.exports='+name+';';
  const m={exports:{}};vm.runInNewContext(ts.transpileModule(text,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:m,exports:m.exports,...context},{timeout:100});return m.exports;
 }
+
+function preparationClock(){
+ let now=0,next=0;const timers=new Map(),scheduled=[];
+ return {timers,scheduled,performance:{now:()=>now},setTimeout(fn,ms){const id=++next;timers.set(id,{fn,at:now+ms});scheduled.push(ms);return id;},clearTimeout(id){timers.delete(id);},advance(ms){now+=ms;for(const [id,t]of [...timers])if(t.at<=now){timers.delete(id);t.fn();}}};
+}
+function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+const preparationView=()=>({preparation_id:A,created_at:'2026-01-01T00:00:00Z',expires_at:'2026-01-01T00:05:00Z',state:'pending',meaning_status:'pending',plan:null,consumed_binding_id:null});
+const preparationWire=()=>Response.json({schema_version:'supervisor.core.v1',request_id:A,trace_id:B,data:preparationView(),error:null});
+const preparationDraft={original_query:'삼성전자 수급',answers:[],revision:0};
+const flushPreparation=()=>new Promise(resolve=>setImmediate(resolve));
+test('CF034 actual preparationRequest bounds both auth phases15 while POST survives16 and keeps its body',async()=>{
+ const clock=preparationClock(),post=deferred(),entered=deferred(),c=new AbortController();let sessions=0,posts=0,body;
+ const {h}=load(async(url,init)=>{if(url==='/api/auth/session'){sessions++;return Response.json({user_id:A,csrf_token:'synthetic'});}posts++;body=init.body;entered.resolve();return post.promise;},clock);
+ const saved=await h.newPreparation(preparationDraft),result=h.preparationRequest('post',saved.body,A,c.signal,()=>true);
+ await entered.promise;clock.advance(20000);post.resolve(preparationWire());assert.equal((await result).preparation_id,A);
+ assert.equal(sessions,2);assert.equal(posts,1);assert.equal(body,JSON.stringify(saved.body));assert.deepEqual(clock.scheduled,[15000,15000]);assert.equal(clock.timers.size,0);
+});
+for(const phase of ['before','after','decode'])test('CF034 actual POST auth15 rejects '+phase+' stalled/late200 and removes listener/timer',async()=>{
+ const clock=preparationClock(),held=deferred(),entered=deferred(),c=new AbortController();let sessions=0,posts=0,added=0,removed=0;
+ const add=c.signal.addEventListener.bind(c.signal),remove=c.signal.removeEventListener.bind(c.signal);
+ c.signal.addEventListener=(...args)=>{added++;return add(...args);};c.signal.removeEventListener=(...args)=>{removed++;return remove(...args);};
+ const {h}=load(async(url)=>{if(url!=='/api/auth/session'){posts++;return preparationWire();}sessions++;if((phase==='after'?sessions===2:sessions===1)){entered.resolve();if(phase==='decode')return {ok:true,json:()=>held.promise};return held.promise;}return Response.json({user_id:A,csrf_token:'synthetic'});},clock);
+ const saved=await h.newPreparation(preparationDraft),result=h.preparationRequest('post',saved.body,A,c.signal,()=>true);
+ const rejection=assert.rejects(result,e=>e.status===503);await entered.promise;await flushPreparation();clock.advance(15000);await rejection;
+ held.resolve(phase==='decode'?{user_id:A,csrf_token:'synthetic'}:Response.json({user_id:A,csrf_token:'synthetic'}));await flushPreparation();
+ assert.equal(posts,phase==='after'?1:0);assert.equal(clock.timers.size,0);assert.equal(added,removed);
+});
+test('CF034 actual POST refuses already aborted outer, forwards mid-auth abort and rejects changed owner',async()=>{
+ for(const mode of ['already','during','owner']){
+  const clock=preparationClock(),entered=deferred(),held=deferred(),c=new AbortController();let sessions=0,posts=0,local;
+  const {h,flow}=load(async(url,init)=>{if(url!=='/api/auth/session'){posts++;return preparationWire();}sessions++;local=init.signal;if(mode==='during'){entered.resolve();return held.promise;}return Response.json({user_id:B,csrf_token:'synthetic'});},clock);
+  const saved=await h.newPreparation(preparationDraft);if(mode==='already')c.abort();
+  const result=h.preparationRequest('post',saved.body,A,c.signal,()=>true),rejection=assert.rejects(result,e=>mode==='owner'?e instanceof flow.AnalysisAccountChanged:typeof e.status==='number');
+  if(mode==='during'){await entered.promise;c.abort();assert.equal(local.aborted,true);held.resolve(Response.json({user_id:A,csrf_token:'synthetic'}));}
+  await rejection;assert.equal(posts,0);assert.equal(sessions,mode==='already'?0:1);assert.equal(clock.timers.size,0);
+ }
+});
+test('CF034 actual POST ignores late HTTP success after outer abort and uses no second auth',async()=>{
+ const clock=preparationClock(),entered=deferred(),held=deferred(),c=new AbortController();let sessions=0;
+ const {h}=load(async(url)=>{if(url==='/api/auth/session'){sessions++;return Response.json({user_id:A,csrf_token:'synthetic'});}entered.resolve();return held.promise;},clock);
+ const saved=await h.newPreparation(preparationDraft),result=h.preparationRequest('post',saved.body,A,c.signal,()=>true),rejection=assert.rejects(result);
+ await entered.promise;c.abort();held.resolve(preparationWire());await rejection;assert.equal(sessions,1);assert.equal(clock.timers.size,0);
+});
+for(const phase of ['owner','abort'])test('CF034 actual POST final auth rejects '+phase+' without adopting its successful HTTP result',async()=>{
+ const clock=preparationClock(),entered=deferred(),held=deferred(),c=new AbortController();let sessions=0,posts=0,local;
+ const {h,flow}=load(async(url,init)=>{if(url!=='/api/auth/session'){posts++;return preparationWire();}sessions++;if(sessions===2){local=init.signal;entered.resolve();return held.promise;}return Response.json({user_id:A,csrf_token:'synthetic'});},clock);
+ const saved=await h.newPreparation(preparationDraft),result=h.preparationRequest('post',saved.body,A,c.signal,()=>true),rejection=assert.rejects(result,e=>phase==='owner'?e instanceof flow.AnalysisAccountChanged:typeof e.status==='number');
+ await entered.promise;if(phase==='abort'){c.abort();assert.equal(local.aborted,true);}held.resolve(Response.json({user_id:phase==='owner'?B:A,csrf_token:'synthetic'}));await rejection;
+ assert.equal(posts,1);assert.equal(sessions,2);assert.equal(clock.timers.size,0);
+});
+for(const kind of ['get','delete'])test('CF034 preparation '+kind+' does not inherit POST auth timers',async()=>{
+ const clock=preparationClock(),methods=[];const {h}=load(async(url,init)=>{methods.push([url,init?.method]);return url==='/api/auth/session'?Response.json({user_id:A,csrf_token:'synthetic'}):preparationWire();},clock);
+ await h.preparationRequest(kind,A,A,new AbortController().signal,()=>true);assert.deepEqual(clock.scheduled,[]);assert.equal(methods.filter(([,method])=>method===kind.toUpperCase()).length,1);
+});
+test('CF034 actual storage hash cannot write after its action becomes stale',async()=>{
+ const saved=await load().h.newPreparation(preparationDraft),entered=deferred(),held=deferred(),storage=store();let current=true;
+ const {h}=load(undefined,{crypto:{randomUUID:()=>A,subtle:{async digest(...args){entered.resolve();await held.promise;return webcrypto.subtle.digest(...args);}}}});
+ const result=h.writePreparation(storage,A,saved,()=>current),rejection=assert.rejects(result,e=>e.status===409);await entered.promise;current=false;held.resolve();await rejection;assert.equal(storage.getItem(h.preparationKey(A)),null);
+});
+function preparationAction(saved=null){
+ const clock=preparationClock(),{h,flow}=load(),events=[],ref=value=>({current:value}),href='https://app.unit/research';
+ const context={verification:ref({pending:false}),verified:true,verifiedHref:ref(href),active:ref(true),document:{visibilityState:'visible',activeElement:null,body:{}},window:{location:{href}},supervisorId:null,user:A,authEpoch:1,AbortController,HTMLElement:class SyntheticHTMLElement{},
+  pending:ref(null),known:ref(null),preparing:ref(saved),planRef:ref(null),draftRef:ref(preparationDraft),preparationRef:ref(null),outcomeRef:ref(null),consentRef:ref({}),
+  generation:ref(0),controller:ref(null),commandPending:ref(false),focusMovement:ref(0),intent:ref(new flow.AnalysisIntent()),planFocus:ref({invalidate(){},begin(){},adopt(){}}),timer:ref({stop(){}}),sessionStorage:store(),
+  matchesUrl:()=>true,newPreparation:h.newPreparation,writePreparation:h.writePreparation,bindPreparation:h.bindPreparation,planValue:h.planValue,preparationRequest:async()=>preparationView(),CoreHttpError:h.CoreHttpError,requiresReauthentication:()=>false,
+  clearConsent(){},navigate(){},invalidate(){},onAccountChange(){},setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout};
+ for(const name of ['setBusy','setError','setPlan','setDraft','setPreparation','setLocked','setReplayable','setOutcome'])context[name]=v=>events.push([name,v]);
+ return {context,clock,events,h,action:actualSessionFunction('action',context)};
+}
+for(const kind of ['new','child','get'])test('CF034 actual action selects '+kind+' HTTP before choosing130/16 and does not renew timer',async()=>{
+ const h=load().h,root=await h.newPreparation(preparationDraft),saved=kind==='get'?await h.bindPreparation(root,A):root;
+ const run=preparationAction(kind==='new'?null:saved),entered=deferred(),held=deferred();let method,calls=0;
+ run.context.preparationRequest=async(op)=>{method=op;calls++;entered.resolve();return held.promise;};run.action=actualSessionFunction('action',run.context);
+ const child={...preparationDraft,selected_ticker:'005930',candidate_ref:'a'.repeat(64)};
+ const result=run.action('prepare',kind==='child'?child:undefined,kind==='child'?B:null);await entered.promise;
+ assert.equal(method,kind==='get'?'get':'post');assert.deepEqual(run.clock.scheduled,[kind==='get'?16000:130000]);
+ if(kind!=='get')run.clock.advance(20000);held.resolve(preparationView());await result;
+ assert.equal(calls,1);assert.equal(run.context.preparationRef.current.preparation_id,A);assert.equal(run.context.commandPending.current,false);assert.equal(run.clock.timers.size,0);
+});
+test('CF034 actual action timeout preserves identical key, closes own pending and old finally cannot unlock a new request',async()=>{
+ const run=preparationAction(),entered=deferred(),old=deferred(),fresh=deferred(),second=deferred(),bodies=[];
+ run.context.preparationRequest=async(_op,body)=>{bodies.push(JSON.stringify(body));if(bodies.length===1){entered.resolve();return old.promise;}second.resolve();return fresh.promise;};run.action=actualSessionFunction('action',run.context);
+ const first=run.action('prepare');await entered.promise;const before=run.context.sessionStorage.getItem(run.h.preparationKey(A));run.clock.advance(130000);
+ assert.equal(run.context.controller.current.signal.aborted,true);assert.equal(run.context.commandPending.current,false);assert.ok(run.events.some(([name,v])=>name==='setError'&&v));
+ assert.equal(run.context.sessionStorage.getItem(run.h.preparationKey(A)),before);
+ const next=run.action('prepare');await second.promise;assert.equal(run.context.commandPending.current,true);old.resolve(preparationView());await first;
+ assert.equal(run.context.commandPending.current,true);assert.equal(run.context.preparationRef.current,null);assert.equal(run.clock.timers.size,1);assert.equal(bodies[0],bodies[1]);fresh.resolve(preparationView());await next;assert.equal(run.clock.timers.size,0);
+});
+test('CF034 actual GET action expires at16 without a POST or expanded timer',async()=>{
+ const h=load().h,saved=await h.bindPreparation(await h.newPreparation(preparationDraft),A),run=preparationAction(saved),entered=deferred(),held=deferred();let calls=0;
+ run.context.preparationRequest=async method=>{assert.equal(method,'get');calls++;entered.resolve();return held.promise;};run.action=actualSessionFunction('action',run.context);
+ const result=run.action('prepare');await entered.promise;run.clock.advance(16000);assert.equal(run.context.controller.current.signal.aborted,true);assert.equal(run.context.commandPending.current,false);held.resolve(preparationView());await result;
+ assert.equal(calls,1);assert.deepEqual(run.clock.scheduled,[16000]);assert.equal(run.context.preparationRef.current,null);assert.equal(run.clock.timers.size,0);
+});
+test('CF034 actual action closes before HTTP if prepared operation changes during hash',async()=>{
+ const run=preparationAction();let calls=0;run.context.newPreparation=async(...args)=>run.h.bindPreparation(await run.h.newPreparation(...args),A);run.context.preparationRequest=async()=>{calls++;return preparationView();};run.action=actualSessionFunction('action',run.context);
+ await run.action('prepare');assert.equal(calls,0);assert.equal(run.context.preparationRef.current,null);assert.equal(run.clock.timers.size,0);
+});
+test('CF034 actual action503 keeps owner-scoped body/key and only an explicit retry sends again',async()=>{
+ const run=preparationAction(),bodies=[];run.context.preparationRequest=async(_method,body)=>{bodies.push(JSON.stringify(body));if(bodies.length===1)throw new run.h.CoreHttpError(503);return preparationView();};run.action=actualSessionFunction('action',run.context);
+ await run.action('prepare');const before=run.context.sessionStorage.getItem(run.h.preparationKey(A));assert.ok(before);assert.equal(bodies.length,1);assert.equal(run.context.commandPending.current,false);assert.equal(run.context.preparationRef.current,null);
+ await run.action('prepare');assert.equal(bodies.length,2);assert.equal(bodies[0],bodies[1]);assert.equal(run.context.sessionStorage.getItem(run.h.preparationKey(B)),null);assert.equal(run.clock.timers.size,0);
+});
+for(const stage of ['new-hash','storage','plan-hash','binding-hash'])test('CF034 actual action abort during '+stage+' cannot send/adopt stale data',async()=>{
+ const run=preparationAction(),entered=deferred(),held=deferred();let posts=0;
+ run.context.preparationRequest=async()=>{posts++;return {...preparationView(),plan:stage==='plan-hash'?{}:null};};
+ if(stage==='new-hash')run.context.newPreparation=async(...args)=>{entered.resolve();await held.promise;return run.h.newPreparation(...args);};
+ if(stage==='storage')run.context.writePreparation=async(...args)=>{entered.resolve();await held.promise;return run.h.writePreparation(...args);};
+ if(stage==='plan-hash')run.context.planValue=async()=>{entered.resolve();await held.promise;};
+ if(stage==='binding-hash')run.context.bindPreparation=async(...args)=>{entered.resolve();await held.promise;return run.h.bindPreparation(...args);};
+ run.action=actualSessionFunction('action',run.context);const result=run.action('prepare');await entered.promise;run.clock.advance(130000);held.resolve();await result;
+ assert.equal(posts,['new-hash','storage'].includes(stage)?0:1);assert.equal(run.context.preparationRef.current,null);assert.equal(run.context.commandPending.current,false);assert.equal(run.clock.timers.size,0);
+});
+for(const change of ['hide','navigation','generation','unmount'])test('CF034 actual action late success cannot survive '+change,async()=>{
+ const run=preparationAction(),entered=deferred(),held=deferred();run.context.preparationRequest=async()=>{entered.resolve();return held.promise;};run.action=actualSessionFunction('action',run.context);
+ const result=run.action('prepare');await entered.promise;
+ if(change==='hide')run.context.document.visibilityState='hidden';if(change==='navigation')run.context.window.location.href+='/other';if(change==='generation')run.context.generation.current++;if(change==='unmount')run.context.active.current=false;
+ run.context.controller.current.abort();held.resolve(preparationView());await result;assert.equal(run.context.preparationRef.current,null);assert.equal(run.clock.timers.size,0);
+});
 test('CF027 storage latch closes on marker/malformed/unreadable state and session generations reject stale visibility/URL/unmount',()=>{
  const stored=actualSessionFunction('storedReauthenticationRequired');assert.equal(stored(()=>null),false);
  for(const value of ['required','',JSON.stringify({unexpected:true})])assert.equal(stored(()=>value),true);assert.equal(stored(()=>{throw Error('storage denied');}),true);

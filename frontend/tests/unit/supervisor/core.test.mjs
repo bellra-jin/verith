@@ -773,3 +773,46 @@ test('CF028 mounted scenario arm requires a prior owned confirmation and a finit
  assert.equal(arm('mounted-get-arbitrary'),false);assert.equal(arm('mounted-get-stored'),true);
  assert.equal(context.scenario.name,'mounted-get-stored');assert.equal(context.bindings.size,2);
 });
+
+// CF041: actual JSX with injected no-op hooks; these are not mounted lifecycle tests.
+function chatNavigationUnit(){
+ const source=fs.readFileSync('src/features/supervisor/components/chat-view.tsx','utf8'),bundle={exports:{}},effects=[];
+ const jsx=(type,props)=>({type,props}),requests=[],storage=[],callbacks=[];
+ const failFetch=(...args)=>{requests.push(args);throw Error('Navigation cannot fetch');};
+ const saved={getItem:key=>{storage.push(['get',key]);throw Error('Navigation cannot read pending');},setItem:(...args)=>{storage.push(['set',...args]);throw Error('Navigation cannot write pending');},removeItem:key=>{storage.push(['remove',key]);throw Error('Navigation cannot remove pending');}};
+ vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,{
+  module:bundle,exports:bundle.exports,fetch:failFetch,sessionStorage:saved,window:{sessionStorage:saved},
+  require(id){if(id==='react')return {useRef:()=>({current:null}),useEffect:fn=>effects.push(fn),useLayoutEffect:fn=>effects.push(fn)};if(id==='react/jsx-runtime')return {jsx,jsxs:jsx,Fragment:'fragment'};if(id==='../lib/supervisor-request')return load().h;throw Error('Closed CF041 JSX registry');},
+ },{timeout:100});
+ const base={draft:{original_query:'삼성전자 재무 원질문 · 보내지 않음',answers:[],revision:0},plan:null,outcome:null,busy:false,verified:true,locked:false,replayable:false,error:'',consent:false,partialConsent:false,waivers:[],observationEnded:false};
+ for(const name of ['onQuery','onPrepare','onAnswer','onSelect','onConsent','onPartial','onWaiver','onConfirm','onObserve','onNew','onArchive','onPlanCommit','onPendingCommit','onCancelPreparation'])base[name]=(...args)=>callbacks.push([name,...args]);
+ return {render(change){const props={...base,...change},before=JSON.stringify(props),nodes=[];const visit=value=>{if(Array.isArray(value)){value.forEach(visit);return;}if(value&&typeof value==='object'){nodes.push(value);visit(value.props?.children);}};visit(bundle.exports.ChatView(props));assert.equal(JSON.stringify(props),before);return nodes;},requests,storage,callbacks,effects};
+}
+for(const state of [{},{busy:true},{verificationPending:true},{locked:true,verified:false},{outcome:{plan:null,plan_status:'deleted',coverage:'partial',views:[],flow:null}},{plan:{status:'unsupported',requested_views:['fundamental'],frame:{conditions:[],unresolved_slots:[]},resolution:null,required_waivers:[]}}])test('CF041 literal native Fundamental navigation survives state '+JSON.stringify(state),()=>{
+ const unit=chatNavigationUnit();
+ for(let render=0;render<3;render++){
+  const nodes=unit.render(state),links=nodes.filter(n=>n.type==='a'&&n.props.href==='/fundamental');
+  assert.equal(links.length,1);const link=links[0];assert.equal(link.props.children,'재무 분석·본인 결과 열기');
+  assert.deepEqual(Object.keys(link.props).sort(),['children','href']);
+  assert.equal(nodes.filter(n=>n.type==='a'&&n.props.href==='/reports/technical').length,1);
+  assert.ok(nodes.some(n=>n.type==='small'&&n.props.children==='별도 재무 화면에서 실행 여부를 확인합니다. 채팅의 재무 실행은 아직 미연결입니다.'));
+ }
+ assert.equal(unit.requests.length,0);assert.equal(unit.storage.length,0);assert.equal(unit.callbacks.length,0);
+});
+test('CF041 actual fixture handles only raw exact GET marker and leaves API/session counters untouched',async()=>{
+ const {validateFixtureTarget}=await import('../../helpers/supervisor-fixture.mjs');
+ const target=fixtureFunction('fundamentalNavigationTarget',{});
+ assert.equal(target('/fundamental','GET').status,200);
+ for(const method of ['POST','PUT','PATCH','DELETE','HEAD','OPTIONS'])assert.equal(target('/fundamental',method).status,405);
+ for(const raw of ['/fundamental?','/fundamental?analysis_id='+A,'/fundamental#x','/fundamental/','/fundamental/extra','/fundamental\\x'])assert.equal(target(raw,'GET').status,422);
+ for(const raw of ['/research','/api/auth/session','/bundle.js','/chat.css'])assert.equal(target(raw,'GET'),null);
+ const counters={sessionGET:0,preparePOST:0,confirmPOST:0},before=JSON.stringify(counters),writes=[];
+ const handle=fixtureFunction('handle',{cap:{ports:[12345]},origin:'http://127.0.0.1:12345',nonce:'synthetic',failure:()=>({}),validateFixtureTarget,fundamentalNavigationTarget:target,terminal:{open:()=>true},recordAttempt(){throw Error('Navigation must not record API attempt');},counts:counters});
+ for(const method of ['GET','POST']){
+  const req={url:'/fundamental',method,headers:{host:'127.0.0.1:12345'}},res={setHeader:(...args)=>writes.push(['header',...args]),writeHead:(...args)=>writes.push(['status',...args]),end:value=>writes.push(['end',value])};
+  await handle(req,res);
+  if(method==='GET'){assert.equal(writes.find(x=>x[0]==='status')[1],200);const html=writes.find(x=>x[0]==='end')[1];assert.match(html,/CF041 재무 탐색 목적지/);assert.match(html,/<a href="\/research">리서치 대화로 돌아가기<\/a>/);assert.doesNotMatch(html,/<script|analysis_id|supervisor_id|idempotency|consent|owner|ticker|원질문/);}
+  else assert.equal(writes.findLast(x=>x[0]==='status')[1],405);
+ }
+ assert.equal(JSON.stringify(counters),before);
+});

@@ -30,7 +30,7 @@ onWaiver:(id:string,value:boolean)=>void;
 onConfirm:()=>void;
 onObserve:()=>void;
 onNew:()=>void;onArchive:()=>void};
-const labels:Record<string,string>={flow:'수급 · Flow',technical:'차트 · 미연결',fundamental:'재무 · 미연결',macro:'거시 · 후순위',industry:'산업 · 미연결',news:'뉴스 · 제외',overview:'종합 · 범위 확인'};
+const labels:Record<string,string>={flow:'수급 · Flow',technical:'차트 · 미연결',fundamental:'재무 · 채팅 실행 미연결',macro:'거시 · 후순위',industry:'산업 · 미연결',news:'뉴스 · 제외',overview:'종합 · 범위 확인'};
 export function ChatView(p:ChatProps){
  const plan=p.outcome?.plan??p.plan,deleted=p.outcome?.plan_status==='deleted',status=p.outcome?.flow?.state;
  const ready=plan&&['ready','scope_confirmation'].includes(plan.status);
@@ -39,9 +39,9 @@ export function ChatView(p:ChatProps){
  useLayoutEffect(()=>{if(busy)onPendingCommit?.();},[busy,onPendingCommit]);
  useEffect(()=>{if(plan&&heading.current)onPlanCommit?.(plan,heading.current);},[plan,onPlanCommit]);
  return <section className="supervisor-chat" aria-label="Supervisor 리서치 대화" aria-busy={blocked}>
-   {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native owned-read navigation preserves session teardown. */}
-   <p className="sc-notice"><a href="/reports/technical">저장된 차트 결과 보기 · 조회 전용</a><small>저장 결과 탐색이며 새 Technical 분석을 실행하지 않습니다.</small></p>
-  <header className="sc-header"><span className="sc-eyebrow">VERIθ · RESEARCH</span><h1>무엇이 궁금하신가요?</h1><p>질문을 확인하고, 지금 연결된 분석부터 근거와 함께 살펴봅니다.</p><div className="sc-badges"><span>연결됨 · Flow</span><span>차트·재무 · 아직 미연결</span></div></header>
+   {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native navigation preserves session teardown and separate-screen consent. */}
+   <p className="sc-notice"><a href="/reports/technical">저장된 차트 결과 보기 · 조회 전용</a><small>저장 결과 탐색이며 새 Technical 분석을 실행하지 않습니다.</small><a href="/fundamental">재무 분석·본인 결과 열기</a><small>별도 재무 화면에서 실행 여부를 확인합니다. 채팅의 재무 실행은 아직 미연결입니다.</small></p>
+  <header className="sc-header"><span className="sc-eyebrow">VERIθ · RESEARCH</span><h1>무엇이 궁금하신가요?</h1><p>질문을 확인하고, 지금 연결된 분석부터 근거와 함께 살펴봅니다.</p><div className="sc-badges"><span>연결됨 · Flow</span><span>차트·재무 · 채팅 실행 미연결</span></div></header>
   <div className="sc-thread" aria-live="polite">
    {p.verificationPending&&<p role="status">상태 확인 중 · 실행 없음</p>}
    {deleted?<article className="sc-card"><h2>삭제된 결과입니다</h2><p>원질문과 계획·결과를 다시 표시하지 않습니다.</p></article>:<>

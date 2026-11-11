@@ -108,7 +108,8 @@ class AccessBoundary:
                 await send(message)
             await self.app(scope,fundamental_receive,fundamental_send);return
         if path.startswith('/api/supervisor/core'):
-            import asyncio,re
+            import asyncio,math,re
+            started=asyncio.get_running_loop().time()
             from src.shared.config import settings
             from src.modules.auth.api.router import configured
             from src.modules.supervisor.api.router import failure
@@ -116,16 +117,25 @@ class AccessBoundary:
             from src.modules.supervisor.domain.contracts import decode
             if not settings.FLOW_ANALYSIS_ENABLED:await failure(scope,'FEATURE_UNAVAILABLE',403)(scope,receive,send);return
             if not configured():await failure(scope,'AUTH_REQUIRED',401)(scope,receive,send);return
-            timeout=140 if method=='POST' and path=='/api/supervisor/core/requests' else 15
-            deadline=asyncio.get_running_loop().time()+timeout;scope.setdefault('state',{})['core_deadline']=deadline
+            preparation=method=='POST' and path=='/api/supervisor/core/preparations'
+            timeout=75 if preparation else 140 if method=='POST' and path=='/api/supervisor/core/requests' else 15
+            deadline=started+timeout
             try:
+                state=scope.setdefault('state',{})
+                if preparation:
+                    earlier=state.get('core_deadline',deadline)
+                    if type(earlier) not in {int,float} or type(earlier) is float and not math.isfinite(earlier):raise TimeoutError()
+                    deadline=min(deadline,earlier)
+                    state['core_preparation_started_at']=started
+                    state['core_admission_deadline']=min(deadline,started+15)
+                state['core_deadline']=deadline
                 if scope.get('query_string') or not (method=='POST' and path in {'/api/supervisor/core/prepare','/api/supervisor/core/requests','/api/supervisor/core/preparations'} or method=='GET' and re.fullmatch(r'/api/supervisor/core/requests/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',path) or method in {'GET','DELETE'} and re.fullmatch(r'/api/supervisor/core/preparations/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',path)):raise ValueError()
                 raw=None
                 if method=='POST':
                     h=scope.get('headers',[]);ct=[v for k,v in h if k.lower()==b'content-type'];cl=[v for k,v in h if k.lower()==b'content-length']
                     if len(ct)!=1 or ct[0].split(b';')[0].strip().lower()!=b'application/json' or any(k.lower()==b'content-encoding' for k,v in h) or len(cl)>1 or cl and (not cl[0].isdigit() or int(cl[0])>16384):raise ValueError()
                     raw=bytearray()
-                    async with asyncio.timeout_at(deadline):
+                    async with asyncio.timeout_at(state['core_admission_deadline'] if preparation else deadline):
                         while True:
                             msg=await receive()
                             if msg['type']!='http.request':raise ValueError()
@@ -133,6 +143,7 @@ class AccessBoundary:
                             raw.extend(msg.get('body',b''))
                             if not msg.get('more_body',False):break
                     (Draft if path.endswith('/prepare') else PreparationRequest if path.endswith('/preparations') else Confirm).model_validate(decode(raw))
+                    if preparation and asyncio.get_running_loop().time()>=state['core_admission_deadline']:raise TimeoutError()
             except TimeoutError:await failure(scope,'DEADLINE_EXCEEDED',504)(scope,receive,send);return
             except (ValueError,TypeError,UnicodeError,RecursionError):await failure(scope,'INPUT_INVALID',422)(scope,receive,send);return
             delivered=False

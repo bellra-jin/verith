@@ -1,6 +1,7 @@
 """Once-only meaning preparation and immutable adoption into the existing Flow binding."""
 import asyncio
 import hashlib
+import math
 from datetime import timedelta
 from uuid import UUID, uuid4
 
@@ -175,11 +176,18 @@ class PreparationService:
             await self.session.rollback()
             raise
 
-    async def post(self, body, request_id):
+    async def post(self, body, request_id, *, deadline=None):
         id = None
         claimed = False
         try:
-            async with asyncio.timeout(75):
+            if deadline is None:
+                timeout = asyncio.timeout(75)  # Existing private/direct service contract.
+            else:
+                now = asyncio.get_running_loop().time()
+                if type(deadline) not in {int, float} or type(deadline) is float and not math.isfinite(deadline) or deadline <= now:
+                    raise PreparationConflict('DEADLINE_EXCEEDED', 504)
+                timeout = asyncio.timeout_at(min(deadline, now + 75))
+            async with timeout:
                 await self.session.rollback()
                 await self.auth()
                 key = hashlib.sha256(body.prepare_key.encode()).digest()

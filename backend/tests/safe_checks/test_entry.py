@@ -754,6 +754,17 @@ class CF022Boundary(unittest.TestCase):
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 class CF023Boundary(unittest.TestCase):
+    def test_preparation_public_deadline_source_and_existing_pin(self):
+        import hashlib
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        name='backend/src/shared/http/access_boundary.py'
+        self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),c.CF036_INPUTS[name])
+        self.assertFalse(c.source_allowed(name+'.adjacent'))
+        for path in ('backend/src/modules/supervisor/api/router.py','backend/src/modules/supervisor/application/preparation_service.py',name):
+            self.assertIn(path,c.CF023_SOURCES)
+        self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
+
     def test_exact_inputs_and_collection(self):
         import hashlib
         from scripts import check_safe as c

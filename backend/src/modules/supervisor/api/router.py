@@ -1,5 +1,6 @@
 """Core authentication/CSRF/private response boundary; no direct AI proxy."""
 import asyncio
+import math
 from contextlib import AsyncExitStack
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Request, Response
@@ -26,6 +27,36 @@ def failure(scope, code, status):
         status = 503
     return JSONResponse(dict(schema_version='supervisor.core.v1', request_id=str(http_request_id(scope)), trace_id=str(uuid4()), data=None, error=dict(code=code, message='Supervisor request unavailable')), status_code=status, headers=PRIVATE)
 
+def finite_deadline(value):
+    return type(value) in {int, float} and (type(value) is int or math.isfinite(value))
+
+
+def preparation_deadlines(request, now):
+    """Latch one public deadline; a route without middleware retains the short bound."""
+    state = request.scope.setdefault('state', {})
+    started = state.get('core_preparation_started_at')
+    total = state.get('core_deadline')
+    admission = state.get('core_admission_deadline')
+    if started is None:
+        if total is not None and not finite_deadline(total):
+            raise TimeoutError()
+        total = min(total, now + 15) if total is not None else now + 15
+        if admission is not None:
+            if not finite_deadline(admission):
+                raise TimeoutError()
+            total = min(total, admission)
+        admission = total
+    else:
+        if not all(finite_deadline(value) for value in (started, total, admission)) or started > now:
+            raise TimeoutError()
+        total = min(total, started + 75)
+        admission = min(admission, total, started + 15)
+    if now >= min(total, admission):
+        raise TimeoutError()
+    state['core_deadline'], state['core_admission_deadline'] = total, admission
+    return total
+
+
 class CoreRoute(APIRoute):
 
     def get_route_handler(self):
@@ -35,8 +66,13 @@ class CoreRoute(APIRoute):
             try:
                 prior = request.scope.get('fastapi_function_astack')
                 try:
-                    timeout = 140 if request.method == 'POST' and request.url.path.endswith('/requests') else 15
-                    async with asyncio.timeout_at(request.scope.get('state', {}).get('core_deadline', asyncio.get_running_loop().time() + timeout)):
+                    now = asyncio.get_running_loop().time()
+                    if request.method == 'POST' and request.url.path == PATH + '/preparations':
+                        deadline = preparation_deadlines(request, now)
+                    else:
+                        timeout = 140 if request.method == 'POST' and request.url.path.endswith('/requests') else 15
+                        deadline = request.scope.get('state', {}).get('core_deadline', now + timeout)
+                    async with asyncio.timeout_at(deadline):
                         async with AsyncExitStack() as stack:
                             request.scope['fastapi_function_astack'] = stack
                             response = await handler(request)
@@ -67,7 +103,20 @@ class CoreRoute(APIRoute):
 router = APIRouter(prefix=PATH, route_class=CoreRoute, tags=['supervisor-core'])
 
 async def service(request: Request, session=Depends(get_session, scope='function')):
-    principal = await request_principal(request, session, mutation=request.method in {'POST', 'DELETE'})
+    if request.method == 'POST' and request.url.path == PATH + '/preparations':
+        state = request.scope.get('state', {})
+        total, admission = state.get('core_deadline'), state.get('core_admission_deadline')
+        if not all(finite_deadline(value) for value in (total, admission)):
+            raise TimeoutError()
+        deadline = min(total, admission)
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError()
+        async with asyncio.timeout_at(deadline):
+            principal = await request_principal(request, session, mutation=True)
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError()
+    else:
+        principal = await request_principal(request, session, mutation=request.method in {'POST', 'DELETE'})
     return SupervisorService(session, principal=principal, client=AIClient(settings.AI_SERVICE_URL, 125, service_token=settings.FLOW_SERVICE_TOKEN))
 
 def envelope(request, data):
@@ -94,7 +143,10 @@ def preparations(value):
 
 @router.post('/preparations', response_model=PreparationResponse)
 async def prepare_once(request: Request, body: PreparationRequest, response: Response, value=Depends(service)):
-    result = await preparations(value).post(body, http_request_id(request.scope))
+    deadline = request.scope.get('state', {}).get('core_deadline')
+    if not finite_deadline(deadline) or asyncio.get_running_loop().time() >= deadline:
+        raise TimeoutError()
+    result = await preparations(value).post(body, http_request_id(request.scope), deadline=deadline)
     response.status_code = 202 if result['state'] == 'pending' else 200
     return envelope(request, result)
 

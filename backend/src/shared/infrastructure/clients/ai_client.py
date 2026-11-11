@@ -70,9 +70,11 @@ class AIClient:
             body=canonical(payload).encode('utf8')
             if len(body)>16384:raise ValueError()
         except (ValueError,TypeError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Supervisor request unavailable') from None
+        policy2=type(payload) is dict and type(payload.get('data')) is dict and payload['data'].get('policy_version')=='supervisor.flow-core.2'
+        timeout=70 if policy2 else 8
         try:
-            async with asyncio.timeout(8):
-                async with httpx.AsyncClient(timeout=8,transport=self._transport,trust_env=False,follow_redirects=False) as client:
+            async with asyncio.timeout(timeout):
+                async with httpx.AsyncClient(timeout=timeout,transport=self._transport,trust_env=False,follow_redirects=False) as client:
                     async with client.stream('POST',self._base_url+'/internal/supervisor/core/plan',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Flow-Service-Token':token.decode('ascii')}) as response:
                         if response.status_code==504:raise AITimeoutError('Supervisor request unavailable')
                         if response.status_code!=200:raise AIUnavailableError('Supervisor request unavailable')

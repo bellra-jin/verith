@@ -133,6 +133,7 @@ async def test_expiry_shortened_during_reservation_ACK_blocks_send_immediately(p
     assert len(requests)==(0 if phase=='count' else 1)
     assert budget.events.count('supplier')==(0 if phase=='count' else 1)
     assert instance.settlement_uncertain and not instance.block_confirmed
+    assert 'finish_entered' not in budget.events
 
 
 @pytest.mark.parametrize('bad',[None,'',True,'bad\ncredential','x'*513])
@@ -173,6 +174,9 @@ async def test_provider_failures_preserve_unknown_hold_and_bounded_fixed_error(k
     with pytest.raises(Exception) as error:await instance.propose(draft(),attempt_id=str(uuid4()))
     assert PRIVATE not in str(error.value) and budget.ledger.blocked and budget.ledger.reserved==50000000
     assert instance._key is None and instance._key_supplier is None
+    if kind=='timeout':
+        assert isinstance(error.value,TimeoutError)
+        assert 'provider_timeout' in [x['stage'] for x in instance.diagnostic()['events']]
 
 
 async def test_one_simulated_epoch_success_unknown_restart_cannot_reset_two_reservations():
@@ -189,7 +193,26 @@ async def test_one_simulated_epoch_success_unknown_restart_cannot_reset_two_rese
 async def test_settlement_ACK_unknown_never_returns_success_candidate():
     instance,budget,_=gateway(budget=CallbackBudget(fail='finish_after'))
     with pytest.raises(OSError):await instance.propose(draft(),attempt_id=str(uuid4()))
-    assert instance.settlement_uncertain and budget.ledger.blocked
+    assert instance.settlement_uncertain and budget.ledger.reserved==50000000
+    assert budget.events.count('finish_entered')==1
+
+
+@pytest.mark.parametrize('failure',['ack_loss','db_before','timeout'])
+async def test_settlement_attempt_latched_before_failure_and_never_retried(failure):
+    budget=CallbackBudget();entered=[];original=budget.finish
+    async def finish(*args,**kwargs):
+        entered.append('finish')
+        if failure=='ack_loss':
+            await original(*args,**kwargs)
+            raise OSError(PRIVATE)
+        if failure=='db_before':raise OSError(PRIVATE)
+        await asyncio.Event().wait()
+    budget.finish=finish
+    instance,_,requests=gateway(budget=budget,deadline=asyncio.get_running_loop().time()+.06)
+    with pytest.raises((OSError,TimeoutError)):await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert entered==['finish'] and len(requests)==2 and budget.ledger.reserved==50000000
+    assert instance.settlement_uncertain and instance._key is None and instance._key_supplier is None
+    assert 'settlement_ACK' not in [x['stage'] for x in instance.diagnostic()['events']]
 
 
 async def test_settlement_wait_uses_original_deadline_no_background_task():
@@ -214,6 +237,158 @@ async def test_cancellation_propagates_and_key_references_clear(stage):
     await entered.wait();task.cancel()
     with pytest.raises(asyncio.CancelledError):await task
     assert instance._key is None and instance._key_supplier is None
+
+
+async def test_gateway_whole_deadline_uses_verifier_with_reserved_settlement():
+    observed=[]
+    async def preflight(*args,deadline,**kwargs):
+        observed.append(deadline-asyncio.get_running_loop().time())
+        return deadline
+    instance,_,requests=gateway(preflight=preflight)
+    await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert 54<observed[0]<=55 and len(requests)==2
+    assert T.CAPS['provider_seconds']==55 and T.CAPS['verifier_seconds']==60
+    assert B.MEANING_SPEC==T.semantic_spec()
+    old=B.decode(B.canonical(B.MEANING_SPEC));old['caps']['provider_seconds']=5
+    assert B.sha(old)!=B.MEANING_SPEC_SHA256 and old['price']==B.MEANING_SPEC['price']
+    events=instance.diagnostic()['events']
+    assert [x['stage'] for x in events]==['count_dispatch_entered','count_response_received','count_validated',
+        'generation_dispatch_entered','generation_response_received','usage_observed','settlement_ACK']
+    assert all(set(x)=={'stage','elapsed_ms'} for x in events)
+    assert PRIVATE not in M.canonical(instance.diagnostic())
+    assert all(0<value<=55 for request in requests for value in request.extensions['timeout'].values())
+
+
+@pytest.mark.parametrize('constructor',['missing','later','earlier'])
+async def test_gateway_clamps_to_earliest_internal_caller_deadline(constructor):
+    now=asyncio.get_running_loop().time();caller=now+.08
+    configured=None if constructor=='missing' else now+(.04 if constructor=='earlier' else 20)
+    earliest=min(caller,configured if configured is not None else caller)
+    observed=[]
+    async def preflight(*args,deadline,**kwargs):observed.append(deadline);return deadline
+    instance,_,requests=gateway(deadline=configured,preflight=preflight)
+    await instance.propose(draft(),attempt_id=str(uuid4()),caller_deadline=caller)
+    assert observed[0]<earliest and len(requests)==2
+    assert all(0<value<.08 for request in requests for value in request.extensions['timeout'].values())
+
+
+async def test_meaning_outer_absolute_deadline_is_injected_into_real_gateway():
+    from src.supervisor.application.meaning_service import understand_v2
+    instance,_,_=gateway(deadline=asyncio.get_running_loop().time()+600)
+    propose=AsyncMock(return_value=T.MeaningProposal.model_validate(candidate()))
+    with patch.object(instance,'propose',propose):await understand_v2(draft(),instance,attempt_id=str(uuid4()))
+    received=propose.call_args.kwargs['caller_deadline']
+    assert 59<received-asyncio.get_running_loop().time()<=60
+
+
+async def test_send_timeout_leaves_deadline_for_normal_task_hold_ACK():
+    budget=CallbackBudget();finish=budget.finish
+    async def checked_finish(*args,**kwargs):
+        assert not asyncio.current_task().cancelling()
+        await finish(*args,**kwargs)
+    budget.finish=checked_finish
+    async def provider(request):
+        if request.url.path==O.COUNT_PATH:return httpx.Response(200,json={'object':'response.input_tokens','input_tokens':100})
+        await asyncio.Event().wait()
+    overall=asyncio.get_running_loop().time()+.08
+    budget.settlement_deadline=overall  # Explicit verifier-backed tail, not a legacy fallback.
+    instance,_,requests=gateway(budget=budget,send=provider,deadline=overall)
+    with pytest.raises(TimeoutError):await instance.propose(draft(),attempt_id=str(uuid4()))
+    assert len(requests)==2 and budget.ledger.blocked and budget.ledger.reserved==50000000
+    assert instance.block_confirmed and not instance.settlement_uncertain
+    stages=[x['stage'] for x in instance.diagnostic()['events']]
+    assert 'provider_timeout' in stages and stages[-1]=='hold_ACK'
+    assert 'generation_response_received' not in stages
+    assert all(0<value<.08 for request in requests for value in request.extensions['timeout'].values())
+
+
+async def test_external_cancellation_never_reenters_settlement_SQL():
+    budget=CallbackBudget();entered=asyncio.Event()
+    async def provider(request):
+        if request.url.path==O.COUNT_PATH:return httpx.Response(200,json={'object':'response.input_tokens','input_tokens':100})
+        entered.set();await asyncio.Event().wait()
+    instance,_,requests=gateway(budget=budget,send=provider)
+    task=asyncio.create_task(instance.propose(draft(),attempt_id=str(uuid4())))
+    await entered.wait();task.cancel()
+    with pytest.raises(asyncio.CancelledError):await task
+    assert 'finish_entered' not in budget.events and budget.ledger.active is not None
+    assert len(requests)==2 and budget.ledger.reserved==50000000 and instance.settlement_uncertain
+    assert instance.diagnostic()['events'][-1]['stage']=='cancelled'
+
+
+async def test_policy2_real_ASGI_client_and_meaning_have_nested_bounds():
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    calls=[];timeouts=[];absolute=[]
+    class SlowSyntheticGateway:
+        async def propose(self,*args,**kwargs):
+            calls.append('propose');await asyncio.sleep(.12)
+            return T.MeaningProposal.model_validate(candidate())
+    app=C.load_meaning(gateway=SlowSyntheticGateway())
+    token='cf024-asgi-synthetic-service-token-at-least32'
+    client=AIClient('http://synthetic.invalid',8,transport=httpx.ASGITransport(app=app),service_token=token)
+    raw=dict(schema_version='supervisor.core.v1',request_id=str(uuid4()),trace_id=str(uuid4()),
+        data=dict(policy_version='supervisor.flow-core.2',phase='start',draft=draft().model_dump(mode='json'),attempt_id=str(uuid4())),error=None)
+    original=asyncio.timeout;original_at=asyncio.timeout_at
+    def scaled(seconds):
+        timeouts.append(seconds)
+        return original(seconds*.01)
+    def recorded(deadline):
+        absolute.append(deadline-asyncio.get_running_loop().time())
+        return original_at(deadline)
+    with patch.dict(__import__('os').environ,{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':token}),patch.object(asyncio,'timeout',scaled),patch.object(asyncio,'timeout_at',recorded):
+        result=await client.plan_supervisor_core(raw)
+    assert result['error'] is None and calls==['propose']
+    assert timeouts[0]==70
+    assert any(14<seconds<=15 for seconds in absolute) and any(64<seconds<=65 for seconds in absolute)
+    assert any(59<seconds<=60 for seconds in absolute)
+
+
+async def test_preparation_real_post_ASGI_survives_old_15_second_scaled_boundary():
+    """Actual post/build/exchange/ASGI/meaning, with only persistence/resolver mocked."""
+    from src.modules.supervisor.application.preparation_service import PreparationService
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    session=NS(rollback=AsyncMock(),commit=AsyncMock(),flush=AsyncMock())
+    principal_value=principal();request=body();now=datetime.now(timezone.utc);rows=[];calls=[]
+    class SlowSyntheticGateway:
+        async def propose(self,*args,**kwargs):
+            calls.append('propose');await asyncio.sleep(.2)
+            return T.MeaningProposal.model_validate(candidate())
+    app=C.load_meaning(gateway=SlowSyntheticGateway());token='cf024-asgi-synthetic-service-token-at-least32'
+    client=AIClient('http://synthetic.invalid',8,transport=httpx.ASGITransport(app=app),service_token=token)
+    service=PreparationService(session,principal=principal_value,client=client,epoch_id=uuid4())
+    async def admit(db,value):
+        row=NS(**value);row.redacted_at=None;row.consumed_binding_id=None
+        rows.append(row);return row
+    resolution=B.Resolution(status='resolved',reason='exact_match',stock=B.Stock(stock_code='000720',stock_name='현대건설',market='KOSPI'),candidates=[])
+    relative=[];absolute=[];original=asyncio.timeout;original_at=asyncio.timeout_at
+    def scaled(seconds):relative.append(seconds);return original(seconds*.01)
+    def scaled_at(deadline):
+        remaining=deadline-asyncio.get_running_loop().time();absolute.append(remaining)
+        return original_at(asyncio.get_running_loop().time()+max(0,remaining)*.01)
+    with patch.dict(__import__('os').environ,{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':token}),\
+         patch.object(repo,'by_key',AsyncMock(return_value=None)),patch.object(repo,'cleanup_owner',AsyncMock()),\
+         patch.object(repo,'clock',AsyncMock(return_value=now)),patch.object(repo,'admit',admit),\
+         patch.object(repo,'lineage',AsyncMock(side_effect=lambda *args:list(rows))),\
+         patch.object(repo,'closure',lambda *args:(None,None)),patch.object(service,'auth',AsyncMock()),\
+         patch.object(service,'resolve',AsyncMock(return_value=resolution)),\
+         patch.object(asyncio,'timeout',scaled),patch.object(asyncio,'timeout_at',scaled_at):
+        result=await service.post(request,uuid4())
+    assert result['state'] in {'ready','clarification','unsupported'} and calls==['propose']
+    assert relative[0]==75 and 70 in relative and session.commit.await_count>=2
+    assert any(14<seconds<=15 for seconds in absolute)
+    assert any(64<seconds<=65 for seconds in absolute) and any(59<seconds<=60 for seconds in absolute)
+
+
+@pytest.mark.parametrize('policy,expected',[('supervisor.flow-core.1',8),('supervisor.flow-core.2',70)])
+async def test_client_policy1_timeout_is_unchanged(policy,expected):
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    class StopBeforeHTTP(Exception):pass
+    factory=Mock(side_effect=StopBeforeHTTP)
+    client=AIClient('http://synthetic.invalid',8,service_token='cf024-asgi-synthetic-service-token-at-least32')
+    with patch.object(httpx,'AsyncClient',factory),pytest.raises(StopBeforeHTTP):
+        await client.plan_supervisor_core({'data':{'policy_version':policy}})
+    assert factory.call_args.kwargs['timeout']==expected
 
 
 def epoch_row():
@@ -254,6 +429,36 @@ def phase_scope():
     row=NS(id=uuid4(),attempt_id=UUID(attempt),owner_user_id=p.user_id,epoch_id=epoch,parent_id=None,state='pending',redacted_at=None,expires_at=now+timedelta(minutes=10),semantic_sha256=B.MEANING_SPEC_SHA256,semantic_json=B.canonical(B.MEANING_SPEC),prepare_key_digest=hashlib.sha256(request.prepare_key.encode()).digest(),request_digest=B.sha(request.model_dump(mode='json')),draft_digest=B.sha(request.draft.model_dump(mode='json',exclude={'selected_ticker','candidate_ref'})),draft_json=B.canonical(request.draft.model_dump(mode='json')))
     row.root_id=row.id
     return scope,row,attempt,now
+
+
+async def test_phase_budget_settlement_can_outlive_send_but_not_authority():
+    from contextlib import nullcontext
+    from src.modules.supervisor.infrastructure.preparation_repository import DurableMeaningBudget
+    scope,_,attempt,_=phase_scope();scope.attempt=attempt
+    scope.deadline=asyncio.get_running_loop().time()-1
+    scope.settlement_deadline=asyncio.get_running_loop().time()+.1
+    completed=AsyncMock()
+    with patch.object(C,'proof_identity',Mock()),patch.object(C,'bounded_owned_calls',lambda *args:nullcontext()),patch.object(DurableMeaningBudget,'finish',completed):
+        await scope.finish(attempt,{'state':'unknown','estimated_nano':None},blocked=True)
+    completed.assert_awaited_once();assert scope.stages==['hold_ACK'] and not scope.uncertain
+    scope.settlement_deadline=asyncio.get_running_loop().time()-1
+    with pytest.raises(CounterUnavailable):await scope.finish(attempt,{'state':'unknown','estimated_nano':None},blocked=True)
+    assert completed.await_count==1 and scope.uncertain
+
+
+async def test_phase_budget_cancelling_task_never_checks_driver_or_SQL():
+    from src.modules.supervisor.infrastructure.preparation_repository import DurableMeaningBudget
+    scope,_,attempt,_=phase_scope();scope.attempt=attempt;entered=asyncio.Event()
+    async def worker():
+        entered.set()
+        try:await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await scope.finish(attempt,{'state':'unknown','estimated_nano':None},blocked=True)
+    identity=Mock();finish=AsyncMock()
+    with patch.object(C,'proof_identity',identity),patch.object(DurableMeaningBudget,'finish',finish):
+        task=asyncio.create_task(worker());await entered.wait();task.cancel()
+        with pytest.raises(asyncio.CancelledError):await task
+    identity.assert_not_called();finish.assert_not_awaited();assert scope.uncertain
 
 
 @pytest.mark.parametrize('change',['owner','attempt','epoch','spec','draft','expired','deleted','revoked'])

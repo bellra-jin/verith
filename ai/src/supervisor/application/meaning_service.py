@@ -113,8 +113,14 @@ async def understand_v2(draft, gateway=None, *, attempt_id=None):
         status = 'unsupported' if base.hard_meaning else 'incomplete' if base.frame.unresolved_slots else 'deterministic'
         return base.frame, status
     try:
-        async with asyncio.timeout(5):
-            proposal = await (gateway or UnavailableCandidateGateway()).propose(draft, attempt_id=attempt_id)
+        deadline = asyncio.get_running_loop().time() + 60
+        selected = gateway or UnavailableCandidateGateway()
+        from src.supervisor.infrastructure.openai_meaning_gateway import OpenAIMeaningGateway
+        async with asyncio.timeout_at(deadline):
+            if isinstance(selected, OpenAIMeaningGateway):
+                proposal = await selected.propose(draft, attempt_id=attempt_id, caller_deadline=deadline)
+            else:
+                proposal = await selected.propose(draft, attempt_id=attempt_id)
         supplemented = assess(draft, proposal, source='model_assisted')
         status = 'incomplete' if supplemented.frame.unresolved_slots else 'supplemented'
         return supplemented.frame, status

@@ -269,7 +269,7 @@ class KeySource:
             if type(self.code_root) is not ReviewedCodeRoot:
                 raise ControllerError("KEY_SOURCE_SCOPE")
             self.code_root.check()
-            expected = self.code_root.path.parent / "verith" / "backend" / ".env"
+            expected = self.code_root.path.parent / "verith" / "ai" / ".env"
             if self.path != expected:
                 raise ControllerError("KEY_SOURCE_SCOPE")
         if regular(self.path, 0o644) != self.stamp:
@@ -1590,6 +1590,7 @@ async def verify_synthetic_continuation_database(directory):
 
 # v1.6 is a new approval aggregate, never a continuation/closed-grant override.
 AGGREGATE_END = datetime(2026, 11, 10, 21, tzinfo=timezone.utc)
+AGGREGATE_WINDOW = (datetime.fromisoformat('2026-11-11T00:49:56.734502+00:00'), datetime(2026,11,11,2,40,20,tzinfo=timezone.utc))
 _AGGREGATE_SEAL = object()
 
 
@@ -1643,14 +1644,14 @@ def aggregate_header(permission):
         permission.code_root.check()
         if path != permission.code_root.path.parent / '.cf026-openai-test-budget' / h['approval_event']:
             raise ControllerError('AGGREGATE_SCOPE')
-    if h['runtime_sha256'] != hashlib.sha256(read_fixed(Path(__file__),0o644,limit=131072)[0]).hexdigest() or h['mode']=='live' and parse_expiry(h['expires_at']) > AGGREGATE_END or parse_expiry(h['not_before']) >= parse_expiry(h['expires_at']):
+    if h['runtime_sha256'] != hashlib.sha256(read_fixed(Path(__file__),0o644,limit=131072)[0]).hexdigest() or h['mode']=='live' and not AGGREGATE_WINDOW[0]<=parse_expiry(h['not_before'])<parse_expiry(h['expires_at'])<=AGGREGATE_WINDOW[1] or parse_expiry(h['not_before']) >= parse_expiry(h['expires_at']):
         raise ControllerError('AGGREGATE_SCOPE')
     return h
 
 
 def aggregate_deadline(header):
     expiry=parse_expiry(header['expires_at'])
-    return min(expiry,AGGREGATE_END) if header['mode']=='live' else expiry
+    return min(expiry,AGGREGATE_WINDOW[1]) if header['mode']=='live' else expiry
 
 
 async def aggregate_authorized(permission, *, cleanup=False):

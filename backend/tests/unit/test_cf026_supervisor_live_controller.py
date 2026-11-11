@@ -5,7 +5,7 @@ import importlib.abc
 import os
 from pathlib import Path
 import sys
-from types import SimpleNamespace as NS
+from types import MappingProxyType, SimpleNamespace as NS
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -122,7 +122,7 @@ def test_live_source_uses_explicit_reviewed_origin_not_temporary_import_director
     root=tmp_path/'verith-supervisor-live-controller';script=root/'backend/scripts/cf026_supervisor_live_controller.py'
     script.parent.mkdir(parents=True);script.write_bytes(Path(C.__file__).read_bytes());script.chmod(0o644)
     info=root.stat();provenance=C.ReviewedCodeRoot(root,(info.st_dev,info.st_ino,info.st_uid,info.st_mode),C.hashlib.sha256(script.read_bytes()).hexdigest())
-    expected=root.parent/'verith/backend'/'.env'
+    expected=root.parent/'verith/ai'/'.env'
     source=C.KeySource(expected,{'synthetic_metadata_only':True},False,provenance)
     original=C.regular;checked=[]
     def metadata(path,mode):
@@ -137,6 +137,30 @@ def test_live_source_uses_explicit_reviewed_origin_not_temporary_import_director
         C.KeySource(expected,source.stamp,False).check()
     script.write_bytes(script.read_bytes()+b'\n')
     with pytest.raises(C.ControllerError,match='KEY_SOURCE_SCOPE'):provenance.check()
+
+
+@pytest.mark.parametrize("relative_path", [
+    "verith/backend/.env",
+    "verith/frontend/.env",
+    "verith-supervisor-live-controller/ai/.env",
+    "verith-other/ai/.env",
+    "verith/ai/other.env",
+])
+def test_live_source_rejects_other_service_paths_before_metadata_or_read(tmp_path, relative_path):
+    provenance = C.ReviewedCodeRoot(
+        tmp_path / "verith-supervisor-live-controller", (), "a" * 64,
+    )
+    source = C.KeySource(tmp_path / relative_path, {}, False, provenance)
+    with patch.object(C.ReviewedCodeRoot, "check") as check_origin, patch.object(
+        C, "regular", side_effect=AssertionError("No credential metadata access"),
+    ) as read_metadata, patch.object(
+        C, "read_fixed", side_effect=AssertionError("No credential content access"),
+    ) as read_content:
+        with pytest.raises(C.ControllerError, match="KEY_SOURCE_SCOPE"):
+            source.check()
+    check_origin.assert_called_once_with()
+    read_metadata.assert_not_called()
+    read_content.assert_not_called()
 
 
 class Hooks:
@@ -1381,8 +1405,1259 @@ def test_v16_live_deadline_stays_fixed_and_expired_after_shutdown(tmp_path):
         def now(cls,tz=None):return C.AGGREGATE_END+timedelta(days=366)
     async def run():
         with patch.object(C.ReviewedCodeRoot,'check',lambda _:None):
-            with pytest.raises(C.ControllerError,match='AGGREGATE_EXPIRED'):await C.aggregate_authorized(permission)
+            with pytest.raises(C.ControllerError,match='AGGREGATE_SCOPE'):await C.aggregate_authorized(permission)
             h['expires_at']=(C.AGGREGATE_END+timedelta(seconds=1)).isoformat()
             with pytest.raises(C.ControllerError,match='AGGREGATE_SCOPE'):C.aggregate_header(permission)
         assert not permission.path.exists()
     with patch.object(C,'datetime',Future):asyncio.run(run())
+
+
+@pytest.mark.parametrize('case', ['before', 'start', 'end', 'late-approval', 'early-window', 'late-window', 'old-window', 'naive'])
+def test_v18_fixed_live_window_is_closed_and_rechecked_after_authority(tmp_path, case):
+    permission, _, _ = aggregate_inputs(tmp_path)
+    start, end = C.AGGREGATE_WINDOW
+    h = permission.header
+    h.update(mode='live', not_before=start.isoformat(), expires_at=end.isoformat())
+    history = permission.history
+    permission.history = C.CoordinationHistory(history.identity_sha256, 'live', history.read, history.compare_exchange)
+    code_root = tmp_path / 'verith-supervisor-live-controller'
+    permission.code_root = C.ReviewedCodeRoot(code_root, (), h['runtime_sha256'])
+    permission.path = code_root.parent / '.cf026-openai-test-budget' / h['approval_event']
+    calls = []
+    class Clock(datetime):
+        current = start
+        @classmethod
+        def now(cls, tz=None):
+            return cls.current
+    async def approve(**scope):
+        calls.append(scope)
+        await asyncio.sleep(0)
+        if case == 'late-approval':
+            Clock.current = end
+        return True
+    permission.verify = approve
+    if case == 'before':
+        Clock.current = start - timedelta(microseconds=1)
+    elif case == 'end':
+        Clock.current = end
+    elif case == 'early-window':
+        h['not_before'] = (start - timedelta(microseconds=1)).isoformat()
+    elif case == 'late-window':
+        h['expires_at'] = (end + timedelta(seconds=1)).isoformat()
+    elif case == 'old-window':
+        h.update(not_before=(C.AGGREGATE_END-timedelta(minutes=1)).isoformat(), expires_at=C.AGGREGATE_END.isoformat())
+    elif case == 'naive':
+        h['not_before'] = start.replace(tzinfo=None).isoformat()
+    async def run():
+        with patch.object(C.ReviewedCodeRoot, 'check', lambda _: None):
+            if case == 'start':
+                assert await C.aggregate_authorized(permission) == h
+                assert len(calls) == 1
+            else:
+                with pytest.raises(C.ControllerError):
+                    await C.aggregate_authorized(permission)
+                assert len(calls) == (1 if case == 'late-approval' else 0)
+        assert not permission.path.exists()
+    with patch.object(C, 'datetime', Clock):
+        asyncio.run(run())
+
+
+# Preparation-only contract prototype: never imported by a runtime entry.
+def successor_plan_prototype(parent, proposal, *, expected_proofs, expected_requests, expected_namespace):
+    """Test-only contract calculation; never verifies files or issues authority."""
+    proof_names = {
+        "original_root", "aggregate_header", "aggregate_state", "child_grant",
+        "closure", "accounting", "execution_source", "execution_runtime", "carry",
+    }
+    parent_fields = {
+        "proofs", "terminal", "cause", "frozen", "child_state", "issue_consumed",
+        "start_consumed", "cleanup_confirmed", "reserved_nano", "limit_nano",
+        "count_reserved", "generation_reserved", "http", "estimated_nano",
+        "namespace_sha256", "history_scope", "attempts_reserved",
+        "original_carry_reserved_nano", "closed_allocation_reserved_nano",
+        "original_carry_count_reserved", "original_carry_http",
+        "current_count_cap", "current_generation_cap", "current_attempt_cap",
+    }
+    if type(parent) is not dict or set(parent) != parent_fields:
+        raise ValueError("PREDECESSOR_REQUIRED")
+    if type(expected_proofs) is not dict or set(expected_proofs) != proof_names:
+        raise ValueError("EXPECTED_WITNESS_REQUIRED")
+    if type(expected_namespace) is not str or C.re.fullmatch(r"[a-f0-9]{64}", expected_namespace) is None:
+        raise ValueError("EXPECTED_NAMESPACE_REQUIRED")
+    if parent["namespace_sha256"] != expected_namespace or parent["history_scope"] != "current_v18_batch":
+        raise ValueError("HISTORY_SCOPE")
+    proofs = parent["proofs"]
+    if type(proofs) is not dict or set(proofs) != proof_names or any(
+        type(value) is not str or C.re.fullmatch(r"[a-f0-9]{64}", value) is None
+        for value in expected_proofs.values()
+    ) or proofs != expected_proofs:
+        raise ValueError("PREDECESSOR_DRIFT")
+    if parent["terminal"] != "FIRST_SETTLEMENT_UNCONFIRMED" or parent["cause"] != "KEY_SOURCE_INVALID":
+        raise ValueError("PREDECESSOR_TERMINAL")
+    if any(parent[key] is not True for key in (
+        "frozen", "issue_consumed", "start_consumed", "cleanup_confirmed",
+    )) or parent["child_state"] != "closed":
+        raise ValueError("PREDECESSOR_UNCONFIRMED")
+    for key, value in {
+        "reserved_nano": 150000000, "limit_nano": 1000000000,
+        "count_reserved": 1, "generation_reserved": 0, "attempts_reserved": 1,
+        "original_carry_reserved_nano": 50000000,
+        "closed_allocation_reserved_nano": 100000000,
+        "original_carry_count_reserved": 1, "current_count_cap": 2,
+        "current_generation_cap": 2, "current_attempt_cap": 2,
+    }.items():
+        if type(parent[key]) is not int or parent[key] != value:
+            raise ValueError("PREDECESSOR_ACCOUNTING")
+    if parent["http"] != "unknown" or parent["original_carry_http"] != "unknown" or parent["estimated_nano"] is not None:
+        raise ValueError("UNOBSERVED_NOT_ZERO")
+    fixed = {
+        "model": "gpt-5.4-mini-2026-03-17", "tier": "default",
+        "question_index": 0, "spec_sha256": MEANING_SPEC_SHA256,
+        "price_sha256": C.digest(MEANING_SPEC["price"]),
+        "origin": "https://api.openai.com",
+        "endpoints": ["/v1/responses/input_tokens", "/v1/responses"],
+        "source_relative": "verith/ai/.env", "input_cap": 16384,
+        "output_cap": 2048, "count_cap": 1, "generation_cap": 1,
+        "http_cap": 2, "retry_cap": 0, "reserve_nano": 50000000,
+    }
+    if type(proposal) is not dict or set(proposal) != set(fixed) | {"requests"}:
+        raise ValueError("PROPOSAL_SCOPE")
+    if any(type(proposal[key]) is not type(value) or proposal[key] != value for key, value in fixed.items()):
+        raise ValueError("PROPOSAL_SCOPE")
+    request_fields = {"draft_sha256", "request_sha256", "projection_sha256"}
+    if type(expected_requests) is not list or len(expected_requests) != 2 or any(
+        type(item) is not dict or set(item) != request_fields or any(
+            type(value) is not str or C.re.fullmatch(r"[a-f0-9]{64}", value) is None
+            for value in item.values()
+        ) for item in expected_requests
+    ) or proposal["requests"] != expected_requests[:1]:
+        raise ValueError("REQUEST_BINDING")
+    planned_reserved = parent["reserved_nano"] + proposal["reserve_nano"]
+    return MappingProxyType({
+        "schema": "cf026.successor.plan-only.v1", "execution_authorized": False,
+        "preserved_reserved_nano": parent["reserved_nano"],
+        "proposed_reserved_nano": proposal["reserve_nano"],
+        "planned_total_nano": planned_reserved,
+        "remaining_nano": parent["limit_nano"] - planned_reserved,
+        "predecessor_count_reservations": parent["count_reserved"],
+        "predecessor_generation_reservations": parent["generation_reserved"],
+        "http": "unknown", "estimated_nano": None,
+        "proposed_batch_count_cap": 1, "proposed_batch_generation_cap": 1,
+        "proposed_batch_http_cap": 2, "new_source_bound": False,
+        "explicit_reverification_required": True,
+        "planned_current_batch_count": parent["count_reserved"] + 1,
+        "planned_current_batch_attempts": parent["attempts_reserved"] + 1,
+        "namespace_sha256": expected_namespace,
+        "predecessor_proofs_sha256": C.digest(proofs),
+        "first_request": tuple(sorted(expected_requests[0].items())),
+        "blocked_by": ("EXPLICIT_FIRST_REQUEST_REVERIFICATION_AND_NEW_WINDOW_REQUIRED",
+                       "INDEPENDENT_SINGLE_USE_WITNESS_REQUIRED",
+                       "BOUND_AI_SOURCE_AND_EXECUTOR_REQUIRED"),
+    })
+
+
+
+def successor_contract_inputs():
+    """Self-owned projections; these hashes are not real execution evidence."""
+    names = ["original_root", "aggregate_header", "aggregate_state", "child_grant",
+             "closure", "accounting", "execution_source", "execution_runtime", "carry"]
+    proofs = {name: C.digest({"synthetic_only": name}) for name in names}
+    drafts = [
+        M.Draft(original_query="현대건설 외국인 말고 3주 수급", answers=[], revision=0),
+        M.Draft(original_query="현대건설 어제 말고 외국인 말고 기관 수급", answers=[
+            {"answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "slot": "views", "value": "수급만"},
+        ], revision=1),
+    ]
+    requests = [{key: item[key] for key in (
+        "draft_sha256", "request_sha256", "projection_sha256",
+    )} for item in C.synthetic_requests(drafts)]
+    parent = dict(
+        proofs=proofs.copy(), terminal="FIRST_SETTLEMENT_UNCONFIRMED",
+        cause="KEY_SOURCE_INVALID", frozen=True, child_state="closed",
+        issue_consumed=True, start_consumed=True, cleanup_confirmed=True,
+        reserved_nano=150000000, limit_nano=1000000000, count_reserved=1,
+        generation_reserved=0, http="unknown", estimated_nano=None,
+        namespace_sha256=C.digest({"synthetic_only": "canonical_namespace"}),
+        history_scope="current_v18_batch", attempts_reserved=1,
+        original_carry_reserved_nano=50000000, closed_allocation_reserved_nano=100000000,
+        original_carry_count_reserved=1, original_carry_http="unknown",
+        current_count_cap=2, current_generation_cap=2, current_attempt_cap=2,
+    )
+    proposal = dict(
+        requests=[requests[0].copy()], model="gpt-5.4-mini-2026-03-17",
+        tier="default", origin="https://api.openai.com", question_index=0,
+        spec_sha256=MEANING_SPEC_SHA256, price_sha256=C.digest(MEANING_SPEC["price"]),
+        endpoints=["/v1/responses/input_tokens", "/v1/responses"],
+        source_relative="verith/ai/.env", input_cap=16384, output_cap=2048,
+        count_cap=1, generation_cap=1, http_cap=2, retry_cap=0, reserve_nano=50000000,
+    )
+    return parent, proposal, proofs, requests
+
+
+def test_successor_contract_plan_preserves_accounting_without_grant_or_io():
+    parent, proposal, proofs, requests = successor_contract_inputs()
+    before = C.canonical([parent, proposal, proofs, requests])
+    with patch.object(C, "read_fixed", side_effect=AssertionError("No file reads")), patch.object(
+        C, "exclusive_private_file", side_effect=AssertionError("No issuance"),
+    ), patch.object(C.OwnedHooks, "create", side_effect=AssertionError("No resource")):
+        result = successor_plan_prototype(
+            parent, proposal, expected_proofs=proofs, expected_requests=requests,
+            expected_namespace=C.digest({"synthetic_only": "canonical_namespace"}),
+        )
+    again = successor_plan_prototype(
+        parent, proposal, expected_proofs=proofs, expected_requests=requests,
+        expected_namespace=C.digest({"synthetic_only": "canonical_namespace"}),
+    )
+    assert result == again
+    with pytest.raises(TypeError):
+        result["execution_authorized"] = True
+    with pytest.raises(TypeError):
+        result["blocked_by"][0] = "ready"
+    with pytest.raises(TypeError):
+        result["first_request"][0][1] = "altered"
+    assert result["execution_authorized"] is False
+    assert result["new_source_bound"] is False
+    assert result["preserved_reserved_nano"] == 150000000
+    assert result["proposed_reserved_nano"] == 50000000
+    assert result["planned_total_nano"] == 200000000
+    assert result["remaining_nano"] == 800000000
+    assert result["http"] == "unknown" and result["estimated_nano"] is None
+    assert result["predecessor_count_reservations"] == 1
+    assert result["proposed_batch_count_cap"] == 1
+    assert result["planned_current_batch_count"] == 2
+    assert result["planned_current_batch_attempts"] == 2
+    assert result["explicit_reverification_required"] is True
+    assert len(result["blocked_by"]) == 3
+    assert C.canonical([parent, proposal, proofs, requests]) == before
+    with pytest.raises(C.ControllerError):
+        C.validate_scope(result, None, synthetic=False)
+
+
+@pytest.mark.parametrize("fault", [
+    "missing-parent", "missing-proof", "altered-proof", "missing-witness",
+    "malformed-witness", "terminal", "cause", "not-frozen", "child-running",
+    "issue-unconsumed", "start-unconsumed", "cleanup-unconfirmed", "under-carry",
+    "double-carry", "refund", "new-limit", "count-refund", "unknown-count",
+    "generation-bool", "http-zero", "usage-zero", "questions", "request-drift",
+    "projection-drift", "draft-drift", "missing-expected-request", "model", "tier",
+    "origin", "endpoints", "input-cap", "output-cap", "count-cap", "generation-cap",
+    "http-cap", "retry", "reserve", "backend-source", "frontend-source",
+    "other-worktree-source", "execution-flag", "namespace", "missing-namespace",
+    "carry-history-scope", "attempt-refund", "attempt-unknown", "carry-count-refund",
+    "carry-refund", "allocation-refund", "current-count-cap", "current-generation-cap",
+    "current-attempt-cap", "second-index", "spec", "price", "two-questions",
+])
+def test_successor_contract_rejects_unbound_or_expanded_proposal(fault):
+    parent, proposal, proofs, requests = successor_contract_inputs()
+    expected_namespace = C.digest({"synthetic_only": "canonical_namespace"})
+    if fault == "missing-parent": parent = None
+    elif fault == "missing-proof": parent["proofs"].pop("closure")
+    elif fault == "altered-proof": parent["proofs"]["aggregate_state"] = "f" * 64
+    elif fault == "missing-witness": proofs = None
+    elif fault == "malformed-witness": proofs["closure"] = "untrusted"
+    elif fault == "questions": proposal["requests"] = [requests[1].copy()]
+    elif fault == "two-questions": proposal["requests"] = requests
+    elif fault == "missing-namespace": expected_namespace = None
+    elif fault in {"request-drift", "projection-drift", "draft-drift"}:
+        field = {"request-drift": "request_sha256", "projection-drift": "projection_sha256", "draft-drift": "draft_sha256"}[fault]
+        proposal["requests"][0][field] = "f" * 64
+    elif fault == "missing-expected-request": requests = []
+    else:
+        changes = {
+            "terminal": (parent, "terminal", "KEY_SOURCE_INVALID"),
+            "cause": (parent, "cause", "CONTROLLER_FAILED"),
+            "not-frozen": (parent, "frozen", False),
+            "child-running": (parent, "child_state", "claimed"),
+            "issue-unconsumed": (parent, "issue_consumed", False),
+            "start-unconsumed": (parent, "start_consumed", False),
+            "cleanup-unconfirmed": (parent, "cleanup_confirmed", False),
+            "under-carry": (parent, "reserved_nano", 50000000),
+            "double-carry": (parent, "reserved_nano", 200000000),
+            "refund": (parent, "reserved_nano", 0),
+            "new-limit": (parent, "limit_nano", 2000000000),
+            "count-refund": (parent, "count_reserved", 0),
+            "unknown-count": (parent, "count_reserved", None),
+            "generation-bool": (parent, "generation_reserved", False),
+            "http-zero": (parent, "http", 0),
+            "usage-zero": (parent, "estimated_nano", 0),
+            "model": (proposal, "model", "other-model"),
+            "tier": (proposal, "tier", "auto"),
+            "origin": (proposal, "origin", "https://other.invalid"),
+            "endpoints": (proposal, "endpoints", ["/v1/responses"]),
+            "input-cap": (proposal, "input_cap", 16385),
+            "output-cap": (proposal, "output_cap", 2049),
+            "count-cap": (proposal, "count_cap", 3),
+            "generation-cap": (proposal, "generation_cap", 3),
+            "http-cap": (proposal, "http_cap", 5),
+            "retry": (proposal, "retry_cap", 1),
+            "reserve": (proposal, "reserve_nano", 100000000),
+            "backend-source": (proposal, "source_relative", "verith/backend/.env"),
+            "frontend-source": (proposal, "source_relative", "verith/frontend/.env"),
+            "other-worktree-source": (proposal, "source_relative", "other/ai/.env"),
+            "execution-flag": (proposal, "execution_authorized", True),
+            "namespace": (parent, "namespace_sha256", "f" * 64),
+            "carry-history-scope": (parent, "history_scope", "original_carry"),
+            "attempt-refund": (parent, "attempts_reserved", 0),
+            "attempt-unknown": (parent, "attempts_reserved", None),
+            "carry-count-refund": (parent, "original_carry_count_reserved", 0),
+            "carry-refund": (parent, "original_carry_reserved_nano", 0),
+            "allocation-refund": (parent, "closed_allocation_reserved_nano", 0),
+            "current-count-cap": (parent, "current_count_cap", 3),
+            "current-generation-cap": (parent, "current_generation_cap", 3),
+            "current-attempt-cap": (parent, "current_attempt_cap", 3),
+            "second-index": (proposal, "question_index", 1),
+            "spec": (proposal, "spec_sha256", "f" * 64),
+            "price": (proposal, "price_sha256", "f" * 64),
+        }
+        target, key, value = changes[fault]
+        target[key] = value
+    with pytest.raises(ValueError) as caught:
+        successor_plan_prototype(
+            parent, proposal, expected_proofs=proofs, expected_requests=requests,
+            expected_namespace=expected_namespace,
+        )
+    assert str(caught.value) in {
+        "PREDECESSOR_REQUIRED", "EXPECTED_WITNESS_REQUIRED", "PREDECESSOR_DRIFT",
+        "EXPECTED_NAMESPACE_REQUIRED", "HISTORY_SCOPE",
+        "PREDECESSOR_TERMINAL", "PREDECESSOR_UNCONFIRMED", "PREDECESSOR_ACCOUNTING",
+        "UNOBSERVED_NOT_ZERO", "PROPOSAL_SCOPE", "REQUEST_BINDING",
+    }
+
+
+from scripts import cf026_successor as S
+
+
+class SuccessorClock:
+    def __init__(self):
+        self.now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        self.elapsed = 100.0
+
+    def wall(self):
+        return self.now
+
+    def mono(self):
+        return self.elapsed
+
+    def advance(self, seconds, *, wall=True, mono=True):
+        if wall:
+            self.now += timedelta(seconds=seconds)
+        if mono:
+            self.elapsed += seconds
+
+
+class SuccessorWitness:
+    """Synthetic durable authority stand-in, not the actual external adapter."""
+    def __init__(self, clock):
+        self.clock = clock
+        self.identity = C.digest({"synthetic_witness": True})
+        self.once = None
+        self.sequence = 0
+        self.issued = None
+        self.ack = None
+        self.fail = None
+        self.advance = None
+        self.calls = []
+        self.revoked = False
+
+    async def verify(self, **args):
+        self.calls.append(args["phase"])
+        if self.revoked or args["phase"] == "admission" and self.once is not None:
+            return False
+        return True
+
+    async def consume(self, **args):
+        phase = args["phase"]
+        if self.revoked or phase == "reserve" and self.once is not None:
+            raise S.Closed("ALREADY_USED")
+        if phase == "reserve":
+            self.once = args["successor_once"]
+            self.issued = self.clock.wall().isoformat()
+        elif self.once != args["successor_once"]:
+            raise S.Closed("AUTHORITY_UNAVAILABLE")
+        self.sequence += 1
+        self.calls.append(phase)
+        self.ack = args | dict(authority_sha256=self.identity, sequence=self.sequence,
+                               issued_at=self.issued, consumed=True)
+        if self.advance == phase:
+            self.clock.advance(601)
+        if self.fail == phase:
+            raise OSError(PRIVATE)
+        if self.fail == phase + "-cancel":
+            raise asyncio.CancelledError()
+        return self.ack.copy()
+
+    async def readback(self, **args):
+        if self.fail == args["phase"] + "-readback":
+            return {"approved": True}
+        return self.ack.copy()
+
+    def capability(self):
+        return S.Authority("synthetic", self.identity, self.verify, self.consume, self.readback)
+
+
+def successor_assembly_inputs(tmp_path):
+    base = tmp_path.resolve()
+    base.chmod(0o700)
+    clock = SuccessorClock()
+    source_file = base / "synthetic-input.txt"
+    write(source_file, b"OPENAI_API_KEY=cf026-synthetic-unused\n", 0o644)
+    source = C.KeySource(source_file, C.regular(source_file, 0o644), True)
+    witness = SuccessorWitness(clock)
+    event, child_id = "SyntheticApproval", str(uuid4())
+    root = base / ".cf026-openai-test-budget" / event
+    runtime_home = base / ".cf026-launcher-preparation-20261110"
+    bootstrap = "b" * 64
+    root.mkdir(parents=True, mode=0o700)
+    write(root / "execution.lock", {})
+    runtime_home.mkdir(mode=0o700)
+    child_dir = root / "children" / child_id
+    child_dir.mkdir(parents=True, mode=0o700)
+    (root / "children").chmod(0o700)
+    carry = base / ".cf026-live-approval" / "HistoricalApproval"
+    carry.mkdir(parents=True, mode=0o700)
+    artifacts = []
+
+    def artifact(name, path, value):
+        write(path, value)
+        raw = path.read_bytes()
+        item = S.Artifact(name, path, C.canonical(C.regular(path, 0o600)), C.hashlib.sha256(raw).hexdigest())
+        artifacts.append(item)
+        return item.sha256
+
+    carry_id = str(uuid4())
+    carry_grant = artifact("carry_grant", carry / "grant.json", dict(approval_id=carry_id))
+    carry_state = artifact("carry_state", carry / "state.json", dict(status="closed", approval_id=carry_id, grant_sha256=carry_grant))
+    carry_closure = artifact("carry_closure", carry / "failure.json", dict(status="failed"))
+    drafts = [M.Draft(original_query="현대건설 외국인 말고 3주 수급", answers=[], revision=0),
+              M.Draft(original_query="현대건설 어제 말고 외국인 말고 기관 수급", answers=[
+                  {"answer_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "slot": "views", "value": "수급만"}], revision=1)]
+    requests = C.synthetic_requests(drafts)
+    historical_source = dict(identity={"synthetic_original": True}, code_root={"controller_sha256": "d" * 64})
+    grant = dict(approval_id=child_id, requests=requests, source=historical_source,
+                 semantic_sha256=MEANING_SPEC_SHA256, price_sha256=C.digest(MEANING_SPEC["price"]))
+    grant_sha = artifact("child_grant", child_dir / "grant.json", grant)
+    diagnostic = dict(failure_code="KEY_SOURCE_INVALID", count_http="unknown")
+    old_ledger = dict(count=1, generation=0, reserved=50000000, blocked=True)
+    child = dict(status="closed", approval_id=child_id, grant_sha256=grant_sha, journal=[
+        dict(phase="final_accounting", observation="fresh_ledger", state=old_ledger, diagnostics=[diagnostic]),
+        dict(phase="closing"), dict(phase="cleanup_confirmed")])
+    artifact("child_state", child_dir / "state.json", child)
+    header = dict(schema="cf026.aggregate.v1", approval_event=event, bootstrap_id=bootstrap,
+                  limit_nano=1000000000, carry_nano=50000000,
+                  carry_hashes=dict(grant=carry_grant, state=carry_state, closure=carry_closure))
+    artifact("header", root / "header.json", header)
+    outcome = dict(code="FIRST_SETTLEMENT_UNCONFIRMED", cleanup_confirmed=True, estimated_nano=None, http="unknown",
+                   accounting_sha256=C.digest(child["journal"][0]), count_requests=1, generation_requests=0)
+    allocation = dict(reserve_nano=100000000, issue_consumed=True, start_consumed=True,
+                      child_id=child_id, child=dict(grant_bytes_sha256=grant_sha), outcome=outcome,
+                      accounting=dict(sha256=C.digest(child["journal"][0]), count=1, generation=0, http="unknown"))
+    state_sha = artifact("state", root / "state.json", dict(schema="cf026.aggregate.state.v1", frozen=True,
+             total_reserved_nano=150000000, sequence=6, allocations={str(uuid4()): allocation}))
+    coordination = base / ".cf026-live-coordination" / event
+    coordination.mkdir(parents=True, mode=0o700)
+    write(coordination / "lock", {})
+    history = dict(bootstrap_id=bootstrap, root=str(root), phase="initialized", pending=None,
+                   header_sha256=next(a.sha256 for a in artifacts if a.name == "header"),
+                   binding=dict(header_sha256=next(a.sha256 for a in artifacts if a.name == "header"),
+                                directory=C.directory_identity(root), children=C.directory_identity(root/"children"),
+                                lock=C.regular(root/"execution.lock", 0o600), header=C.regular(root/"header.json", 0o600)),
+                   head=dict(sha256=state_sha, sequence=6, identity=C.regular(root/"state.json", 0o600)))
+    artifact("coordination", coordination / "state.json", history)
+    artifact("closure", runtime_home / ("outcome-" + bootstrap + ".json"), dict(status="closed", journal_uncertain=False, adapter_uncertain=False,
+              adapter_pin=dict(digest=C.digest(history), directory=C.directory_identity(coordination)[:3]+[0o700],
+                               lock=[C.regular(coordination/"lock", 0o600)[k] for k in ("dev","ino","uid","mode","nlink","size","mtime_ns")],
+                               state=[C.regular(coordination/"state.json", 0o600)[k] for k in ("dev","ino","uid","mode","nlink","size","mtime_ns")])))
+    old_carry = {a.name: dict(path=str(a.path), sha256=a.sha256) for a in artifacts if a.name.startswith("carry_")}
+    artifact("runtime", runtime_home / "reviewed-runtime.json", dict(key_metadata=historical_source["identity"],
+             source_manifest={"backend/scripts/cf026_supervisor_live_controller.py": "d" * 64}, old_carry=old_carry))
+    journal_path = base / "successor-local-journal"
+    journal_path.mkdir(mode=0o700)
+    write(journal_path / "execution.lock", {})
+    lock = C.regular(journal_path / "execution.lock", 0o600)
+    pins = {a.name: a.sha256 for a in artifacts}
+    document = dict(schema="cf026.successor.scope.v1", mode="synthetic", namespace=C.digest(event),
+        predecessor_sha256=C.digest(pins), predecessor_bootstrap=bootstrap, invocation="a" * 64, consent_at=(clock.wall()-timedelta(seconds=1)).isoformat(),
+        predecessor=dict(reserved_nano=150000000, carry_nano=50000000, allocation_nano=100000000,
+                         count=1, generation=0, attempts=1, http="unknown", estimated_nano=None),
+        artifacts=pins, request=requests[0], source=source.scope(), counter=dict(documentation_url=O.COUNT_DOCUMENTATION,
+        documentation_sha256="a"*64, free_evidence_sha256="b"*64, price_evidence_sha256="c"*64, fee_bound_nano=0),
+        semantic_sha256=MEANING_SPEC_SHA256, price_sha256=C.digest(MEANING_SPEC["price"]), epoch_id=str(uuid4()),
+        authority_sha256=witness.identity, module_sha256=C.hashlib.sha256(Path(S.__file__).read_bytes()).hexdigest(),
+        journal=dict(path=str(journal_path), directory=C.directory_identity(journal_path), lock=lock))
+    scope = S.Scope(C.canonical(document), tuple(artifacts))
+    state = dict(schema="cf026.successor.journal.v1", scope_sha256=scope.sha256,
+                 status="offered", rights=dict(count=0, generation=0), preparation=None, journal=[])
+    write(journal_path / "state.json", state)
+    pin = dict(identity=C.regular(journal_path / "state.json", 0o600), sha256=C.hashlib.sha256((journal_path / "state.json").read_bytes()).hexdigest())
+    journal = S.Journal(journal_path, pin, lock, scope.sha256)
+    return scope, source, witness, journal, clock
+
+
+class SuccessorHooks:
+    def __init__(self):
+        self.driver = NS(call=lambda *a, **kwargs: None)
+        self.created = self.cleaned = self.preserved = 0
+        self.proof, self.principal = object(), object()
+        self.binding = NS(epoch_id=uuid4())
+        self.snapshot_value = None
+
+    def create(self):
+        self.created += 1
+
+    async def bootstrap(self, store):
+        return self.proof, self.principal, self.binding
+
+    async def snapshot(self, *_):
+        return self.snapshot_value
+
+    def cleanup(self):
+        self.cleaned += 1
+
+    def preserve(self):
+        self.preserved += 1
+
+
+async def successor_verifier_spy(*, proof, binding, principal, prepare_body, authority, counter_agreement, key_supplier):
+    """Exercises actual new DI/phase/supplier functions, not actual PG or ASGI."""
+    d = authority.session.scope.data
+    assert prepare_body == d["request"]["prepare_body"]
+    assert key_supplier.source_capability is authority.session.source
+    async def fresh(self):
+        self.store.reload()
+        if self.store.state["preparation"] is None:
+            self.store.persist("claimed", dict(phase="preparation_binding_ACK"), preparation={"synthetic_only": True})
+        return dict(count=self.store.state["rights"]["count"], generation=0,
+                    reserved=self.store.state["rights"]["count"] * 50000000)
+    args = dict(mode="synthetic", proof_binding=binding, principal=principal, agreement=counter_agreement,
+                key_supplier=key_supplier, key_source_capability=key_supplier.source_capability,
+                draft_sha256=d["request"]["draft_sha256"], semantic_sha256=d["semantic_sha256"])
+    with patch.object(S.PhaseAuthority, "fresh_preparation", fresh):
+        await authority.verify(phase="initial", **args)
+        args.update(request_sha256=d["request"]["request_sha256"], projection_sha256=d["request"]["projection_sha256"])
+        await authority.verify(phase="preflight", **args)
+        await authority.verify(phase="count", **args)
+        assert await key_supplier.supplier() == "cf026-synthetic-unused"
+        await authority.verify(phase="generation", **args)
+    return dict(stages=["preflight_verified", "count_reservation_ACK", "generation_reservation_ACK", "settlement_ACK"],
+                meaning_status="supplemented", settlement="observed")
+
+
+def test_successor_actual_helper_di_journal_and_replay(tmp_path, capsys):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    before = {a.path: a.path.read_bytes() for a in scope.artifacts}
+    hooks = SuccessorHooks()
+    item = scope.data["request"]
+    hooks.snapshot_value = dict(count=1, generation=1, reserved=50000000, blocked=False, active=None,
+        attempts={str(uuid4()): dict(request_sha256=item["request_sha256"], projection_sha256=item["projection_sha256"],
+                                   observation=dict(state="observed", estimated_nano=120000))})
+    with patch.object(V, "verify_live", successor_verifier_spy):
+        result = asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                                  synthetic=True, hooks=hooks, clock=clock))
+    assert result["status"] == "finished" and result["total_reserved_nano"] == 200000000
+    assert hooks.created == hooks.cleaned == 1 and hooks.preserved == 0
+    assert journal.state["status"] == "closed" and journal.state["rights"] == dict(count=1, generation=1)
+    assert [x for x in witness.calls if x in {"reserve", "issue", "start", "count", "generation", "accounting"}] == ["reserve", "issue", "start", "count", "generation", "accounting"]
+    assert before == {a.path: a.path.read_bytes() for a in scope.artifacts}
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.created == 1
+    assert PRIVATE not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("phase", ["reserve", "issue", "start", "reserve-readback", "issue-readback", "start-readback"])
+def test_successor_authority_ack_loss_never_starts_resource(tmp_path, phase):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.fail = phase
+    hooks = SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.created == 0 and witness.once is not None
+
+
+@pytest.mark.parametrize("phase", ["reserve", "issue", "start"])
+def test_successor_delayed_ack_expiry_is_fail_closed(tmp_path, phase):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.advance = phase
+    hooks = SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.created == 0
+
+
+@pytest.mark.parametrize("wall,mono", [(True, False), (False, True), (True, True)])
+def test_successor_start_120s_and_expiry_600s_both_clocks(wall, mono):
+    clock = SuccessorClock()
+    lease = S.Lease(clock.wall().isoformat(), (clock.wall()-timedelta(seconds=1)).isoformat(), clock)
+    clock.advance(120.001, wall=wall, mono=mono)
+    with pytest.raises(S.Closed):
+        lease.check(starting=True)
+    lease.check()
+    clock.advance(480, wall=wall, mono=mono)
+    with pytest.raises(S.Closed):
+        lease.check()
+
+
+def test_successor_default_and_foreign_journal_are_closed(tmp_path):
+    with pytest.raises(S.Closed, match="DEFAULT_UNAVAILABLE"):
+        asyncio.run(S.run())
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    journal.scope_sha256 = "f" * 64
+    with pytest.raises(S.Closed, match="JOURNAL_SCOPE"):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=SuccessorHooks(), clock=clock))
+    assert not witness.calls and witness.once is None
+
+
+def retry1_inputs(tmp_path):
+    """Self-owned synthetic timeout history, never an actual server witness."""
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    d = scope.data
+    record = dict(schema="cf026.successor.reserve-once.v1", additional_reserve_nano=50000000,
+        authority_sha256="f"*64, count_cap=1, delegation="same-invocation-ordered-local-fsync",
+        generation_cap=1, http_cap=2, invocation="b"*64, issued_at=(clock.wall()-timedelta(minutes=3)).isoformat(),
+        namespace=d["namespace"], predecessor_sha256=d["predecessor_sha256"], process_id=7, retry_cap=0,
+        scope_sha256=scope.sha256, successor_once=S.once_identity(scope), synthetic_only=False, total_reserved_nano=200000000)
+    report = dict(server_reservation_actually_consumed=True, server_record_item_id="synthetic-item",
+        server_record_turn_id="synthetic-turn", stdin_not_sent=True, terminal_code="BRIDGE_TIMEOUT", exit_code=1,
+        key_content_reads=0, count_http=0, generation_http=0, db_created=0, source_copy_removed=True, entry_restored=True)
+    timeout = dict(schema="cf026.successor.actual-timeout-evidence.v1", reserve_record=record, parent_reported=report,
+        direct_readonly_confirmed=dict(local_journal_contains_only_execution_lock=True, journal_state_absent=True,
+                                       phase_state_absent=True, entry_RELEASED=False),
+        accounting=dict(historical_reservation_nano=150000000, new_consumed_server_hold_nano=50000000,
+            combined_reserved_nano=200000000, billing_amount=None, refund_or_reissue_permitted=False,
+            historical_http_unknown_unchanged=True), same_record_or_invocation_reuse_permitted=False)
+    directory = tmp_path.resolve()/".cf026-successor-timeout-review-20261111"
+    directory.mkdir(mode=0o700)
+    path = directory/"actual-attempt.json"
+    write(path, timeout)
+    body_sha=C.hashlib.sha256(('CF026_SUCCESSOR_RESERVE_ONCE\n'+C.canonical(record)).encode()).hexdigest()
+    manifest_path=directory/'manifest.json'
+    write(manifest_path,dict(schema='cf026.successor.timeout-review-manifest.v1',
+        files={'actual-attempt.json':C.hashlib.sha256(path.read_bytes()).hexdigest()},server_body_sha256=body_sha,
+        actual_server_hold_nano=50000000,combined_reserved_nano=200000000))
+    d["retry"] = dict(schema="cf026.successor.retry1.v1", ordinal=1,
+        timeout=dict(path=str(path), stamp_json=C.canonical(C.regular(path,0o600)), sha256=C.hashlib.sha256(path.read_bytes()).hexdigest()),
+        timeout_manifest=dict(path=str(manifest_path),stamp_json=C.canonical(C.regular(manifest_path,0o600)),sha256=C.hashlib.sha256(manifest_path.read_bytes()).hexdigest()),
+        record_body='CF026_SUCCESSOR_RESERVE_ONCE\n'+C.canonical(record),
+        record_body_sha256=C.hashlib.sha256(("CF026_SUCCESSOR_RESERVE_ONCE\n"+C.canonical(record)).encode()).hexdigest(),
+        record_item_id=report["server_record_item_id"], record_turn_id=report["server_record_turn_id"],
+        consent_message_id="Sentinel_"+"c"*32, carried_nano=200000000, total_reserved_nano=250000000)
+    scope = S.Scope(C.canonical(d),scope.artifacts)
+    state = dict(schema="cf026.successor.journal.v1",scope_sha256=scope.sha256,status="offered",
+                 rights=dict(count=0,generation=0),preparation=None,journal=[])
+    write(journal.path/"state.json",state)
+    pin=dict(identity=C.regular(journal.path/"state.json",0o600),sha256=C.hashlib.sha256((journal.path/"state.json").read_bytes()).hexdigest())
+    journal=S.Journal(journal.path,pin,journal.lock_pin,scope.sha256)
+    return scope,source,witness,journal,clock
+
+
+def test_successor_retry1_actual_helper_carries_200m_and_settles_250m(tmp_path):
+    scope,source,witness,journal,clock=retry1_inputs(tmp_path)
+    before={a.path:a.path.read_bytes() for a in scope.artifacts}
+    timeout_path=Path(scope.data['retry']['timeout']['path']);timeout_before=timeout_path.read_bytes()
+    hooks=SuccessorHooks();item=scope.data['request']
+    hooks.snapshot_value=dict(count=1,generation=1,reserved=50000000,blocked=False,active=None,
+        attempts={str(uuid4()):dict(request_sha256=item['request_sha256'],projection_sha256=item['projection_sha256'],
+                                  observation=dict(state='observed',estimated_nano=120000))})
+    with patch.object(V,'verify_live',successor_verifier_spy):
+        result=asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,
+                               synthetic=True,hooks=hooks,clock=clock))
+    assert result['total_reserved_nano']==250000000
+    account=next(x for x in journal.state['journal'] if x['phase']=='final_accounting')
+    assert account['reserved_nano']==250000000 and account['ledger']['reserved']==50000000
+    assert witness.ack['total_reserved_nano']==250000000 and witness.ack['additional_reserve_nano']==50000000
+    assert witness.ack['retry_ordinal']==1 and witness.ack['retry_of_sha256']==scope.data['retry']['record_body_sha256']
+    assert before=={a.path:a.path.read_bytes() for a in scope.artifacts} and timeout_path.read_bytes()==timeout_before
+    assert hooks.created==hooks.cleaned==1
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,
+                         synthetic=True,hooks=hooks,clock=clock))
+    assert hooks.created==1
+
+
+def test_successor_unconfirmed_result_keeps_gate_and_bounded_transport_diagnostic(tmp_path):
+    scope,source,witness,journal,clock=retry1_inputs(tmp_path);item=scope.data['request']
+    hooks=SuccessorHooks()
+    hooks.snapshot_value=dict(count=1,generation=1,reserved=50000000,blocked=False,active=str(uuid4()),
+        attempts={str(uuid4()):dict(request_sha256=item['request_sha256'],projection_sha256=item['projection_sha256'],observation=None)})
+    trace=dict(events=[dict(stage='generation_dispatch_entered',elapsed_ms=100),
+                       dict(stage='provider_timeout',elapsed_ms=55000),
+                       dict(stage='settlement_unconfirmed',elapsed_ms=59000)],settlement_uncertain=True)
+    async def unconfirmed(**args):
+        value=await successor_verifier_spy(**args)
+        return value|dict(meaning_status='unavailable',settlement='unconfirmed',gateway_diagnostic=trace)
+    with patch.object(V,'verify_live',unconfirmed),pytest.raises(S.Closed,match='FIRST_SETTLEMENT_UNCONFIRMED'):
+        asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,
+                         synthetic=True,hooks=hooks,clock=clock))
+    account=next(x for x in journal.state['journal'] if x['phase']=='final_accounting')
+    assert account['diagnostic']['failure_code']=='FIRST_SETTLEMENT_UNCONFIRMED'
+    assert account['gateway_diagnostic']==trace and account['reserved_nano']==250000000
+    assert account['ledger']['attempts'][0]['estimated_nano'] is None
+    assert hooks.cleaned==1 and journal.state['status']=='closed'
+    assert PRIVATE not in C.canonical(account)
+
+
+def test_successor_late_ledger_rejection_is_classified_before_accounting(tmp_path):
+    scope,source,witness,journal,clock=retry1_inputs(tmp_path);item=scope.data['request']
+    hooks=SuccessorHooks()
+    hooks.snapshot_value=dict(count=1,generation=1,reserved=50000000,blocked=True,active=str(uuid4()),
+        attempts={str(uuid4()):dict(request_sha256=item['request_sha256'],projection_sha256=item['projection_sha256'],
+                                  observation=dict(state='unknown',estimated_nano=None))})
+    with patch.object(V,'verify_live',successor_verifier_spy),pytest.raises(S.Closed,match='FIRST_SETTLEMENT_UNCONFIRMED'):
+        asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,
+                         synthetic=True,hooks=hooks,clock=clock))
+    account=next(x for x in journal.state['journal'] if x['phase']=='final_accounting')
+    assert account['diagnostic']['failure_code']=='FIRST_SETTLEMENT_UNCONFIRMED'
+    assert account['diagnostic']['verifier']['settlement']=='observed'  # later ledger is independent evidence
+    assert account['reserved_nano']==250000000 and hooks.cleaned==1
+
+
+@pytest.mark.parametrize('bad',[{'events':[],'settlement_uncertain':True,'message':PRIVATE},
+    {'events':[{'stage':PRIVATE,'elapsed_ms':1}],'settlement_uncertain':True},
+    {'events':[{'stage':'provider_timeout','elapsed_ms':True}],'settlement_uncertain':True},
+    {'events':[{'stage':'provider_timeout','elapsed_ms':1,'http_status':PRIVATE}],'settlement_uncertain':True}])
+def test_successor_gateway_diagnostic_rejects_free_text_and_invalid_types(bad):
+    with pytest.raises(S.Closed,match='DIAGNOSTIC_INVALID'):S.safe_gateway_diagnostic(bad)
+
+
+@pytest.mark.parametrize('field,value',[('ordinal',2),('ordinal',True),('carried_nano',150000000),
+    ('total_reserved_nano',200000000),('total_reserved_nano',1000000000),('record_body_sha256','a'*64),
+    ('record_item_id','other-item'),('record_turn_id','other-turn'),('consent_message_id','approved')])
+def test_successor_retry1_scope_drift_rejects_before_authority(tmp_path,field,value):
+    scope,source,witness,journal,clock=retry1_inputs(tmp_path)
+    data=scope.data;data['retry'][field]=value
+    bad=S.Scope(C.canonical(data),scope.artifacts)
+    hooks=SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(bad,source=source,authority=witness.capability(),journal=journal,
+                         synthetic=True,hooks=hooks,clock=clock))
+    assert not witness.calls and hooks.created==0
+
+
+@pytest.mark.parametrize('mutation',['missing','bytes','prior-invocation','prior-consent','counted','refund','different-namespace','raw-body','manifest-loss'])
+def test_successor_retry1_bad_history_never_mints_right(tmp_path,mutation):
+    scope,source,witness,journal,clock=retry1_inputs(tmp_path);data=scope.data
+    pin=data['retry']['timeout'];p=Path(pin['path']);value=C.decode(p.read_bytes())
+    if mutation=='missing':p.unlink()
+    elif mutation=='bytes':p.write_bytes(b'{}')
+    elif mutation=='manifest-loss':Path(data['retry']['timeout_manifest']['path']).unlink()
+    elif mutation=='raw-body':
+        data['retry']['record_body']+=' '
+        data['retry']['record_body_sha256']=C.hashlib.sha256(data['retry']['record_body'].encode()).hexdigest()
+    else:
+        if mutation=='prior-invocation':data['invocation']=value['reserve_record']['invocation']
+        if mutation=='prior-consent':data['consent_at']=value['reserve_record']['issued_at']
+        if mutation=='counted':value['parent_reported']['count_http']=1
+        if mutation=='refund':value['accounting']['combined_reserved_nano']=150000000
+        if mutation=='different-namespace':value['reserve_record']['namespace']='0'*64
+        write(p,value)
+        pin.update(stamp_json=C.canonical(C.regular(p,0o600)),sha256=C.hashlib.sha256(p.read_bytes()).hexdigest())
+        data['retry']['record_body_sha256']=C.hashlib.sha256(('CF026_SUCCESSOR_RESERVE_ONCE\n'+C.canonical(value['reserve_record'])).encode()).hexdigest()
+        data['retry']['record_body']='CF026_SUCCESSOR_RESERVE_ONCE\n'+C.canonical(value['reserve_record'])
+        # Re-pin a self-consistent synthetic wrapper so semantic violations are
+        # rejected by their own checks, not hidden behind a stale manifest pin.
+        mpin=data['retry']['timeout_manifest'];mp=Path(mpin['path']);mv=C.decode(mp.read_bytes())
+        mv['files']['actual-attempt.json']=pin['sha256'];mv['server_body_sha256']=data['retry']['record_body_sha256']
+        write(mp,mv)
+        mpin.update(stamp_json=C.canonical(C.regular(mp,0o600)),sha256=C.hashlib.sha256(mp.read_bytes()).hexdigest())
+    with pytest.raises((S.Closed,C.ControllerError,FileNotFoundError)):
+        S.Scope(C.canonical(data),scope.artifacts).check(source,witness.capability(),synthetic=True)
+    assert not witness.calls
+
+
+def test_successor_retry1_identity_cannot_multiply_by_source_or_consent(tmp_path):
+    scope,*_=retry1_inputs(tmp_path)
+    identity=S.once_identity(scope);data=scope.data
+    original=data.copy();original.pop('retry')
+    assert identity!=S.once_identity(S.Scope(C.canonical(original),scope.artifacts))
+    for key in ('invocation','authority_sha256','module_sha256','predecessor_sha256','consent_at'):
+        altered=scope.data;altered[key]='different'
+        assert S.once_identity(S.Scope(C.canonical(altered),scope.artifacts))==identity
+    altered=scope.data;altered['retry']['record_body_sha256']='d'*64
+    assert S.once_identity(S.Scope(C.canonical(altered),scope.artifacts))==identity
+
+
+@pytest.mark.parametrize('phase',['reserve','issue','start'])
+def test_successor_retry1_late_start_ack_holds_250m_without_resource(tmp_path,phase):
+    scope,source,witness,journal,clock=retry1_inputs(tmp_path)
+    saved={a.path:a.path.read_bytes() for a in scope.artifacts}
+    consume=witness.consume
+    async def delayed(**args):
+        ack=await consume(**args)
+        if args['phase']==phase:clock.advance(120.001)
+        return ack
+    authority=S.Authority('synthetic',witness.identity,witness.verify,delayed,witness.readback)
+    hooks=SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope,source=source,authority=authority,journal=journal,
+                         synthetic=True,hooks=hooks,clock=clock))
+    assert witness.once==S.once_identity(scope) and hooks.created==0
+    assert journal.state['status']=='closed'
+    assert journal.state['journal'][-1]['total_reserved_nano']==250000000
+    assert journal.state['journal'][-1]['unknown_hold_nano']==50000000
+    assert saved=={a.path:a.path.read_bytes() for a in scope.artifacts}
+
+
+@pytest.mark.parametrize('seconds',[48.045,119.999,120,120.001])
+def test_successor_120s_initial_delivery_boundary(seconds):
+    clock=SuccessorClock();issued=clock.wall();clock.advance(seconds)
+    if seconds>120:
+        with pytest.raises(S.Closed,match='LEASE_START'):S.Lease(issued.isoformat(),(issued-timedelta(seconds=1)).isoformat(),clock)
+    else:
+        lease=S.Lease(issued.isoformat(),(issued-timedelta(seconds=1)).isoformat(),clock)
+        lease.check(starting=True)
+        assert lease.expires==issued+timedelta(seconds=600)
+
+
+@pytest.mark.parametrize('wall,mono',[(True,False),(False,True),(True,True)])
+@pytest.mark.parametrize('seconds',[119.999,120,120.001])
+def test_successor_120s_start_wall_and_monotonic_boundaries(wall,mono,seconds):
+    clock=SuccessorClock();lease=S.Lease(clock.wall().isoformat(),(clock.wall()-timedelta(seconds=1)).isoformat(),clock)
+    clock.advance(seconds,wall=wall,mono=mono)
+    if seconds>120:
+        with pytest.raises(S.Closed):lease.check(starting=True)
+    else:lease.check(starting=True)
+    lease.check()
+
+
+def successor_reseal_fixture(scope, journal, *, changed_name=None, mutate=None, document_change=None):
+    """Synthetic-only re-pinning to exercise schema checks after valid hash checks."""
+    artifacts = []
+    for artifact in scope.artifacts:
+        if artifact.name == changed_name:
+            value = C.decode(artifact.path.read_bytes())
+            mutate(value)
+            write(artifact.path, value)
+            artifact = S.Artifact(artifact.name, artifact.path, C.canonical(C.regular(artifact.path, 0o600)),
+                                  C.hashlib.sha256(artifact.path.read_bytes()).hexdigest())
+        artifacts.append(artifact)
+    d = scope.data
+    d["artifacts"] = {a.name: a.sha256 for a in artifacts}
+    d["predecessor_sha256"] = C.digest(d["artifacts"])
+    if document_change is not None:
+        document_change(d)
+    replacement = S.Scope(C.canonical(d), tuple(artifacts))
+    state = C.decode((journal.path / "state.json").read_bytes())
+    state["scope_sha256"] = replacement.sha256
+    write(journal.path / "state.json", state)
+    pin = dict(identity=C.regular(journal.path / "state.json", 0o600),
+               sha256=C.hashlib.sha256((journal.path / "state.json").read_bytes()).hexdigest())
+    return replacement, S.Journal(journal.path, pin, journal.lock_pin, replacement.sha256)
+
+
+@pytest.mark.parametrize("fault", ["header", "state", "carry", "consumed", "child", "child-link", "ledger-bool", "runtime", "runtime-carry", "closure", "terminal", "cause", "second-question", "source", "namespace", "module", "consent"])
+def test_successor_actual_schemas_and_scope_reject_self_consistent_projection(tmp_path, fault):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    mutations = {
+        "header": ("header", lambda x: x.pop("approval_event")),
+        "state": ("state", lambda x: x.update(total_reserved_nano=50000000)),
+        "carry": ("header", lambda x: x["carry_hashes"].update(state="f"*64)),
+        "consumed": ("state", lambda x: next(iter(x["allocations"].values())).update(start_consumed=False)),
+        "child": ("child_state", lambda x: x.update(status="claimed")),
+        "child-link": ("child_state", lambda x: x.update(approval_id=str(uuid4()))),
+        "ledger-bool": ("child_state", lambda x: x["journal"][0]["state"].update(count=True)),
+        "runtime": ("runtime", lambda x: x.update(key_metadata={})),
+        "runtime-carry": ("runtime", lambda x: x.update(old_carry={})),
+        "closure": ("closure", lambda x: x.update(journal_uncertain=True)),
+        "terminal": ("state", lambda x: next(iter(x["allocations"].values()))["outcome"].update(code="KEY_SOURCE_INVALID")),
+        "cause": ("child_state", lambda x: x["journal"][0]["diagnostics"][0].update(failure_code="FIRST_SETTLEMENT_UNCONFIRMED")),
+    }
+    if fault in mutations:
+        name, mutate = mutations[fault]
+        scope, journal = successor_reseal_fixture(scope, journal, changed_name=name, mutate=mutate)
+    else:
+        def change(d):
+            if fault == "second-question":
+                d["request"]["prepare_body"]["draft"]["original_query"] = "현대건설 어제 말고 외국인 말고 기관 수급"
+            elif fault == "source":
+                d["source"]["path"] = str(tmp_path / "other-input.txt")
+            elif fault == "namespace":
+                d["namespace"] = "f" * 64
+            elif fault == "module":
+                d["module_sha256"] = "f" * 64
+            elif fault == "consent":
+                d["consent_at"] = "2030-01-01T00:00:00"
+        scope, journal = successor_reseal_fixture(scope, journal, document_change=change)
+    hooks = SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert not witness.calls and hooks.created == 0
+
+
+def test_successor_once_identity_ignores_new_source_and_invocation(tmp_path):
+    scope, _, _, journal, _ = successor_assembly_inputs(tmp_path)
+    d = scope.data
+    d["invocation"] = "f" * 64
+    d["source"] = {"synthetic_changed_source": True}
+    assert S.once_identity(S.Scope(C.canonical(d), scope.artifacts)) == S.once_identity(scope)
+    state_artifact = next(a for a in scope.artifacts if a.name == "state")
+    alternate = state_artifact.path.with_name("projection.json")
+    write(alternate, C.decode(state_artifact.path.read_bytes()))
+    artifacts = tuple(S.Artifact(a.name, alternate, C.canonical(C.regular(alternate, 0o600)), a.sha256)
+                      if a.name == "state" else a for a in scope.artifacts)
+    assert S.once_identity(S.Scope(scope.document, artifacts)) == S.once_identity(scope)
+    with pytest.raises(S.Closed, match="ANCESTRY_SCOPE"):
+        S.Scope(scope.document, artifacts).check(C.KeySource(tmp_path / "synthetic-input.txt", scope.data["source"]["identity"], True),
+                                               S.Authority("synthetic", scope.data["authority_sha256"], lambda: None, lambda: None, lambda: None), synthetic=True)
+
+
+def test_successor_start_fsync_latency_cannot_create_resource(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    original = journal.persist
+    def delayed(status, event, **kwargs):
+        original(status, event, **kwargs)
+        if event["phase"] == "start_ACK":
+            clock.advance(121, wall=False)
+    hooks = SuccessorHooks()
+    with patch.object(journal, "persist", delayed), pytest.raises(S.Closed, match="LEASE_EXPIRED"):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.created == 0
+
+
+@pytest.mark.parametrize("phase", ["count", "generation"])
+def test_successor_phase_ack_expiry_never_supplies_after_count(tmp_path, phase):
+    from unittest.mock import AsyncMock
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.advance = phase
+    hooks = SuccessorHooks()
+    with patch.object(V, "verify_live", successor_verifier_spy), patch.object(C.KeySource, "read", new_callable=AsyncMock) as read:
+        read.return_value = "cf026-synthetic-unused"
+        with pytest.raises(S.Closed):
+            asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                              synthetic=True, hooks=hooks, clock=clock))
+    assert read.await_count == (0 if phase == "count" else 1)
+    assert hooks.cleaned == 1 and hooks.preserved == 0
+
+
+def test_successor_late_cancellation_preserves_prior_failure_account_and_proof(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.fail = "accounting-cancel"
+    hooks = SuccessorHooks()
+    async def unavailable(**_):
+        return dict(stages=[], meaning_status="unavailable", settlement="hold")
+    with patch.object(V, "verify_live", unavailable), pytest.raises(asyncio.CancelledError):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.preserved == 1 and hooks.cleaned == 0
+    assert any(x["phase"] == "final_accounting" for x in journal.state["journal"])
+    assert journal.state["status"] == "claimed"
+
+
+def test_successor_accounting_ack_loss_is_bounded_preserve_not_cleanup(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.fail = "accounting-readback"
+    hooks = SuccessorHooks()
+    observed_timeouts = []
+    original = lambda *args, **kwargs: observed_timeouts.append(kwargs.get("timeout"))
+    hooks.driver.call = original
+    def preserve():
+        hooks.preserved += 1
+        hooks.driver.call("synthetic-receipt-check", timeout=100)
+    hooks.preserve = preserve
+    async def unavailable(**_):
+        return dict(stages=[], meaning_status="unavailable", settlement="hold")
+    with patch.object(V, "verify_live", unavailable), pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.preserved == 1 and hooks.cleaned == 0
+    assert observed_timeouts and 0 < observed_timeouts[0] <= 5
+    assert hooks.driver.call is original
+    assert any(x["phase"] == "final_accounting" for x in journal.state["journal"])
+
+
+def test_successor_fresh_object_after_local_loss_cannot_reconsume(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.fail = "issue"
+    hooks = SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    witness.fail = None
+    # Simulated loss/reset of only local evidence does not reset independent witness.
+    offered = dict(schema="cf026.successor.journal.v1", scope_sha256=scope.sha256,
+                   status="offered", rights=dict(count=0, generation=0), preparation=None, journal=[])
+    write(journal.path / "state.json", offered)
+    pin = dict(identity=C.regular(journal.path / "state.json", 0o600), sha256=C.hashlib.sha256((journal.path / "state.json").read_bytes()).hexdigest())
+    fresh = S.Journal(journal.path, pin, journal.lock_pin, scope.sha256)
+    calls = len(witness.calls)
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(S.Scope(scope.document, scope.artifacts), source=source, authority=witness.capability(),
+                          journal=fresh, synthetic=True, hooks=hooks, clock=clock))
+    assert witness.calls[calls:] == ["admission"] and hooks.created == 0
+
+
+def test_successor_owned_sql_dispatch_guard_stops_epoch_write_after_await(tmp_path):
+    # The real checked epoch helper is executed; DB objects are mocks, not real PG.
+    from contextlib import asynccontextmanager
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    authority = witness.capability()
+    journal.enter()
+    session = S.Session(scope, source, authority, journal, True, clock)
+    session.lease = S.Lease(clock.wall().isoformat(), scope.data["consent_at"], clock)
+    adds = []
+    class Database:
+        async def scalar(self, *_):
+            return None
+        def add(self, row):
+            adds.append(row)
+        async def commit(self):
+            raise AssertionError("Expired epoch must not commit")
+    @asynccontextmanager
+    async def database(*_):
+        yield Database()
+    async def principal(*_, **__):
+        return None
+    async def delayed_clock(_):
+        clock.advance(601)
+        return clock.wall()
+    import src.modules.auth.application.session_service as A
+    import src.modules.supervisor.infrastructure.preparation_repository as R
+    try:
+        with patch.object(S, "checked_session", database), patch.object(A, "validate_principal", principal), patch.object(R, "clock", delayed_clock):
+            with pytest.raises(S.Closed, match="LEASE_EXPIRED"):
+                asyncio.run(S.initialize_checked_epoch(object(), object(), str(uuid4()), session))
+        assert not adds
+    finally:
+        journal.close()
+
+
+def test_successor_checked_connection_rechecks_after_owned_preflight(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    journal.enter()
+    session = S.Session(scope, source, witness.capability(), journal, True, clock)
+    session.lease = S.Lease(clock.wall().isoformat(), scope.data["consent_at"], clock)
+    class Proof:
+        async def preflight(self):
+            clock.advance(601)
+    import sqlalchemy.ext.asyncio as SQL
+    async def execute():
+        async with S.checked_connection(Proof(), session):
+            raise AssertionError("Expired connection must not open")
+    try:
+        with patch.object(SQL, "create_async_engine", side_effect=AssertionError("No engine")) as create:
+            with pytest.raises(S.Closed, match="LEASE_EXPIRED"):
+                asyncio.run(execute())
+        create.assert_not_called()
+    finally:
+        journal.close()
+
+
+def test_successor_scoped_sql_hooks_recheck_and_are_removed(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    journal.enter()
+    session = S.Session(scope, source, witness.capability(), journal, True, clock)
+    session.lease = S.Lease(clock.wall().isoformat(), scope.data["consent_at"], clock)
+    listeners, removed = {}, []
+    own_engine = object()
+    class Connection:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            return None
+    class Engine:
+        sync_engine = own_engine
+        disposed = False
+        def connect(self):
+            return Connection()
+        async def dispose(self):
+            self.disposed = True
+    engine = Engine()
+    class Proof:
+        url = "synthetic://not-a-real-connection"
+        async def preflight(self):
+            return None
+        def connection_parameters(self):
+            return {}
+        async def attest_connection(self, _):
+            return None
+    def listen(target, name, callback):
+        assert target is own_engine
+        listeners[name] = callback
+    def remove(target, name, callback):
+        assert target is own_engine and listeners[name] is callback
+        removed.append(name)
+    async def execute():
+        async with S.checked_connection(Proof(), session):
+            clock.advance(601)
+            for name in ("before_cursor_execute", "commit"):
+                with pytest.raises(S.Closed, match="LEASE_EXPIRED"):
+                    listeners[name]()
+    import sqlalchemy.ext.asyncio as SQL
+    import sqlalchemy.event as E
+    try:
+        with patch.object(SQL, "create_async_engine", return_value=engine), patch.object(E, "listen", listen), patch.object(E, "remove", remove):
+            asyncio.run(execute())
+        assert engine.disposed and set(removed) == {"before_cursor_execute", "commit"}
+    finally:
+        journal.close()
+
+
+def test_successor_concurrent_local_claim_is_one_winner(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    first_hooks, second_hooks = SuccessorHooks(), SuccessorHooks()
+    second_journal = S.Journal(journal.path, journal.pin.copy(), journal.lock_pin, scope.sha256)
+    async def unavailable(**_):
+        return dict(stages=[], meaning_status="unavailable", settlement="hold")
+    async def execute():
+        started, release = asyncio.Event(), asyncio.Event()
+        async def admission(**args):
+            if args["phase"] == "admission":
+                started.set()
+                await release.wait()
+            return await witness.verify(**args)
+        authority = S.Authority("synthetic", witness.identity, admission, witness.consume, witness.readback)
+        task = asyncio.create_task(S.run(scope, source=source, authority=authority, journal=journal,
+                                        synthetic=True, hooks=first_hooks, clock=clock))
+        try:
+            async with asyncio.timeout(1):
+                await started.wait()
+            with pytest.raises(S.Closed):
+                await S.run(scope, source=source, authority=witness.capability(), journal=second_journal,
+                            synthetic=True, hooks=second_hooks, clock=clock)
+        finally:
+            release.set()
+        result = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(result[0], S.Closed)
+    with patch.object(V, "verify_live", unavailable):
+        asyncio.run(execute())
+    assert first_hooks.created == 1 and second_hooks.created == 0
+    assert witness.calls.count("reserve") == 1
+
+
+@pytest.mark.parametrize("ack", [True, {"approved": True}, "a"*64])
+def test_successor_bool_or_hash_is_not_an_authority_consumption_ack(tmp_path, ack):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    async def forged(**_):
+        return ack
+    authority = S.Authority("synthetic", witness.identity, witness.verify, forged, forged)
+    hooks = SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=authority, journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.created == 0
+
+
+def test_successor_consumed_witness_survives_changed_invocation_and_local_reset(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.fail = "issue"
+    hooks = SuccessorHooks()
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    d = scope.data
+    d["invocation"] = "f" * 64
+    changed = S.Scope(C.canonical(d), scope.artifacts)
+    assert S.once_identity(changed) == S.once_identity(scope)
+    offered = dict(schema="cf026.successor.journal.v1", scope_sha256=changed.sha256,
+                   status="offered", rights=dict(count=0, generation=0), preparation=None, journal=[])
+    write(journal.path / "state.json", offered)
+    fresh = S.Journal(journal.path, dict(identity=C.regular(journal.path/"state.json", 0o600),
+                        sha256=C.hashlib.sha256((journal.path/"state.json").read_bytes()).hexdigest()), journal.lock_pin, changed.sha256)
+    witness.fail = None
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(changed, source=source, authority=witness.capability(), journal=fresh,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert hooks.created == 0 and witness.calls.count("reserve") == 1
+
+
+def test_successor_live_cannot_accept_synthetic_scope_or_callback_helpers(tmp_path):
+    scope, source, witness, journal, _ = successor_assembly_inputs(tmp_path)
+    with pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal))
+    assert witness.once is None and not witness.calls
+
+
+def test_successor_normalizes_secrets_and_preserves_unknown_ledger(tmp_path, capsys):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    hooks = SuccessorHooks()
+    async def fail(**_):
+        raise OSError(PRIVATE)
+    with patch.object(V, "verify_live", fail), pytest.raises(S.Closed) as caught:
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    text = str(caught.value) + (journal.path / "state.json").read_text() + capsys.readouterr().out
+    assert PRIVATE not in text and C.hashlib.sha256(PRIVATE.encode()).hexdigest() not in text
+    accounting = next(x for x in journal.state["journal"] if x["phase"] == "final_accounting")
+    assert accounting["ledger"] is None and accounting["estimated_nano"] is None
+    assert accounting["reserved_nano"] == 200000000 and accounting["http"] == "unknown"
+    assert str(S.Closed(PRIVATE)) == "SUCCESSOR_FAILED"
+
+
+@pytest.mark.parametrize("phase", ["count-readback", "generation-readback"])
+def test_successor_phase_ack_unknown_blocks_next_supplier_or_generation(tmp_path, phase):
+    from unittest.mock import AsyncMock
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    witness.fail = phase
+    hooks = SuccessorHooks()
+    with patch.object(V, "verify_live", successor_verifier_spy), patch.object(C.KeySource, "read", new_callable=AsyncMock) as read:
+        read.return_value = "cf026-synthetic-unused"
+        with pytest.raises(S.Closed):
+            asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                              synthetic=True, hooks=hooks, clock=clock))
+    assert read.await_count == (0 if phase.startswith("count") else 1)
+    assert hooks.cleaned == 0 and hooks.preserved == 1 and witness.calls.count("count") == 1
+    assert witness.calls.count("generation") == (0 if phase.startswith("count") else 1)
+
+
+def test_successor_phase_replay_is_rejected_after_one_verifier_call(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    hooks = SuccessorHooks()
+    calls = []
+    async def verified(**kwargs):
+        calls.append(kwargs)
+        result = await successor_verifier_spy(**kwargs)
+        phase_authority = kwargs["authority"]
+        with pytest.raises(S.Closed, match="PHASE_SCOPE"):
+            await phase_authority.verify(phase="count")
+        return result
+    item = scope.data["request"]
+    hooks.snapshot_value = dict(count=1, generation=1, reserved=50000000, blocked=False, active=None,
+        attempts={str(uuid4()): dict(request_sha256=item["request_sha256"], projection_sha256=item["projection_sha256"],
+                                   observation=dict(state="observed", estimated_nano=120000))})
+    with patch.object(V, "verify_live", verified):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert len(calls) == 1 and witness.calls.count("count") == witness.calls.count("generation") == 1
+
+
+def test_successor_lease_fields_cannot_be_renewed():
+    from dataclasses import FrozenInstanceError
+    clock = SuccessorClock()
+    lease = S.Lease(clock.wall().isoformat(), clock.wall().isoformat(), clock)
+    for field, value in [("expires", clock.wall()+timedelta(hours=1)), ("monotonic_end", 999999),
+                         ("monotonic_start_end", 999999), ("issued", clock.wall()+timedelta(minutes=1))]:
+        with pytest.raises(FrozenInstanceError):
+            setattr(lease, field, value)
+
+
+def test_successor_phase_verification_serializes_same_attempt(tmp_path):
+    scope, source, witness, journal, clock = successor_assembly_inputs(tmp_path)
+    hooks = SuccessorHooks()
+    async def concurrent(**kwargs):
+        phase_authority = kwargs["authority"]
+        d = phase_authority.session.scope.data
+        async def fresh(self):
+            await asyncio.sleep(0)
+            if self.store.state["preparation"] is None:
+                self.store.persist("claimed", dict(phase="preparation_binding_ACK"), preparation={"synthetic_only": True})
+            return dict(count=0, generation=0, reserved=0)
+        args = dict(mode="synthetic", proof_binding=kwargs["binding"], principal=kwargs["principal"],
+                    agreement=kwargs["counter_agreement"], key_supplier=kwargs["key_supplier"],
+                    key_source_capability=source, draft_sha256=d["request"]["draft_sha256"], semantic_sha256=d["semantic_sha256"])
+        with patch.object(S.PhaseAuthority, "fresh_preparation", fresh):
+            await phase_authority.verify(phase="initial", **args)
+            args.update(request_sha256=d["request"]["request_sha256"], projection_sha256=d["request"]["projection_sha256"])
+            await phase_authority.verify(phase="preflight", **args)
+            attempts = await asyncio.gather(phase_authority.verify(phase="count", **args),
+                                             phase_authority.verify(phase="count", **args), return_exceptions=True)
+        assert sum(isinstance(x, S.Closed) for x in attempts) == 1
+        return dict(stages=[], meaning_status="unavailable", settlement="hold")
+    with patch.object(V, "verify_live", concurrent), pytest.raises(S.Closed):
+        asyncio.run(S.run(scope, source=source, authority=witness.capability(), journal=journal,
+                          synthetic=True, hooks=hooks, clock=clock))
+    assert witness.calls.count("count") == 1

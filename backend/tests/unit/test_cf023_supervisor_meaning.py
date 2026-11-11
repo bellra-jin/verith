@@ -70,7 +70,9 @@ async def test_sufficiency_remainder_and_grounded_barriers(case):
 
 async def test_unknown_mention_can_be_grounded_once_and_continue_fixed_conditions():
     q='현대건설 어제 말고 외국인 말고 기관 수급'
-    candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)],conditions=[dict(domain='flow',kind='cutoff',value='어제',evidence=ev(q,'어제'),negation=ev(q,'말고'))])
+    # The two standalone '말고' occurrences are ambiguous under model-only anchoring.
+    # A unique contiguous phrase retains the same explicit embedded negation.
+    candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)],conditions=[dict(domain='flow',kind='cutoff',value='어제',evidence=ev(q,'어제 말고'),negation=None)])
     gateway=NS(propose=AsyncMock(return_value=candidate))
     frame,status=await S.understand_v2(draft(q),gateway,attempt_id=str(uuid4()))
     assert status=='supplemented' and frame.interpretation_source=='model_assisted'
@@ -80,7 +82,7 @@ async def test_unknown_mention_can_be_grounded_once_and_continue_fixed_condition
     gateway.propose.assert_awaited_once()
 
 
-@pytest.mark.parametrize('change',['view','actor','unit','negation','domain','outside','canonical'])
+@pytest.mark.parametrize('change',['view','actor','unit','negation','domain','missing_text','canonical'])
 async def test_candidate_span_does_not_approve_semantic_substitution(change):
     q='현대건설 외국인 말고 3주 수급'
     value=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)])
@@ -89,7 +91,7 @@ async def test_candidate_span_does_not_approve_semantic_substitution(change):
     elif change=='unit':value['conditions']=[dict(domain='flow',kind='period',value='3개월',evidence=ev(q,'3주'),negation=None)]
     elif change=='negation':value['conditions']=[dict(domain='flow',kind='exclude',value='외국인',evidence=ev(q,'외국인'),negation=None)]
     elif change=='domain':value['conditions']=[dict(domain='technical',kind='period',value='3주',evidence=ev(q,'3주'),negation=None)]
-    elif change=='outside':value['mentions'][0]['evidence']['end']=9999
+    elif change=='missing_text':value['mentions'][0]['evidence']['text']='없는회사'
     else:value['stock_code']='005930'
     frame,status=await S.understand_v2(draft(q),NS(propose=AsyncMock(return_value=value)),attempt_id=str(uuid4()))
     assert status=='rejected' and frame.interpretation_source=='unavailable' and frame.unresolved_slots
@@ -407,6 +409,142 @@ async def test_typed_stock_keeps_original_negation_period_and_other_stock_eviden
     d=draft('현대차와 기아 수급',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대차')])
     first=await P.start_v2(d)
     assert first.action!='resolve_stock' and any(c.value=='기아' for c in first.frame.conditions)
+
+
+@pytest.mark.parametrize('query',['현대건설 수급','😀 현대건설 수급','  현대건설  수급'])
+@pytest.mark.parametrize('typed',[False,True])
+def test_model_alignment_uses_python_text_positions_without_mutating_inputs(query,typed):
+    d=draft(query);expected=proposal(mentions=[dict(evidence=ev(query,'현대건설'),negation=None)])
+    raw=copy.deepcopy(expected);raw['mentions'][0]['evidence'].update(start=9999,end=1)
+    candidate=T.MeaningProposal.model_validate(raw) if typed else raw
+    before=copy.deepcopy(candidate);before_draft=d.model_dump(mode='python')
+    aligned=G.align_model_proposal(d,candidate)
+    assert aligned.model_dump(mode='python')==expected
+    assert aligned.mentions[0].evidence.start==query.index('현대건설')
+    assert G.assess(d,candidate,source='model_assisted')==G.assess(d,expected,source='model_assisted')
+    assert candidate==before and d.model_dump(mode='python')==before_draft
+    assert aligned is not candidate
+
+
+def test_all_proposal_sections_and_negation_keep_exact_meaning_values():
+    q='현대건설 외국인 말고 3주 수급';d=draft(q)
+    expected=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)],
+        views=[dict(view='flow',evidence=ev(q,'수급'),negation=None)],
+        conditions=[dict(domain='flow',kind='exclude',value='외국인',evidence=ev(q,'외국인'),negation=ev(q,'말고')),
+                    dict(domain='flow',kind='period',value='3주',evidence=ev(q,'3주'),negation=None)])
+    raw=copy.deepcopy(expected)
+    for section in ('mentions','views','conditions'):
+        for item in raw[section]:
+            for name in ('evidence','negation'):
+                if item[name] is not None:item[name].update(start=9000,end=1)
+    before=copy.deepcopy(raw);aligned=G.align_model_proposal(d,raw)
+    assert aligned.model_dump()==expected and raw==before
+    frame=G.assess(d,raw,source='model_assisted').frame
+    assert frame.requested_views==['flow'] and 'flow' not in frame.negated_views
+    assert any(c.kind=='exclude' and c.value=='외국인' for c in frame.conditions)
+    assert any(c.kind=='period' and c.value=='3주' for c in frame.conditions)
+    assert G.validate_fixed_frame(d,frame)==frame
+
+
+@pytest.mark.parametrize('patch_value',[
+    {'start':True},{'start':'0'},{'start':-1},{'end':0},{'end':'4'},
+    {'text':''},{'text':None},{'extra':'forbidden'},
+])
+def test_alignment_preserves_raw_strict_shape_and_minimum_checks(patch_value):
+    q='현대건설 수급';candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설')|patch_value,negation=None)])
+    with pytest.raises((M.CoreInvalid,ValueError,TypeError)):G.assess(draft(q),candidate)
+
+
+@pytest.mark.parametrize('query,text',[
+    ('현대건설 수급','현대 건설'),('현대건설 수급','없는회사'),
+    ('현대건설 flow','FLOW'),('é 수급','e\u0301'),
+    ('현대건설 현대건설 수급','현대건설'),('aaa 수급','aa'),('😀😀😀 수급','😀😀'),
+])
+def test_missing_nonexact_repeated_and_overlapping_text_never_uses_raw_offset(query,text):
+    candidate=proposal(mentions=[dict(evidence=dict(source_kind='original_query',answer_id=None,start=0,end=1,text=text),negation=None)])
+    before=copy.deepcopy(candidate)
+    with pytest.raises(M.CoreInvalid):G.align_model_proposal(draft(query),candidate)
+    assert candidate==before
+
+
+@pytest.mark.parametrize('source_case',['missing_answer','query_with_answer_id','answer_without_id','other_answer_only','original_only'])
+def test_alignment_never_searches_a_different_source_pair(source_case):
+    aid,bid=str(uuid4()),str(uuid4())
+    d=draft('현대건설 수급',answers=[dict(answer_id=aid,slot='stock',value='한빛건설'),dict(answer_id=bid,slot='stock',value='별빛건설')])
+    evidence=dict(source_kind='clarification_answer',answer_id=aid,start=0,end=1,text='한빛건설')
+    if source_case=='missing_answer':evidence['answer_id']=str(uuid4())
+    elif source_case=='query_with_answer_id':evidence['source_kind']='original_query'
+    elif source_case=='answer_without_id':evidence['answer_id']=None
+    elif source_case=='other_answer_only':evidence['answer_id']=bid
+    else:evidence['text']='현대건설'
+    with pytest.raises(M.CoreInvalid):G.assess(d,proposal(mentions=[dict(evidence=evidence,negation=None)]))
+
+
+def test_clarification_alignment_is_answer_relative_and_preserves_identity():
+    aid=str(uuid4());d=draft('종목 수급',answers=[dict(answer_id=aid,slot='stock',value='한빛건설')])
+    candidate=proposal(mentions=[dict(evidence=dict(source_kind='clarification_answer',answer_id=aid,start=999,end=1,text='한빛건설'),negation=None)])
+    aligned=G.align_model_proposal(d,candidate)
+    assert aligned.mentions[0].evidence.model_dump()==dict(source_kind='clarification_answer',answer_id=aid,start=0,end=4,text='한빛건설')
+    assert G.assess(d,candidate).frame.answers==d.answers
+
+
+def test_canonicalization_revalidates_duplicates_created_from_different_offsets():
+    q='현대건설 수급';one=dict(evidence=ev(q,'현대건설'),negation=None)
+    two=copy.deepcopy(one);two['evidence'].update(start=999,end=1)
+    raw=proposal(mentions=[one,two]);assert len(T.MeaningProposal.model_validate(raw).mentions)==2
+    with pytest.raises(ValueError):G.align_model_proposal(draft(q),raw)
+    assert raw['mentions'][1]['evidence']['start']==999
+
+
+@pytest.mark.parametrize('domain,kind,value,query',[
+    ('flow','period','3주','현대건설 3주 수급'),
+    ('flow','period','20거래일','현대건설 20거래일 수급'),
+    ('flow','cutoff','지난달','현대건설 지난달 수급'),
+    ('fundamental','statement_basis','OFS','현대건설 재무 OFS'),
+    ('fundamental','statement_basis','CFS','현대건설 재무 CFS'),
+])
+def test_alignment_never_changes_period_actor_or_financial_units(domain,kind,value,query):
+    candidate=proposal(mentions=[dict(evidence=ev(query,'현대건설'),negation=None)],
+        conditions=[dict(domain=domain,kind=kind,value=value,evidence=ev(query,value)|dict(start=999,end=1),negation=None)])
+    frame=G.assess(draft(query),candidate).frame
+    assert any(c.domain==domain and c.kind==kind and c.value==value for c in frame.conditions)
+
+
+@pytest.mark.parametrize('ambiguous',[False,True])
+def test_alignment_keeps_adjacent_negation_relationship_checks(ambiguous):
+    q='현대건설 외국인 말고 기관 '+('말고' if ambiguous else '빼고')+' 수급'
+    candidate=proposal(conditions=[dict(domain='flow',kind='exclude',value='외국인',evidence=ev(q,'외국인'),
+        negation=ev(q,'말고' if ambiguous else '빼고'))])
+    with pytest.raises(M.CoreInvalid):G.assess(draft(q),candidate)
+
+
+async def test_observed_overview_candidate_still_fails_meaning_after_alignment():
+    q='현대건설 외국인 말고 3주 수급'
+    candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)],views=[dict(view='overview',
+        evidence=dict(source_kind='original_query',answer_id=None,start=0,end=15,text='현대건설 외국인'),negation=None)])
+    aligned=G.align_model_proposal(draft(q),candidate)
+    assert aligned.views[0].evidence.end==8 and aligned.views[0].view=='overview'
+    with pytest.raises(M.CoreInvalid):G.assess(draft(q),candidate)
+    gateway=NS(propose=AsyncMock(return_value=candidate));frame,status=await S.understand_v2(draft(q),gateway)
+    assert status=='rejected' and frame.interpretation_source=='unavailable'
+    gateway.propose.assert_awaited_once()
+
+
+async def test_actual_service_uses_alignment_once_and_keeps_fixed_frame_and_policy1_outside_it():
+    q='현대건설 외국인 말고 3주 수급';d=draft(q)
+    candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설')|dict(start=9999,end=1),negation=None)])
+    gateway=NS(propose=AsyncMock(return_value=candidate));frame,status=await S.understand_v2(d,gateway)
+    assert status=='supplemented' and frame.requested_views==['flow']
+    assert any(c.kind=='exclude' and c.value=='외국인' for c in frame.conditions)
+    assert any(c.kind=='period' and c.value=='3주' for c in frame.conditions)
+    gateway.propose.assert_awaited_once()
+    bad=copy.deepcopy(frame);bad.mentions[0].evidence.end+=1
+    with patch.object(G,'align_model_proposal',side_effect=AssertionError('Canonical frame must not be reanchored')):
+        assert G.validate_fixed_frame(d,frame)==frame
+        with pytest.raises(M.CoreInvalid):G.validate_fixed_frame(d,bad)
+        assert G.assess(d).frame.interpretation_source=='deterministic'
+        legacy=await S.understand(draft('삼성전자 수급'),NS(extract=AsyncMock(side_effect=AssertionError('No legacy gateway'))))
+        assert legacy.interpretation_source=='deterministic'
 
 
 async def test_invalid_typed_stock_prose_stays_unrecognized_and_fixed_frame_rejects_widening():

@@ -39,6 +39,8 @@ export function ChatView(p:ChatProps){
  useLayoutEffect(()=>{if(busy)onPendingCommit?.();},[busy,onPendingCommit]);
  useEffect(()=>{if(plan&&heading.current)onPlanCommit?.(plan,heading.current);},[plan,onPlanCommit]);
  return <section className="supervisor-chat" aria-label="Supervisor 리서치 대화" aria-busy={blocked}>
+   {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Native owned-read navigation preserves session teardown. */}
+   <p className="sc-notice"><a href="/reports/technical">저장된 차트 결과 보기 · 조회 전용</a><small>저장 결과 탐색이며 새 Technical 분석을 실행하지 않습니다.</small></p>
   <header className="sc-header"><span className="sc-eyebrow">VERIθ · RESEARCH</span><h1>무엇이 궁금하신가요?</h1><p>질문을 확인하고, 지금 연결된 분석부터 근거와 함께 살펴봅니다.</p><div className="sc-badges"><span>연결됨 · Flow</span><span>차트·재무 · 아직 미연결</span></div></header>
   <div className="sc-thread" aria-live="polite">
    {p.verificationPending&&<p role="status">상태 확인 중 · 실행 없음</p>}

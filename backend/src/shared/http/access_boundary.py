@@ -32,6 +32,21 @@ class AccessBoundary:
                 await send({"type": "websocket.close", "code": 1008})
             return
         method, path = scope["method"], scope["path"]
+        if path == '/api/technical/owned-reports' or path.startswith('/api/technical/owned-reports/'):
+            from src.modules.technical.api import owned_report_schemas as technical_read
+            from src.modules.auth.api.router import configured
+            try: technical_read.target(method,path,scope.get('query_string',b''))
+            except technical_read.ReadInvalid as failure:
+                await technical_read.error(scope,failure.code)(scope,receive,send); return
+            if not configured():
+                await technical_read.error(scope,'AUTH_REQUIRED')(scope,receive,send); return
+            async def technical_private_send(message):
+                if message['type'] == 'http.response.start':
+                    headers = [(k,v) for k,v in message.get('headers',[]) if k.lower() not in {b'cache-control',b'vary'}]
+                    message = {**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
+                await send(message)
+            await self.app(scope,receive,technical_private_send)
+            return
         if path == '/api/fundamental' or path.startswith('/api/fundamental/'):
             from uuid import UUID
             from urllib.parse import parse_qsl

@@ -223,3 +223,37 @@ test('CF034 real BFF body16 closes before upstream0 with504, retaining16KiB limi
  const result=await pending;assert.equal(result.status,504);assert.equal((await result.json()).error.code,'DEADLINE_EXCEEDED');assert.equal(calls,0);assert.equal(cancelled,1);
  const large=await proxy.sessionProxy(new Request('https://app.unit/api/private/supervisor/core/preparations',{method:'POST',headers:{'content-type':'application/json'},body:'x'.repeat(16385)}),'/api/supervisor/core/preparations');assert.equal(large.status,422);assert.equal(calls,0);
 });
+
+test('CF036 exact owned GET forwards only fixed path/query and no service or owner headers',async()=>{
+ const seen=[],timeouts=[],id='00000000-0000-4000-8000-000000000006',ctx=p=>({params:Promise.resolve({path:p.split('/')})});
+ const route=load('src/app/api/private/[...path]/route.ts',async(url,init)=>{seen.push({url,init});return Response.json({safe:true});},{AbortSignal:{timeout(ms){timeouts.push(ms);return new AbortController().signal;}}});
+ for(const target of ['technical/owned-reports?stock_code=005930&limit=20&offset=0','technical/owned-reports/'+id]){
+  const response=await route.GET(new Request('https://app.unit/api/private/'+target,{headers:{Cookie:'verith_session=a; verith_session=b',Origin:'https://app.unit',Authorization:'spoof','x-owner-id':'spoof','x-technical-service-token':'spoof'}}),ctx(target.split('?')[0]));
+  assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'private, no-store');assert.equal(response.headers.get('vary'),'Cookie, Origin');
+ }
+ assert.deepEqual(timeouts,[20000,20000]);assert.equal(seen[0].url,'http://backend.unit/api/technical/owned-reports?stock_code=005930&limit=20&offset=0');
+ for(const {init}of seen){assert.equal(init.method,'GET');assert.equal(init.redirect,'manual');assert.equal(init.cache,'no-store');assert.equal(init.headers.get('accept-encoding'),'identity');assert.equal(init.headers.get('cookie'),'verith_session=a; verith_session=b');for(const name of ['authorization','x-owner-id','x-technical-service-token'])assert.equal(init.headers.get(name),null);}
+ const count=seen.length;
+ for(const [method,target,status]of[['POST','technical/owned-reports',403],['DELETE','technical/owned-reports/'+id,403],['GET','technical/owned-reports/'+id+'/trace',403],['GET','technical/owned-reports/not-a-uuid',422],['GET','technical/owned-reports/'+id+'?x=1',422],['GET','technical/owned-reports?owner=x',422],['GET','technical/owned-reports?limit=21',422],['GET','technical/owned-reports?limit=10&limit=10',422],['GET','technical/owned-reports?stock_code=１２３４５６',422]]){
+  const response=await route[method](new Request('https://app.unit/api/private/'+target,{method}),ctx(target.split('?')[0]));assert.equal(response.status,status);assert.equal((await response.json()).schema_version,'technical.owned-read.v1');
+ }
+ assert.equal(seen.length,count);
+});
+for(const [detail,cap]of[[false,65536],[true,4259840]])test('CF036 decoded '+(detail?'detail':'list')+' limit exact '+cap,async()=>{
+ let size=cap;const proxy=load('src/shared/server/session-proxy.ts',async()=>new Response(new Uint8Array(size)));
+ const target='/api/technical/owned-reports'+(detail?'/00000000-0000-4000-8000-000000000006':'');
+ assert.equal((await proxy.sessionProxy(new Request('https://app.unit/api/private/technical/owned-reports'),target)).status,200);size++;
+ const response=await proxy.sessionProxy(new Request('https://app.unit/api/private/technical/owned-reports'),target);assert.equal(response.status,502);assert.equal((await response.json()).error.code,'RESULT_CONTRACT_INVALID');
+});
+for(const phase of ['upstream','response-stream'])test('CF036 one20s deadline includes '+phase,async()=>{
+ const clock=preparationDeadlineClock();let entered,calls=0,cancelled=0;const started=new Promise(r=>{entered=r;});
+ const proxy=load('src/shared/server/session-proxy.ts',async(_url,init)=>{calls++;if(phase==='upstream'){entered();return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('private')),{once:true}));}return new Response(new ReadableStream({pull(){entered();},cancel(){cancelled++;}}));},{AbortSignal:clock});
+ const pending=proxy.sessionProxy(new Request('https://app.unit/api/private/technical/owned-reports'),'/api/technical/owned-reports');await started;clock.advance(20000);const result=await pending;
+ assert.equal(result.status,504);assert.equal((await result.json()).error.code,'DEADLINE_EXCEEDED');assert.equal(calls,1);if(phase==='response-stream')assert.equal(cancelled,1);
+});
+test('CF036 missing backend/local origin/redirect/unknown encoding stay closed without raw exception',async()=>{
+ for(const mode of ['missing','host','redirect','encoding','error']){
+  let calls=0;const proxy=load('src/shared/server/session-proxy.ts',async()=>{calls++;if(mode==='error')throw Error('CF036-private');return mode==='redirect'?new Response(null,{status:302,headers:{Location:'https://other.unit'}}):new Response('{}',{headers:{'Content-Encoding':'gzip'}});},{base:mode==='missing'?null:mode==='host'?'http://localhost:8200':undefined});
+  const response=await proxy.sessionProxy(new Request('https://app.unit/api/private/technical/owned-reports'),'/api/technical/owned-reports');assert.equal(response.status,mode==='host'?403:503);assert.ok(!(await response.text()).includes('CF036-private'));assert.equal(calls,['missing','host'].includes(mode)?0:1);
+ }
+});

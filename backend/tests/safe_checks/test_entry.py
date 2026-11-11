@@ -1055,6 +1055,59 @@ class CF036Boundary(unittest.TestCase):
         for name in ('src.api.main','openai','src.agents.technical.application.agent','tests.unit.test_cf021_technical_boundary'):
             self.assertNotIn(name,sys.modules)
 
+class CF040Boundary(unittest.TestCase):
+    def test_exact_four_inputs_six_origins_and_single_collection(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        self.assertEqual(c.CF040_TESTS,('tests/unit/test_cf040_technical_runtime_setup.py',))
+        self.assertEqual(c.CF040_COMPAT,c.CF035_COMPAT)
+        self.assertEqual(len(c.CF040_COMPAT),6)
+        self.assertEqual(set(c.CF040_INPUTS),{
+            'ai/src/agents/technical/config.py','ai/src/api/dependencies.py',
+            'ai/src/agents/technical/domain/intraday_limits.py','ai/src/shared/runtime/deadline.py'})
+        self.assertEqual(c.CF021_INPUTS['ai/src/agents/technical/config.py'],c.CF040_INPUTS['ai/src/agents/technical/config.py'])
+        for name,digest in (c.CF040_COMPAT | c.CF040_INPUTS).items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_runtime_only=True)
+        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF040_COMPAT | c.CF040_INPUTS))
+        self.assertFalse(any(p.startswith('frontend/') for p in selected))
+        self.assertTrue(c.CF040_SOURCES <= set(selected))
+        for name in ('backend/scripts/cf026_successor.py','backend/scripts/cf026_supervisor_live_controller.py',
+                     'ai/src/agents/technical/application/agent.py','ai/src/agents/technical/application/orchestration/technical_graph.py'):
+            self.assertNotIn(name,selected)
+
+    def test_fixed_runtime_modes_preserve_existing_dispatch(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('technical-runtime-self','technical-runtime-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertTrue(run.call_args.kwargs['technical_runtime_only'])
+                self.assertFalse(run.call_args.kwargs['technical_boundary_only'])
+                self.assertFalse(run.call_args.kwargs['technical_owned_read_only'])
+                self.assertEqual(run.call_args.args[1],('self-test' if mode.endswith('self') else 'unit',))
+
+    def test_actual_import_probe_origin_and_original_access_boundary(self):
+        import sys
+        from tests.unit import test_cf040_technical_runtime_setup as unit
+        from scripts.safe_checks_bootstrap import valid_flow_origins,read_allowed
+        unit.load_readonly()
+        self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
+        self.assertFalse(unit.COLLECTION_PROBE.events)
+        self.assertFalse(unit.COLLECTION_PROBE.loads)
+        self.assertFalse(unit.COLLECTION_PROBE.io)
+        self.assertFalse(any(name=='dotenv' for name,_ in unit.COLLECTION_PROBE.imports))
+        self.assertFalse(read_allowed(Path('/unapproved-original/ai/src/agents/technical/config.py'),Path('/owned'),Path('/site'),Path('/runtime')))
+        self.assertFalse(read_allowed(Path('/unapproved-original/.env'),Path('/owned'),Path('/site'),Path('/runtime')))
+        self.assertNotIn('src.api.dependencies',sys.modules)
+        self.assertNotIn('tests.unit.test_cf021_technical_boundary',sys.modules)
+        for name in unit.LATE:self.assertNotIn(name,sys.modules)
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -1073,6 +1126,7 @@ if __name__ == "__main__":
     technical_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf031_self_only",False)
     technical_owned_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf035_self_only",False)
     technical_owned_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf036_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    technical_runtime_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf040_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

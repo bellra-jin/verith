@@ -136,3 +136,20 @@ typed model은 Python 값으로 dump한 뒤 datetime/date의 표준 ISO 표현�
 현재 보호 환경에는 실제 graph runtime/dependency가 준비되지 않았으며 collector의 graph/config/provider import 금지를
 유지한다. 이번 증거는 실제 thread와 주입한 fake runner의 연결이며 실제 LangGraph 계산·KIS/OpenAI·캐시/trace 서비스·
 owner 저장/usage·Supervisor 실행 수용이 아니다. [직접 검사와 미실행 경계](../work/CF-039-technical-engine-bridge.md)를 따른다.
+
+## CF040 · import 안전성과 명시 초기화
+
+Technical config는 import 때 환경/파일을 탐색하거나 dotenv/getenv·client/cache/trace 생성을 하지 않는다.
+기존 정적 기본값을 두고 명시 initialize_runtime이 intraday/trace-enabled/trace-path의 불변 snapshot을 한 번 확정한다.
+기존 bool 파싱·기본값·환경 우선/override=False·명시 KIS/OpenAI loader와 파일 위치는 유지한다.
+동시 factory는 같은 완성 snapshot을 받고 실패는 부분 상태/client 없이 고정 오류로 닫힌다.
+
+기존 get_llm_client/get_fetcher/get_cache/get_trace_sink의 명시 호출/override 경계는 보존하며 Technical import는
+setup 뒤로 미룬다. trace는 snapshot을 소비하고 LLM 타입 alias는 런타임 client import 없는 forward reference를 사용한다.
+미초기화 상태의 pipeline/graph가 먼저 로드됐으면 늦은 setup을 거절한다. reload·module 삭제·다른 module flag patch는 없다.
+기본 main/route와 다른 legacy Supervisor chain은 재활성화하지 않는다.
+
+검사는 실제 config 및 선택한 factory 함수 body와 자기 환경 mapping/import spy를 사용한다. 전체 dependencies module이나
+실제 graph/service를 import한 수용이 아니다. CF021의 config/graph 금지·AST-only 검사와 기존 worker/guard는 유지한다.
+실제 compiled graph의 wheel/platform/site provenance·정확 collection과 수집 전 tracing/provider 차단은 설계 선행이며,
+이 import 안전화가 설치·실제 graph/KIS/OpenAI 실행을 허가하지 않는다. [검증 기록](../work/CF-040-technical-runtime-setup.md)을 따른다.

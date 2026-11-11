@@ -265,8 +265,8 @@ REGEN_MAX_COUNT = 1             # 검증 ③ 실패 시 재생성 최대 횟수
 ### 9.1 1D intraday(Beta) 활성화 플래그
 
 ```python
-# 기본 False. .env/환경변수 INTRADAY_FETCH_ENABLED 로 override 가능(_env_bool 파싱).
-INTRADAY_FETCH_ENABLED = _env_bool("INTRADAY_FETCH_ENABLED", default=False)
+# import 시 기본 False. 명시 initialize_runtime()에서만 기존 _env_bool 파싱을 적용한다.
+INTRADAY_FETCH_ENABLED = False
 ```
 
 ```env
@@ -278,6 +278,7 @@ INTRADAY_FETCH_ENABLED=true
 - **`True`일 때만** supervisor가 `intraday_fetcher` 미주입 시 **기본 KIS 분봉 fetcher(`fetch_minute_ohlcv`)** 를 써서 **리포트 생성 1회에 3m/1y/5y와 함께 `1d`·`intraday_context`를 조립**한다(best-effort). D/W/M이 supervisor 계층에서 항상 fetch되는 것과 같은 방식이되, **flag로 gate**한다.
 - **`False`(기본)** 이면 intraday 미포함 — **기존 D/W/M(3m/1y/5y)만**(현재 동작과 동일). **D/W/M은 필수, 1D는 best-effort로 실패/빈 응답 시 리포트 전체를 실패시키지 않는다.**
 - **env override**: `.env` 또는 환경변수 `INTRADAY_FETCH_ENABLED`로 환경별(dev/staging=on, prod=off 등) 제어한다. **새 KIS env key가 아니다**(기존 KIS 인증 값은 그대로). 파싱 규칙 — true: `1`/`true`/`yes`/`on`, false: 미설정/`0`/`false`/`no`/`off`/빈문자열, **인식 불가값은 경고 후 False**(운영 안전, 조용한 True 금지).
+- 적용 시점은 config import가 아니라 pipeline/graph import 전 명시 `initialize_runtime()`이다. 한 번 확정한 snapshot은 재로드하지 않는다.
 - 우선순위: `intraday_candles` 직접 주입 > 명시 `intraday_fetcher` > (flag ON) `fetch_minute_ohlcv` > off.
 - **실험/Beta 성격.** ON 시 요청마다 분봉 조회가 추가되어 **호출량·rate limit 부담이 커진다**(1회 30건 페이징, `EGW00201` 재시도 — `kis_mapping.md §12`). 운영 default-on은 **smoke 결과·운영 정책을 보고 결정**한다.
 - intraday fetch 실패·빈 응답은 D/W/M output에 전파되지 않는다.
@@ -462,3 +463,22 @@ Compose 내부는 postgres:5432·redis:6379·neo4j:7687을 유지한다. 추론�
 모델 서버 주소는 AI FastAPI 서비스 포트가 아니므로 바꾸지 않는다.
 기존 private 환경값은 미확인이다. 이 안내는 실제 AI/DB/Redis/Neo4j 기동·호출·계정 설정을
 실행했다는 뜻이 아니며, CF-002 사용자 경로의 새 분석/저장 차단은 그대로다.
+
+## CF040 · import와 명시 runtime 초기화
+
+config import는 dotenv import/로드·ancestor `.env` 탐색·getenv·client/cache/trace 파일 생성을 하지 않는다.
+미초기화 기본값은 intraday False, trace True, 기존 AI 루트의 `traces/technical_trace.jsonl` 경로다.
+경로만 계산하고 파일은 열지 않는다. 상수·지원 정책·KIS/OpenAI 모델/timeout/retry 값은 바꾸지 않는다.
+
+명시 `initialize_runtime()`이 기존 파일 탐색과 `load_dotenv(..., override=False)`를 사용해 세 runtime 설정을
+동일한 불변 `RuntimeSettings`로 한 번 확정한다. 프로세스 env 우선과 기존 bool 파싱/기본값·파일 위치는 유지한다.
+동시 factory는 같은 완성 snapshot만 받고 이후 환경 변경으로 재초기화하지 않는다. 실패는 부분 snapshot/client 없이
+고정 오류로 닫히며 같은 프로세스에서 자동 재시도하지 않는다. 인식 불가 bool 경고에는 원문 값이 들어가지 않는다.
+
+기존 명시 KIS/OpenAI loader도 호출할 때만 dotenv를 사용하며 인증정보 loader의 기존 의미는 유지한다.
+세 runtime 설정의 일회 확정과 개별 client loader 호출을 구분한다. 실제 파일/키 값은 이번 합성 검증으로 확인하지 않는다.
+
+Technical factory는 setup 뒤에 runtime dependency를 import한다. trace factory는 예전에 복사한 bool/path 대신
+snapshot을 읽는다. 이미 미초기화 상태에서 pipeline/graph/agent가 로드됐다면 늦은 setup을 거절하고 reload·module 삭제·
+다른 module의 flag patch로 복구하지 않는다. 기본 비활성 route/main에 자동 setup이나 실제 engine을 연결하지 않는다.
+기존 dependencies 전체 legacy chain import 또는 실제 graph/provider 실행이 안전하다고 주장하는 변경이 아니다.

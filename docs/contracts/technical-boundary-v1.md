@@ -110,3 +110,29 @@ reportId로 구분한 읽기 session과 기존 chart binding key가 첫 render�
 합성 HTTP의 mounted React/Recharts를 각각 구분한다. 이 연결은 실제 Google 로그인부터 PG/BFF/화면까지 이어진
 전체 E2E 또는 실제 engine/KIS 품질 검증이 아니다. 후속 실행에는 authenticated/lazy engine, sync/SDK budget,
 전용 owned execution profile·durable lifecycle/멱등·Technical usage 검증이 별도로 필요하다.
+
+## CF039 · 기본 비활성 동기 runner 연결
+
+`make_engine_bridge`는 기본 비활성이며 서버가 명시한 sync_runner·LLM client·OHLCV fetcher와 cache/trace_sink를 받는다.
+cache/trace의 None은 미사용이며 다른 의존성·설정·환경·graph/provider를 자동으로 만들지 않는다. coroutine 함수와
+비동기 callable 의존성은 거절한다. 주입 객체가 있다는 사실만으로 그 구현의 network-free 성질을 보증하지 않는다.
+실제 app/router/Backend/Supervisor에는 등록하지 않는다.
+
+활성화된 한 작업의 입력은 caller mutation과 분리된 snapshot으로 실제 별도 thread에 전달한다. 원질문·종목·as_of와
+request/trace ID는 바꾸거나 생성하지 않는다. 기존 순수 Deadline으로 시작+WAIT_SECONDS와 명시된 더 이른 만료의
+교집합을 사용하며 snapshot/dispatch/worker/result 경계에서 확인한다. 기존 HTTP3초와 route/auth/body는 그대로다.
+cooperative deadline은 동기 함수를 강제로 멈추지 못한다.
+
+HTTP waiter의 timeout/취소는 기존 Runtime이 즉시 처리한다. bridge engine task가 취소돼도 실제 worker 종료를 기다리고,
+반복 취소를 성공으로 바꾸거나 uncancel하지 않는다. is_alive false와 join을 확인한 뒤 취소를 재전파하므로 기존 단일
+Runtime 슬롯은 물리 worker가 끝나기 전에 풀리지 않는다. 무응답 worker는 BUSY를 유지하며 강제 thread kill/재시도는 없다.
+늦은 결과는 종료된 HTTP 기다림으로 되돌려 주지 않는다. 운영 종료·부하/무응답 worker 회수까지 검증했다는 뜻은 아니다.
+
+typed model은 Python 값으로 dump한 뒤 datetime/date의 표준 ISO 표현과 enum 값을 JSON으로 직렬화한다. raw JSON 숫자·
+문자열은 바꾸지 않고, 필드를 채우거나 요청에 맞춰 시간 표현/ID를 고치지 않는다. 기존 complete/validate_result/validate_response가
+최종 판단하며, 동등한 시각이라도 raw 표현이 다른 binding은 계속 거절될 수 있다. 합성 execution_mode·cutoff 미검증과
+생성/발행 시각 미보고를 그대로 보존한다.
+
+현재 보호 환경에는 실제 graph runtime/dependency가 준비되지 않았으며 collector의 graph/config/provider import 금지를
+유지한다. 이번 증거는 실제 thread와 주입한 fake runner의 연결이며 실제 LangGraph 계산·KIS/OpenAI·캐시/trace 서비스·
+owner 저장/usage·Supervisor 실행 수용이 아니다. [직접 검사와 미실행 경계](../work/CF-039-technical-engine-bridge.md)를 따른다.

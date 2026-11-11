@@ -271,3 +271,24 @@ async def test_actual_timeout_cancels_await_and_cleans_function_dependency(monke
     assert entered.is_set() and cancelled.is_set() and requested==[15]
     session.rollback.assert_awaited_once()
     session.commit.assert_not_awaited();session.flush.assert_not_awaited()
+
+
+@pytest.mark.parametrize('change',[None,'method','metadata','response','parameter','path','schema'])
+def test_exact_owned_openapi_projection_preserves_all_negative_boundaries(change):
+    from tests.unit.test_flow_contract import project_cf036_exact_additions
+    app=FastAPI();app.include_router(router.router);api=app.openapi()
+    path='/api/technical/owned-reports';detail=path+'/{report_id}'
+    if change=='method':api['paths'][path]['post']={}
+    elif change=='metadata':api['paths'][path]['get']['summary']='unapproved'
+    elif change=='response':api['paths'][detail]['get']['responses']['200']['content']['application/json']['schema']={'type':'string'}
+    elif change=='parameter':api['paths'][path]['get']['parameters']=[{'name':'owner','in':'query'}]
+    elif change=='path':api['paths'][path+'/unapproved']={}
+    elif change=='schema':api.setdefault('components',{}).setdefault('schemas',{})['OwnedUnapproved']={'type':'string'}
+    def project():
+        project_cf036_exact_additions(api)
+        assert api['paths']=={}
+        assert api.get('components',{}).get('schemas',{})=={}
+    if change is None:project()
+    else:
+        with pytest.raises(AssertionError):project()
+    assert not ATTEMPTS

@@ -152,6 +152,21 @@ def project_cf015_exact_additions(api):
     stock['required']=True;stock['schema']={'type':'string','pattern':r'^\d{6}$','title':'Stock Code'}
 
 
+def project_cf036_exact_additions(api):
+    """Check exactly the two owned GET operations before legacy projection."""
+    for path, summary, operation_id in (
+        ('/api/technical/owned-reports','Listing','listing_api_technical_owned_reports_get'),
+        ('/api/technical/owned-reports/{report_id}','Detail','detail_api_technical_owned_reports__report_id__get'),
+    ):
+        assert api['paths'][path] == {'get': {
+            'tags':['technical-owned-read'], 'summary':summary, 'operationId':operation_id,
+            'responses':{'200':{'description':'Successful Response',
+                'content':{'application/json':{'schema':{}}}}},
+        }}
+        del api['paths'][path]
+    # Unknown paths/components deliberately remain for the unchanged digest check.
+
+
 def project_cf023_exact_additions(api):
     """Only the three preparation operations and explicitly reviewed schema deltas."""
     from fastapi import FastAPI
@@ -232,6 +247,7 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf036_exact_additions(api)
     project_cf023_exact_additions(api)
     project_cf022_exact_additions(api)
     project_cf020_exact_additions(api)
@@ -310,7 +326,7 @@ def test_relocation_public_contract_baseline(monkeypatch):
     assert_public_contract_compatibility(public_contract_capture(monkeypatch))
 
 
-@pytest.mark.parametrize("change", ["path", "component", "legacy_field", "fourth_enum", "request_field", "legacy_method", "legacy_response", "legacy_enum", "demo_method", "demo_stage", "demo_extra"])
+@pytest.mark.parametrize("change", ["path", "component", "legacy_field", "fourth_enum", "request_field", "legacy_method", "legacy_response", "legacy_enum", "demo_method", "demo_stage", "demo_extra", "owned_method", "owned_metadata", "owned_response", "owned_parameter", "owned_path", "owned_schema"])
 def test_cf003_snapshot_projection_rejects_unapproved_changes(monkeypatch, change):
     values = copy.deepcopy(public_contract_capture(monkeypatch))
     if change == "path":
@@ -333,6 +349,18 @@ def test_cf003_snapshot_projection_rejects_unapproved_changes(monkeypatch, chang
         values['openapi']['components']['schemas']['DemoRunView']['properties']['stage']['enum'].append('unapproved')
     elif change == "demo_extra":
         values['openapi']['components']['schemas']['DemoUnapproved']={'type':'string'}
+    elif change == 'owned_method':
+        values['openapi']['paths']['/api/technical/owned-reports']['post']={}
+    elif change == 'owned_metadata':
+        values['openapi']['paths']['/api/technical/owned-reports']['get']['summary']='unapproved'
+    elif change == 'owned_response':
+        values['openapi']['paths']['/api/technical/owned-reports/{report_id}']['get']['responses']['200']['content']['application/json']['schema']={'type':'string'}
+    elif change == 'owned_parameter':
+        values['openapi']['paths']['/api/technical/owned-reports']['get']['parameters']=[{'name':'owner','in':'query'}]
+    elif change == 'owned_path':
+        values['openapi']['paths']['/api/technical/owned-reports/unapproved']={}
+    elif change == 'owned_schema':
+        values['openapi']['components']['schemas']['OwnedUnapproved']={'type':'string'}
     else:
         values["openapi"]["components"]["schemas"]["FlowAdmissionRequest"]["properties"]["owner"] = {"type": "string"}
     with pytest.raises(AssertionError):

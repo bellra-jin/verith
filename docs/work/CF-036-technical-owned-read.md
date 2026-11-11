@@ -83,3 +83,19 @@ CUA 근거다. 등록 child/readiness/listener 종료, package/registry/provenan
 실제 engine/KIS/provider,
 운영 DB·migration·사용자 합성 seed, 실제 Google 로그인, 전체 Next build와 Technical 실행은 수행하지 않는다.
 원격 exact-head CI·독립 리뷰·Ready/PR/merge는 조율 결과를 별도로 기록하며 검증되지 않은 경계를 통과로 표시하지 않는다.
+
+## 최신 develop 통합과 공개 계약 회귀
+
+검증된 최초27파일 snapshot을 정상 커밋한 뒤 develop `873ceaa5b0bf24bb741262cc4eee7c400435662e`를 정상 merge했다.
+shared check_safe/test_entry의 CF036 선택과 CF038의 정확 AI2 pin·semantic mirror를 모두 보존했고 독립 delta 검토를 통과했다.
+나머지25파일과 모든 Frontend 소스는 앞선 PG/브라우저 검증 snapshot의 hash 그대로이며 그 실행을 통합 후 재실행으로 바꾸지 않는다.
+
+통합 영향 검사에서 owned self3/unit40·meaning self3은 통과했지만 meaning unit은109통과/1실패였다. 원인은 새 owned GET2개가
+기존 공개 OpenAPI의 정확 변경 투영 목록에 없어 legacy digest만 달라진 것이었다. 제품 OpenAPI를 숨기거나 digest를 바꾸지 않고,
+필수 추가 경로 `backend/tests/unit/test_flow_contract.py`와 이유를 먼저 보고하고 최소 확장에 대한 독립 읽기 검토를 받았다.
+그 한 파일에 GET2개의 method·metadata·response를 고정 기대값으로 검사한 뒤 두 pointer만 투영하도록 보완해 최종 범위는28경로다.
+미승인 path/schema는 남겨 기존 불변 digest가 거절하며 guard/worker/source 선택을 변경하지 않는다.
+
+새 CF036 단일 unit은 bootstrap 없이 isolated router OpenAPI와 method/metadata/response/query/추가 path/schema 변조를 확인한다.
+최종 owned unit47개와 기존 meaning unit110개가 통과했고 각 guard 위반0·parent exit0·자기 root 제거를 확인했다.
+기존 전체 baseline과 부정 투영 회귀는 유지한다. 이 보완은 테스트/문서만 변경하며 추가 PG·브라우저·키·provider 실행은 없다.

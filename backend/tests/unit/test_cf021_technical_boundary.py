@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import types
+import threading
+import time
 from uuid import UUID
 from unittest.mock import patch
 
@@ -92,12 +94,13 @@ def load_boundary():
         ('src.shared.infrastructure.clients.ai_client', 'backend/src/shared/infrastructure/clients/ai_client.py'),
     ):
         _load(name, relative, CF021_FIXED_INPUTS)
-    for suffix in ('shared.contracts.agent_envelope', 'agents.technical.domain.intraday_limits',
+    for suffix in ('shared.contracts.agent_envelope', 'shared.runtime.deadline', 'agents.technical.domain.intraday_limits',
                    'agents.technical.domain.models.enums', 'agents.technical.domain.models.ohlcv',
                    'agents.technical.domain.models.chart', 'agents.technical.domain.models.intraday',
                    'agents.technical.domain.models.contracts', 'agents.technical.domain.boundary_contracts',
                    'supervisor.domain.planning.interpret', 'supervisor.application.planning.technical_boundary',
                    'agents.technical.application.boundary_adapter', 'agents.technical.application.boundary_runtime',
+                   'agents.technical.application.engine_bridge',
                    'agents.technical.api.routes'):
         _load('src.' + suffix, 'ai/src/' + suffix.replace('.', '/') + '.py', CF021_INPUTS)
     assert not ATTEMPTS
@@ -111,6 +114,8 @@ AD = sys.modules['src.modules.technical.application.boundary_adapter']
 AC = sys.modules['src.modules.analysis.domain.contracts']
 C = sys.modules['src.shared.infrastructure.clients.ai_client']
 RUN = sys.modules['src.agents.technical.application.boundary_runtime']
+BRIDGE = sys.modules['src.agents.technical.application.engine_bridge']
+DEADLINE = sys.modules['src.shared.runtime.deadline']
 PLAN = sys.modules['src.supervisor.application.planning.technical_boundary']
 WIRE = sys.modules['src.modules.analysis.domain.agent_envelope']
 FIXTURE = json.loads((ROOT / 'frontend/tests/fixtures/cf021-technical-boundary.json').read_text())
@@ -515,3 +520,217 @@ async def test_expired_projection_budget_never_schedules_engine_or_occupies_slot
     with pytest.raises(RUN.BoundaryTimeout):await RUN.BoundaryRuntime(engine,timeout=1e-323).run(request())
     await asyncio.sleep(0)
     assert not calls and RUN._ACTIVE_TASK is None
+
+
+class ThreadProbe:
+    """Own every real worker used here; no graph, market data or LLM executes."""
+    def __init__(self, output=None):
+        self.entered=threading.Event();self.release=threading.Event()
+        self.threads=[];self.calls=[];self.output=output or (lambda:result())
+        self.llm=types.SimpleNamespace(complete=lambda prompt:'synthetic only')
+        self.fetcher=lambda *args,**kwargs:[]
+        self.cache=object();self.trace=object()
+    def runner(self,payload,**kwargs):
+        self.threads.append(threading.current_thread());self.calls.append((payload,kwargs,time.monotonic()))
+        self.entered.set()
+        assert self.release.wait(2), 'Test must release its owned worker'
+        return self.output()
+    def bridge(self,**kwargs):
+        return BRIDGE.make_engine_bridge(sync_runner=self.runner,llm_client=self.llm,fetcher=self.fetcher,
+            cache=self.cache,trace_sink=self.trace,enabled=True,**kwargs)
+
+
+async def wait_thread(probe):
+    async def wait():
+        while not probe.entered.is_set():await asyncio.sleep(0)
+    await asyncio.wait_for(wait(),1)
+    assert len(probe.threads)==1 and probe.threads[0].ident!=threading.get_ident()
+
+
+async def finish_thread(probe,task=None):
+    probe.release.set();task=task or RUN._ACTIVE_TASK
+    if task is not None:
+        try:await asyncio.wait_for(asyncio.shield(task),1)
+        except (asyncio.CancelledError,RUN.BoundaryEngineFailure,BRIDGE.EngineBridgeUnavailable,DEADLINE.DeadlineExceeded):pass
+    await asyncio.sleep(0)
+    for thread in probe.threads:
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+    assert RUN._ACTIVE_TASK is None
+
+
+@pytest.mark.parametrize('bad',['runner','async_runner','async_runner_object','llm','async_llm','async_llm_object','fetcher','async_fetcher','async_fetcher_object','enabled','deadline'])
+def test_bridge_invalid_dependencies_start_no_worker(bad):
+    async def asynchronous(*args,**kwargs):return result()
+    class AsyncCallable:
+        async def __call__(self,*args,**kwargs):return result()
+    kwargs=dict(sync_runner=lambda *a,**k:result(),llm_client=types.SimpleNamespace(complete=lambda p:''),
+                fetcher=lambda *a,**k:[],cache=None,trace_sink=None)
+    if bad=='runner':kwargs['sync_runner']=None
+    elif bad=='async_runner':kwargs['sync_runner']=asynchronous
+    elif bad=='async_runner_object':kwargs['sync_runner']=AsyncCallable()
+    elif bad=='llm':kwargs['llm_client']=object()
+    elif bad=='async_llm':kwargs['llm_client']=types.SimpleNamespace(complete=asynchronous)
+    elif bad=='async_llm_object':kwargs['llm_client']=types.SimpleNamespace(complete=AsyncCallable())
+    elif bad=='fetcher':kwargs['fetcher']=None
+    elif bad=='async_fetcher':kwargs['fetcher']=asynchronous
+    elif bad=='async_fetcher_object':kwargs['fetcher']=AsyncCallable()
+    elif bad=='enabled':kwargs['enabled']=1
+    else:kwargs['deadline']=DEADLINE.Deadline(float('nan'))
+    with patch.object(BRIDGE.threading,'Thread') as worker:
+        with pytest.raises(BRIDGE.EngineBridgeUnavailable):BRIDGE.make_engine_bridge(**kwargs)
+        worker.assert_not_called()
+    assert not ATTEMPTS
+
+
+@pytest.mark.parametrize('missing',['sync_runner','llm_client','fetcher','cache','trace_sink'])
+def test_bridge_requires_explicit_dependencies_even_for_unused_cache_and_trace(missing):
+    kwargs=dict(sync_runner=lambda *a,**k:result(),llm_client=types.SimpleNamespace(complete=lambda p:''),
+                fetcher=lambda *a,**k:[],cache=None,trace_sink=None)
+    del kwargs[missing]
+    with patch.object(BRIDGE.threading,'Thread') as worker:
+        with pytest.raises(TypeError):BRIDGE.make_engine_bridge(**kwargs)
+        worker.assert_not_called()
+
+
+@pytest.mark.parametrize('off',[True,False])
+async def test_default_off_or_expired_bridge_and_default_route_execute_nothing(off):
+    probe=ThreadProbe();kwargs=dict(sync_runner=probe.runner,llm_client=probe.llm,fetcher=probe.fetcher,cache=None,trace_sink=None)
+    bridge=BRIDGE.make_engine_bridge(**kwargs) if off else BRIDGE.make_engine_bridge(**kwargs,enabled=True,deadline=DEADLINE.Deadline(time.monotonic()-1))
+    with patch.object(BRIDGE.threading,'Thread') as worker:
+        with pytest.raises(BRIDGE.EngineBridgeUnavailable if off else DEADLINE.DeadlineExceeded):
+            await bridge(object(),trace_id=request()['trace_id'])
+        response=await post(app(engine=bridge,enabled=False))
+        assert response.status_code==403 and response.json()['error']['code']=='FEATURE_UNAVAILABLE'
+        worker.assert_not_called()
+    assert not probe.calls and not ATTEMPTS and RUN._ACTIVE_TASK is None
+
+
+async def test_real_thread_snapshot_dependencies_trace_and_loop_heartbeat():
+    probe=ThreadProbe();bridge=probe.bridge();req=request()
+    payload=sys.modules['src.agents.technical.application.boundary_adapter'].project_input(req)
+    snapshot=payload.model_dump(mode='json');task=asyncio.create_task(bridge(payload,trace_id=req['trace_id']))
+    try:
+        await wait_thread(probe);payload.query='caller mutation must stay outside the worker'
+        pulses=[]
+        for _ in range(5):await asyncio.sleep(0);pulses.append(time.monotonic())
+        assert len(pulses)==5 and not task.done() and probe.threads[0].is_alive()
+        actual,kwargs,entered=probe.calls[0]
+        assert actual is not payload and actual.model_dump(mode='json')==snapshot
+        assert kwargs['llm_client'] is probe.llm and kwargs['fetcher'] is probe.fetcher
+        assert kwargs['cache'] is probe.cache and kwargs['trace_sink'] is probe.trace
+        assert kwargs['trace_id']==req['trace_id']
+        assert 0<kwargs['deadline'].expires_at-entered<=A.WAIT_SECONDS
+        probe.release.set();value=await task
+        assert B.canonical(value)==B.canonical(result())
+    finally:await finish_thread(probe,task)
+
+
+@pytest.mark.parametrize('typed',[False,True])
+async def test_actual_asgi_bridge_output_uses_existing_strict_contract(typed):
+    value=A.TechnicalAgentOutput.model_validate(result()) if typed else result()
+    probe=ThreadProbe(lambda:value);probe.release.set()
+    try:
+        response=await post(app(probe.bridge()))
+        assert response.status_code==200
+        out=response.json();A.validate_response(out,request())
+        assert out['data']['execution_mode']=='synthetic' and out['data']['coverage']['cutoff_validation']=='unverified'
+        expected=value.model_dump(mode='json') if typed else value
+        if typed:expected['as_of']=value.as_of.isoformat()
+        assert B.canonical(out['data']['result'])==B.canonical(expected)
+        if not typed:assert type(out['data']['result']['signal']['confidence']) is int
+        assert len(probe.calls)==1 and probe.threads[0].ident!=threading.get_ident()
+    finally:await finish_thread(probe)
+
+
+async def test_typed_timestamp_representation_is_not_rewritten_to_match_request():
+    probe=ThreadProbe(lambda:A.TechnicalAgentOutput.model_validate(result()));probe.release.set()
+    value=request();value['data']['requested_as_of']=value['data']['requested_as_of'].replace('+00:00','Z')
+    value['data']['context']['input_fingerprint']=A.fingerprint(value['data'])
+    try:
+        response=await post(app(probe.bridge()),body=B.canonical(value).encode())
+        assert response.status_code==502 and response.json()['error']['code']=='RESULT_CONTRACT_INVALID'
+        assert PRIVATE not in response.text and len(probe.calls)==1
+    finally:await finish_thread(probe)
+
+
+@pytest.mark.parametrize('bad',['identity','ticker','as_of','extra','nonfinite','exception'])
+async def test_bridge_invalid_output_or_runner_error_never_repairs_or_exposes_values(bad):
+    def output():
+        if bad=='exception':raise RuntimeError(PRIVATE)
+        value=result()
+        if bad=='identity':value['request_id']='00000000-0000-4000-8000-000000000099'
+        elif bad=='ticker':value['ticker']='000660'
+        elif bad=='as_of':value['as_of']='2026-11-05T00:00:00Z'
+        elif bad=='extra':value['unexpected']=PRIVATE
+        else:value['signal']['confidence']=float('nan')
+        return value
+    probe=ThreadProbe(output);probe.release.set()
+    try:
+        response=await post(app(probe.bridge()))
+        assert response.status_code==502 and response.json()['error']['code']=='RESULT_CONTRACT_INVALID'
+        assert PRIVATE not in response.text and response.json()['data'] is None
+        assert len(probe.calls)==1
+    finally:await finish_thread(probe)
+
+
+@pytest.mark.parametrize('late_failure',[False,True])
+async def test_real_thread_http_timeout_keeps_global_slot_until_worker_end(late_failure):
+    def output():
+        if late_failure:raise RuntimeError(PRIVATE)
+        return result()
+    probe=ThreadProbe(output);application=app(probe.bridge(),timeout=.01)
+    try:
+        response=await post(application)
+        await wait_thread(probe)
+        assert response.status_code==504 and probe.entered.is_set()
+        active=RUN._ACTIVE_TASK;assert active is not None and not active.done() and probe.threads[0].is_alive()
+        again=await post(application)
+        assert again.status_code==503 and again.json()['error']['code']=='BUSY' and len(probe.calls)==1
+        await finish_thread(probe,active)
+        assert response.status_code==504 and response.json()['data'] is None
+        probe.output=lambda:result()
+        assert (await post(application)).status_code==200 and len(probe.calls)==2
+    finally:await finish_thread(probe)
+
+
+async def test_waiter_cancellation_is_immediate_without_releasing_running_thread_slot():
+    probe=ThreadProbe();runtime=RUN.BoundaryRuntime(probe.bridge());waiter=asyncio.create_task(runtime.run(request()))
+    try:
+        await wait_thread(probe);waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):await waiter
+        assert probe.threads[0].is_alive() and not RUN._ACTIVE_TASK.done()
+        with pytest.raises(RUN.BoundaryBusy):await runtime.run(request())
+        assert len(probe.calls)==1
+    finally:await finish_thread(probe)
+
+
+async def test_repeated_inner_task_cancellation_cannot_complete_before_physical_worker():
+    probe=ThreadProbe();runtime=RUN.BoundaryRuntime(probe.bridge(),timeout=.01)
+    try:
+        with pytest.raises(RUN.BoundaryTimeout):await runtime.run(request())
+        await wait_thread(probe)
+        active=RUN._ACTIVE_TASK;assert active is not None and probe.entered.is_set()
+        for _ in range(2):
+            active.cancel();await asyncio.sleep(0)
+            assert not active.done() and probe.threads[0].is_alive()
+            with pytest.raises(RUN.BoundaryBusy):await runtime.run(request())
+        assert len(probe.calls)==1
+        await finish_thread(probe,active)
+        assert active.cancelled()
+        assert (await runtime.run(request()))['data']['result']==result()
+    finally:await finish_thread(probe)
+
+
+async def test_injected_earlier_cooperative_deadline_is_never_renewed():
+    probe=ThreadProbe();early=DEADLINE.Deadline.after(.5)
+    runtime=RUN.BoundaryRuntime(probe.bridge(deadline=early),timeout=.005)
+    try:
+        with pytest.raises(RUN.BoundaryTimeout):await runtime.run(request())
+        await wait_thread(probe)
+        assert probe.calls[0][1]['deadline'].expires_at<=early.expires_at
+        await asyncio.sleep(.51)
+        assert early.expired() and probe.threads[0].is_alive()
+        with pytest.raises(RUN.BoundaryBusy):await runtime.run(request())
+        await finish_thread(probe)
+    finally:await finish_thread(probe)

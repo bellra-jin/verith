@@ -867,7 +867,7 @@ class CF021Boundary(unittest.TestCase):
         from unittest.mock import patch
         from scripts import check_safe as c
         root=Path(__file__).resolve().parents[3]
-        self.assertEqual(len(c.CF021_INPUTS),28)
+        self.assertEqual(len(c.CF021_INPUTS),29)
         self.assertEqual({k:v for k,v in c.CF021_INPUTS.items() if k in c.CF018_INPUTS},c.CF018_INPUTS)
         self.assertEqual(c.CF021_TESTS,('tests/unit/test_cf021_technical_boundary.py',))
         for name,h in (c.CF021_INPUTS | c.CF021_FIXED_INPUTS).items():
@@ -909,7 +909,7 @@ class CF031Boundary(unittest.TestCase):
             'backend/src/modules/technical/application/boundary_restore.py',
             'frontend/tests/fixtures/cf031-technical-boundary-read.json',
         })
-        self.assertEqual(len(c.CF021_INPUTS), 28)
+        self.assertEqual(len(c.CF021_INPUTS), 29)
         self.assertEqual(len(c.CF021_FIXED_INPUTS), 9)
         for name, sha in (c.CF021_INPUTS | c.CF021_FIXED_INPUTS | c.CF031_INPUTS).items():
             self.assertEqual(hashlib.sha256(c.regular_bytes(root, name)).hexdigest(), sha)

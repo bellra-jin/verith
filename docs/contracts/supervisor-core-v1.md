@@ -493,3 +493,9 @@ closure는 기존 safe get/view·redaction으로 돌아간다. 특히 이미 sta
 이 검사는 직전의 fresh 관측이며 commit 다음 순간의 철회까지 원자적으로 차단하지 않는다. HTTP 동안 DB lock을
 보유해 그 한계를 숨기지 않는다. 동일 key replay/GET/adopt/confirm은 새 모델 경로가 아니고 private None75도 보존한다.
 운영 epoch/정책·인증된 reserve/settlement 서비스와 실제 count/generation 권위는 여전히 후속이다.
+
+## CF044 · 독립 durable 회계 구성요소
+
+명시 내부 policy로만 계정을 생성한다. 동일 operation/owner/canonical scope는 기간·정책 변경으로 복제할 수 없다. 예약은 실제 Principal/session 및 preparation/attempt/request/draft/spec/projection을 SQL로 대조한 회계 선소비이며 provider 실행권이 아니다. account→reservation 잠금과 단일 commit ACK 후에만 mutation 결과를 반환한다. ACK 불명은 caller-known 고정 binding으로 no-autoflush SELECT reconcile만 한다.
+관측 usage는 저장된 현 semantic/model/tier/price/caps와 strict 정수로 대조한다. observed도 예약액 자동환급0이며 추정액은 청구확정액이 아니다. unknown/anomalous는 hold+blocked, 동일 terminal receipt만 replay한다. 늦은 다른 정산은 conflict다. 세션 만료/준비 redaction은 소비된 예약의 정산을 환급/재실행으로 바꾸지 않는다.
+운영 epoch/정책 발급·Backend↔AI phase transport·요청별 Gateway는 미조립이다. 기존 CF023 epoch/Flow 회계 및 실제 소비 기록은 불변이다.

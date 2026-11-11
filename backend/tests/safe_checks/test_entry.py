@@ -765,6 +765,17 @@ class CF023Boundary(unittest.TestCase):
             self.assertIn(path,c.CF023_SOURCES)
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
 
+    def test_accounting_exact_sources_and_owned_flag(self):
+        from scripts import check_safe as c
+        self.assertEqual(len(c.CF044_SOURCES),5)
+        for path in c.CF044_SOURCES:
+            self.assertIn(path,c.CF023_SOURCES)
+            self.assertTrue(c.source_allowed(path))
+            self.assertFalse(c.source_allowed(path+'.adjacent'))
+        source=(Path(__file__).resolve().parents[2]/'scripts/cf002_interactive_login.py').read_text()
+        self.assertIn('"--verify-supervisor-accounting-db", action="store_true"',source)
+        self.assertIn('verify_meaning_accounting(proof)',source)
+
     def test_exact_inputs_and_collection(self):
         import hashlib
         from scripts import check_safe as c

@@ -916,3 +916,23 @@ mock flush 누락으로 76통과/1실패였고 보완 후 77개가 통과했다.
 이번 수정·회귀에서 추가 actual key/.env 읽기·예약·발급·DB·API·flags 활성화·
 Git 작업은 0이다. 새 semantic spec의 실제 승인/epoch/과거 lineage 호환·추가
 실행·모델 품질은 미검증이며 이 작업은 ordinal 2나 기존 실행권 재사용을 열지 않는다.
+
+## PR37 최신 develop 통합 pin 정합성
+
+최초 원격 CI는 최신 develop과의 합성 merge에서 첫 보호 self의 source pin 검사로
+중단됐다. 공통 AIClient에는 develop의 Technical legacy fail-closed/typed boundary와
+이번 Supervisor policy2 timeout 변경이 함께 들어갔지만 CF021 고정 pin은 이전
+Technical 전용 client hash였다. 보호를 완화하거나 새 hash로 일괄 치환하지 않고
+양쪽 함수 diff를 검토한 뒤 최신 develop을 정상 merge하고 이 한 pin만 갱신했다.
+다른 소스 허용 집합·고정 mode·worker/guard·dependency 검사는 그대로다.
+
+통합 source의 직접 보호 검사는 quality self 2개, Technical boundary self 3개와
+unit 175개, Technical read self 3개와 unit 47개, meaning unit 72개,
+assembly self 3개와 unit 77개, controller self 3개와 unit 364개가 통과했다.
+unit은 각 고정 단일 파일이고 guard violations 0·parent exit 0·자기 임시 root
+제거를 확인했다. 공통 AIClient의 Supervisor 외 함수는 develop과 동일하며
+Supervisor policy2 70초/policy1 8초 차이만 남는다. 통합 client와 한 pin 수정은
+독립 읽기 검토에서도 확인됐다. 원격 최신 head CI 결과는 이 로컬 검사와 구분한다.
+
+추가 실제 API/key/DB·flags 활성화·발급/예약은 없고 기존 250m 보수 예약 및
+consumed 실행 증거는 불변이다. PR은 Draft로 유지하고 병합하지 않는다.

@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {collectFixtureTerminal,validateTerminalReceipt} from '../tests/helpers/supervisor-fixture.mjs';
 import {spawn,execFileSync} from 'node:child_process';
 
-export const modes=['self-test','unit','local-http','build','type','lint','analysis-unit','analysis-lint','analysis-type','fundamental-unit','fundamental-type','fundamental-lint','flow-review-unit','flow-review-type','flow-review-lint','flow-review-browser','supervisor-unit','supervisor-type','supervisor-lint','supervisor-browser','core-unit','core-type','core-lint','core-browser','core-browser-check','fixture-lint'];
+export const modes=['self-test','unit','local-http','build','type','lint','analysis-unit','analysis-lint','analysis-type','fundamental-unit','fundamental-type','fundamental-lint','flow-review-unit','flow-review-type','flow-review-lint','flow-review-browser','supervisor-unit','supervisor-type','supervisor-lint','supervisor-browser','core-unit','core-type','core-lint','core-browser','core-browser-check','fixture-lint','technical-boundary-unit','technical-boundary-type','technical-boundary-lint','technical-read-unit','technical-read-type','technical-read-lint','technical-display-unit','technical-display-type','technical-display-lint','technical-chart-unit','technical-chart-lint','technical-chart-browser'];
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const repo=path.dirname(project);
 const unit=['unit/bff/disabled-routes.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs','unit/flow/observation.test.mjs','unit/flow/synthetic-demo.test.mjs'];
@@ -17,6 +17,39 @@ const analysisUnit=['unit/flow/analysis-request.test.mjs','unit/bff/session-prox
 export const flowReviewUnit=['unit/flow/report-display.test.mjs','unit/flow/report-deletion.test.mjs','tooling/safe-checks.test.mjs'];
 export const flowReviewType=['src/features/flow/lib/report-display.ts','src/features/flow/lib/report-deletion.ts','src/features/flow/components/flow-report-view.tsx','src/features/flow/components/session-controls.tsx','src/app/reports/flow/[reportId]/page.tsx'];
 export const flowReviewExact=['tests/fixtures/cf019-flow-display-cases.json',...flowReviewUnit.map(p=>'tests/'+p),'tests/integration/flow/report-browser-fixture.mjs',...flowReviewType];
+export const technicalBoundaryUnit=['unit/technical/boundary-preview.test.mjs','tooling/safe-checks.test.mjs'];
+export const technicalBoundaryType=['src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts'];
+export const technicalBoundaryExact=[...technicalBoundaryType,...technicalBoundaryUnit.map(p=>'tests/'+p),'src/features/technical/lib/chart.ts','tests/fixtures/cf021-technical-boundary.json'];
+export const technicalChartUnit=['tooling/safe-checks.test.mjs'];
+export const technicalChartFixture='tests/integration/technical/chart-browser-fixture.mjs';
+export const technicalChartExact=[technicalChartFixture,'tests/tooling/safe-checks.test.mjs','src/features/technical/components/technical-boundary-preview.tsx','src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts','src/features/technical/lib/chart.ts','src/features/technical/components/technical-chart-panel.tsx','src/shared/lib/format.ts','tests/fixtures/cf031-technical-boundary-read.json'];
+export const chartProductionFiles=['recharts/umd/Recharts.js','lucide-react/dist/cjs/lucide-react.js','next/dist/compiled/react-is/cjs/react-is.production.js'];
+const chartMetadataPins={'recharts/package.json':'2a51583aedbb677771dce74309061cfd850cf6a9840132786e13aad5a9e9294b','lucide-react/package.json':'89b273b576398863371027110beb8ecef8c822dd611c01f34adab5fe503e2e69','next/package.json':'57f3d18dd1fbfd586762782d5ab66ba0862380bcdbeec633a5cbe124a1b365ee','next/dist/compiled/react-is/package.json':'043b0164b486c7bb11c2ae4062ea09fe53af170c93e05069f182f34ea15e3244'};
+export function chartBundleRecords(dependency,sourceRoot=project){
+ const lock=JSON.parse(readSource(sourceRoot,'package-lock.json'));
+ const metadata=Object.entries(chartMetadataPins).map(([relative,sha256])=>{
+  const file=trusted(path.join(dependency,relative)),bytes=fs.readFileSync(file);
+  if(crypto.createHash('sha256').update(bytes).digest('hex')!==sha256)throw Error('CF033 metadata drift');
+  return {relative,sha256,size:bytes.length,identity:manifestIdentity(file),version:JSON.parse(bytes).version};
+ });
+ const definitions=[['recharts','3.9.1','c7f4c7d0c046c5c38923940e43319cc2bcf763a3b27a45e45ac5108a5d57e4e3'],['lucide-react','1.23.0','5e78de80512a178bc216c1d34383dff1ed7e87a647be4b220c4dd672cf85ca36'],['next','16.2.10','9a073bb4a71d6180250b70db22e9120993071cfddd473b1b8d2727182253c79e']];
+ const chart=chartProductionFiles.map((relative,i)=>{
+  const [name,version,sha256]=definitions[i],record=metadata.find(m=>m.relative===name+'/package.json');
+  if(record.version!==version||lock.packages['node_modules/'+name].version!==version)throw Error('CF033 locked version drift');
+  const file=trusted(path.join(dependency,relative)),bytes=fs.readFileSync(file);
+  if(crypto.createHash('sha256').update(bytes).digest('hex')!==sha256)throw Error('CF033 production code drift');
+  return {relative,size:bytes.length,sha256,version,identity:manifestIdentity(file)};
+ });
+ if(metadata[3].version!=='19.3.0-canary-3f0b9e61-20260317')throw Error('CF033 embedded version drift');
+ return {react:displayReactRecords(dependency,sourceRoot),chart,metadata};
+}
+export const technicalDisplayUnit=['unit/technical/boundary-display.test.mjs','tooling/safe-checks.test.mjs'];
+export const technicalDisplayType=['src/features/technical/components/technical-boundary-preview.tsx'];
+export const technicalDisplayReadonly=['src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts','src/features/technical/lib/chart.ts','src/features/technical/components/technical-chart-panel.tsx','src/shared/lib/format.ts','tests/fixtures/cf031-technical-boundary-read.json'];
+export const technicalDisplayExact=[...technicalDisplayType,...technicalDisplayUnit.map(p=>'tests/'+p),...technicalDisplayReadonly];
+export const technicalReadUnit=['unit/technical/boundary-read.test.mjs','tooling/safe-checks.test.mjs'];
+export const technicalReadType=['src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts'];
+export const technicalReadExact=[...technicalReadType,...technicalReadUnit.map(p=>'tests/'+p),'src/features/technical/lib/chart.ts','tests/fixtures/cf031-technical-boundary-read.json'];
 export const coreUnit=['unit/supervisor/core.test.mjs','unit/bff/session-proxy.test.mjs','unit/config/ports.test.mjs','tooling/safe-checks.test.mjs'];
 export const coreType=['src/features/supervisor/components/supervisor-session.tsx','src/features/supervisor/model/chat.ts','src/features/supervisor/lib/supervisor-request.ts','src/features/supervisor/components/chat-view.tsx','src/features/supervisor/components/supervisor-chat.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts'];
 export const coreExact=[...coreType,...coreUnit.map(p=>'tests/'+p),'src/features/supervisor/styles/chat.css','tests/integration/supervisor/chat-browser-fixture.mjs','tests/fixtures/cf022-supervisor-core.json','tests/fixtures/cf023-supervisor-meaning.json'];
@@ -32,10 +65,27 @@ export function reactRecords(dependency,sourceRoot=project){
   return {relative,size:metadata.size,sha256:crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex'),version:manifest.version};
  });
 }
+export function displayReactRecords(dependency,sourceRoot=project){
+ return reactRecords(dependency,sourceRoot).map(record=>{
+  const filename=trusted(path.join(dependency,record.relative));
+  return {...record,identity:manifestIdentity(filename)};
+ });
+}
+// Same production dependency proof before and after a bounded display command,
+// including its failure path. This adds no browser, port or worker permission.
+export async function checkedReactCommand({records,dependency,sourceRoot=project,readRecords=displayReactRecords},invoke){
+ const expected=JSON.stringify(records);
+ const check=()=>{if(JSON.stringify(readRecords(dependency,sourceRoot))!==expected)throw Error('CF032 production React identity drift');};
+ check();let output,failure;
+ try{output=await invoke();}catch(error){failure=error;}
+ try{check();}catch(error){if(failure)throw new AggregateError([failure,error],'display command and React postcheck failed');throw error;}
+ if(failure)throw failure;
+ return output;
+}
 const http=['integration/bff/disabled-http.test.mjs','integration/bff/session-http.test.mjs','integration/bff/ports-http.test.mjs','integration/bff/synthetic-demo-http.test.mjs'];
 export const fixtureSources=['scripts/check-local-ports.mjs','tests/integration/supervisor/chat-browser-fixture.mjs','tests/helpers/supervisor-fixture.mjs','tests/integration/supervisor/chat-http-readiness.test.mjs','tests/tooling/safe-checks.test.mjs'];
 const fixed=[...fixtureSources,'tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts','package.json','package-lock.json','tsconfig.json','next.config.ts','postcss.config.mjs','eslint.config.mjs',
- ...coreExact,...supervisorExact,...flowReviewExact,...unit.map(p=>'tests/'+p),...http.map(p=>'tests/'+p),'tests/helpers/safe-http.mjs','scripts/safe-checks-guard.cjs','scripts/check-local-ports.mjs'];
+ ...technicalChartExact,...technicalDisplayExact,...technicalReadExact,...technicalBoundaryExact,...coreExact,...supervisorExact,...flowReviewExact,...unit.map(p=>'tests/'+p),...http.map(p=>'tests/'+p),'tests/helpers/safe-http.mjs','scripts/safe-checks-guard.cjs','scripts/check-local-ports.mjs'];
 const fresh=new Set(['scripts/safe-checks-guard.cjs','tests/helpers/safe-http.mjs','tests/tooling/safe-checks.test.mjs','tests/unit/flow/observation.test.mjs','tests/fixtures/cf005-observation-cases.json','src/features/flow/lib/observation-window.ts']);
 for(const file of fixtureSources)fresh.add(file);
 for(const file of ["src/app/fundamental/page.tsx", "src/app/page.tsx", "src/app/reports/fundamental/[reportId]/page.tsx", "src/features/fundamental/components/analysis-request.tsx", "src/features/fundamental/components/fundamental-report-view.tsx", "src/features/fundamental/components/fundamental-actions.tsx", "src/features/fundamental/lib/analysis-request.ts", "src/features/fundamental/api/reports.ts", "src/shared/server/fundamental-analysis-config.ts", "src/shared/server/session-proxy.ts", "src/app/api/private/[...path]/route.ts", "tests/unit/fundamental/analysis-request.test.mjs", "tests/unit/bff/session-proxy.test.mjs", "tests/unit/config/ports.test.mjs", "scripts/check-local-ports.mjs"])fresh.add(file);
@@ -109,14 +159,21 @@ export function recheckPackage(record,root,dependency){
  if(JSON.stringify(packageRecord(root,dependency,bytes,before,record.sourceRoot))!==JSON.stringify(record))throw Error('package identity/hash drift; result rejected');
 }
 const reviewedWorkspace=path.dirname(path.dirname(project));
-const reviewedCodeRoot=path.join(reviewedWorkspace,'verith-supervisor-core','frontend');
+const reviewedCodeRoots=Object.freeze([
+ path.join(reviewedWorkspace,'verith-supervisor-core','frontend'),
+ path.join(reviewedWorkspace,'verith-supervisor-verification','frontend'),
+ path.join(reviewedWorkspace,'verith-technical-boundary','frontend'),
+ path.join(reviewedWorkspace,'verith-technical-read-boundary','frontend'),
+ path.join(reviewedWorkspace,'verith-technical-chart-display','frontend'),
+ path.join(reviewedWorkspace,'verith-technical-chart-browser','frontend'),
+]);
 const reviewedDependencyRoot=path.join(reviewedWorkspace,'verith','frontend','node_modules');
 const lockSHA='bb3a6a2b6c2e6374a4fa43ab8d3022ea678b0e60a003ff2b2aafb5610a7c7fed';
 const digest=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 export function metadataRootFor(codeRoot,dependency){
  if(codeRoot!==fs.realpathSync(codeRoot)||dependency!==fs.realpathSync(dependency)||fs.realpathSync(path.join(codeRoot,'node_modules'))!==dependency)throw Error('code/dependency identity mismatch');
  const metadataRoot=path.dirname(dependency);
- if(metadataRoot!==codeRoot&&(codeRoot!==reviewedCodeRoot||dependency!==reviewedDependencyRoot))throw Error('unreviewed metadata root');
+ if(metadataRoot!==codeRoot&&(!reviewedCodeRoots.includes(codeRoot)||dependency!==reviewedDependencyRoot))throw Error('unreviewed metadata root');
  trusted(codeRoot);trusted(metadataRoot);trusted(dependency);
  return metadataRoot;
 }
@@ -156,7 +213,7 @@ export async function checkedCommand({record,root,dependency,argv,env,timeout,ch
 }
 // Exact tracked BFF source, not a data/private-directory grant. Index/identity checks still apply.
 const privateRouteSource='src/app/api/private/[...path]/route.ts';
-for(const name of [...flowReviewExact,...supervisorExact,...coreExact])fresh.add(name);
+for(const name of [...technicalChartExact,...technicalDisplayExact,...technicalReadExact,...technicalBoundaryExact,...flowReviewExact,...supervisorExact,...coreExact])fresh.add(name);
 export function privatePath(p){if(p===privateRouteSource)return false;const blocked=new Set(['private','secret','secrets','key','keys','credential','credentials','dump','dumps','backup','backups','log','logs']);return p.split('/').some(part=>blocked.has(part.toLowerCase())||part.toLowerCase().startsWith('.env')||part.toLowerCase().startsWith('credentials')||part.toLowerCase().split('.').slice(1).some(s=>['key','pem','p12','sql','dump','bak','backup','log'].includes(s)));}
 export function sourceAllowed(p){return !privatePath(p)&&(fixed.includes(p)||icons.has(p)||p.startsWith('src/')&&/\.(ts|tsx|css|ico)$/.test(p));}
 export function readSource(root,relative){
@@ -400,12 +457,21 @@ async function execute(selected,terminalAction){
  const browserCheck=selected.length===1&&selected[0]==='core-browser-check';
  const fixtureLint=selected.length===1&&selected[0]==='fixture-lint';
  if(fixtureLint)selected=['lint'];
+ const technicalChartOnly=selected.length===1&&['technical-chart-unit','technical-chart-lint','technical-chart-browser'].includes(selected[0]);
+ const technicalChartBrowser=technicalChartOnly&&selected[0]==='technical-chart-browser';
+ if(technicalChartOnly)selected=[selected[0]==='technical-chart-lint'?'lint':'unit'];
+ const technicalDisplayOnly=selected.length===1&&['technical-display-unit','technical-display-type','technical-display-lint'].includes(selected[0]);
+ if(technicalDisplayOnly)selected=[selected[0]==='technical-display-type'?'type':selected[0]==='technical-display-lint'?'lint':'unit'];
+ const technicalReadOnly=selected.length===1&&['technical-read-unit','technical-read-type','technical-read-lint'].includes(selected[0]);
+ if(technicalReadOnly)selected=[selected[0]==='technical-read-type'?'type':selected[0]==='technical-read-lint'?'lint':'unit'];
+ const technicalBoundaryOnly=selected.length===1&&selected[0].startsWith('technical-boundary-');
+ if(technicalBoundaryOnly)selected=[selected[0]==='technical-boundary-type'?'type':selected[0]==='technical-boundary-lint'?'lint':'unit'];
  const coreOnly=selected.length===1&&selected[0].startsWith('core-');
  const coreBrowser=coreOnly&&['core-browser','core-browser-check'].includes(selected[0]);
  const supervisorOnly=selected.length===1&&selected[0].startsWith('supervisor-');
  const supervisorBrowser=supervisorOnly&&selected[0]==='supervisor-browser';
  const flowReviewOnly=selected.length===1&&selected[0].startsWith('flow-review-');
- const browserOnly=coreBrowser||supervisorBrowser||flowReviewOnly&&selected[0]==='flow-review-browser';
+ const browserOnly=technicalChartBrowser||coreBrowser||supervisorBrowser||flowReviewOnly&&selected[0]==='flow-review-browser';
  if(coreOnly)selected=[selected[0]==='core-type'?'type':selected[0]==='core-lint'?'lint':'unit'];
  if(supervisorOnly)selected=[selected[0]==='supervisor-type'?'type':selected[0]==='supervisor-lint'?'lint':'unit'];
  if(flowReviewOnly)selected=[selected[0]==='flow-review-type'?'type':selected[0]==='flow-review-lint'?'lint':'unit'];
@@ -429,24 +495,32 @@ async function execute(selected,terminalAction){
   fs.writeFileSync(route,`export const dynamic='force-dynamic';export function GET(){return Response.json({nonce:${JSON.stringify(owned.nonce)},pid:process.pid,cwd:process.cwd()});}`);
   const capfile=path.join(root,'capability.json'),guard=path.join(root,'scripts/safe-checks-guard.cjs');
   diagnosticContext={key:crypto.randomBytes(32).toString('hex'),run:crypto.randomBytes(12).toString('hex'),copySources};
-  const cap={root,dependency,runtime:[path.dirname(path.dirname(node)),'/System','/usr/lib'],ports:[],lifetime:browserOnly?600:1800,nonce:owned.nonce,packageSnapshot,diagnostics:diagnosticContext,workload:selected.length===1?selected[0]:'all'};
+  const chartBundle=technicalChartOnly&&selected[0]==='unit'?chartBundleRecords(dependency):undefined;
+  const displayRecords=technicalDisplayOnly&&selected[0]==='unit'?displayReactRecords(dependency):undefined;
+  const cap={cf033Chart:chartBundle?true:undefined,chartProduction:chartBundle?.chart,chartMetadata:chartBundle?.metadata,cf032Display:displayRecords?true:undefined,reactProduction:chartBundle?.react??displayRecords,root,dependency,runtime:[path.dirname(path.dirname(node)),'/System','/usr/lib'],ports:[],lifetime:browserOnly?600:1800,nonce:owned.nonce,packageSnapshot,diagnostics:diagnosticContext,workload:selected.length===1?selected[0]:'all'};
   fs.writeFileSync(capfile,JSON.stringify(cap),{mode:0o600});
   const env=environment(root,{NODE_OPTIONS:'--require='+guard,ST001_SAFE_CAP:capfile,NODE_ENV:'production'});
   const profile=path.join(root,'policy.sb');
-  const run=async(args,timeout)=>{if(aborted)throw Error('controller interrupted/expired');return checkedCommand({record:packageSnapshot,root,dependency,provenance,argv:['/usr/bin/sandbox-exec','-f',profile,node,...args],env,timeout,children,prepare(){cap.lifetime=browserOnly?600:Math.floor(timeout/1000);fs.writeFileSync(capfile,JSON.stringify(cap));}});};
+  const run=async(args,timeout)=>{
+   if(aborted)throw Error('controller interrupted/expired');
+   const invoke=()=>checkedCommand({record:packageSnapshot,root,dependency,provenance,argv:['/usr/bin/sandbox-exec','-f',profile,node,...args],env,timeout,children,prepare(){cap.lifetime=browserOnly?600:Math.floor(timeout/1000);fs.writeFileSync(capfile,JSON.stringify(cap));}});
+   if(chartBundle)return checkedReactCommand({records:chartBundle,dependency,readRecords:chartBundleRecords},invoke);
+   return displayRecords?checkedReactCommand({records:displayRecords,dependency},invoke):invoke();
+  };
   if(selected.includes('self-test')){const output=await run(['--test-reporter=tap','tests/tooling/safe-checks.test.mjs'],120000);validateTestOutput(output);console.log(output);}
-  if(selected.includes('unit')&&!browserOnly)for(const file of (coreOnly?coreUnit:supervisorOnly?supervisorUnit:flowReviewOnly?flowReviewUnit:fundamentalOnly?fundamentalUnit:analysisOnly?analysisUnit:unit)){const output=await run(['--test-reporter=tap','tests/'+file],120000);validateTestOutput(output);console.log(output);}
+  if(selected.includes('unit')&&!browserOnly)for(const file of (technicalChartOnly?technicalChartUnit:technicalDisplayOnly?technicalDisplayUnit:technicalReadOnly?technicalReadUnit:technicalBoundaryOnly?technicalBoundaryUnit:coreOnly?coreUnit:supervisorOnly?supervisorUnit:flowReviewOnly?flowReviewUnit:fundamentalOnly?fundamentalUnit:analysisOnly?analysisUnit:unit)){const output=await run(['--test-reporter=tap','tests/'+file],120000);validateTestOutput(output);console.log(output);}
   if(browserOnly){
    const {reservePair}=await import('../tests/helpers/safe-http.mjs');const reservations=await reservePair();let task,browserFailure;
    try{
-    cap.cf025Action=browserCheck?terminalAction:undefined;cap.ports=reservations.ports;cap.cf020Planning=supervisorBrowser;cap.cf022Core=coreBrowser;cap.reactProduction=reactRecords(dependency);fs.writeFileSync(capfile,JSON.stringify(cap));fs.writeFileSync(profile,policy(root,dependency,node,cap.ports));await reservations.close();
-    task=run(['--test-reporter=tap',coreBrowser?'tests/integration/supervisor/chat-browser-fixture.mjs':'tests/integration/flow/report-browser-fixture.mjs'],600000);
+    cap.cf025Action=browserCheck?terminalAction:undefined;cap.ports=reservations.ports;cap.cf020Planning=supervisorBrowser;cap.cf022Core=coreBrowser;cap.reactProduction=chartBundle?.react??reactRecords(dependency);fs.writeFileSync(capfile,JSON.stringify(cap));fs.writeFileSync(profile,policy(root,dependency,node,cap.ports));await reservations.close();
+    task=run(['--test-reporter=tap',technicalChartBrowser?technicalChartFixture:coreBrowser?'tests/integration/supervisor/chat-browser-fixture.mjs':'tests/integration/flow/report-browser-fixture.mjs'],600000);
     const proof=await browserReadiness(task,()=>{const file=path.join(root,'cf019-ready.json');return fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):null;});
     if(!proof||proof.nonce!==owned.nonce||proof.cwd!==root||proof.port!==cap.ports[0]||![...children].some(child=>child.pid===proof.pid&&child.st001OwnedRoot===root))throw Error('CF019 worker readiness ownership mismatch');
     const listener=execFileSync('/usr/sbin/lsof',['-nP','-a','-p',String(proof.pid),'-iTCP:'+proof.port,'-sTCP:LISTEN','-Fpn'],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'}}).toString().trim().split('\n');
     const cwd=execFileSync('/usr/sbin/lsof',['-a','-p',String(proof.pid),'-d','cwd','-Fn'],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'}}).toString().trim().split('\n');
     if(!listener.includes('p'+proof.pid)||!listener.includes('n127.0.0.1:'+proof.port)||!cwd.includes('n'+root))throw Error('CF019 listener/cwd identity mismatch');
     console.log('CF019_OWNED_READY '+JSON.stringify({port:proof.port,nonce:owned.nonce,pid:proof.pid,cwd:root}));
+    if(technicalChartBrowser)console.log('CF033_FIXTURE_URL http://127.0.0.1:'+proof.port+'/technical-preview');
     if(coreBrowser)console.log('CF025_FIXTURE_URL http://127.0.0.1:'+proof.port+'/research');
     if(browserCheck){
      const probe=run(['tests/integration/supervisor/chat-http-readiness.test.mjs'],60000);
@@ -459,7 +533,7 @@ async function execute(selected,terminalAction){
      console.log('CF025_SETTLED '+JSON.stringify({action:terminalAction,registeredChildren:children.size,readinessRemoved:true,listenerClosed:true,browser:result.browser}));
     }else{
      console.log(await task);
-     if(coreBrowser){
+     if(coreBrowser||technicalChartBrowser){
       const receipt=validateTerminalReceipt(readTerminal(root),proof);
       recheckPackage(packageSnapshot,root,dependency);recheckProvenance(provenance,root,dependency,packageSnapshot);
       if(children.size||fs.existsSync(path.join(root,'cf019-ready.json')))throw Error('Interactive fixture cleanup incomplete');
@@ -476,7 +550,7 @@ async function execute(selected,terminalAction){
        if(settled.error!==browserFailure)console.error('CF019_TASK_SETTLED_AFTER_FAILURE '+String(settled.error?.message??'command failed').slice(-4000));
       }
      }
-     if(JSON.stringify(cap.reactProduction)!==JSON.stringify(reactRecords(dependency)))throw Error('CF019 production dependency postcheck drift');
+     if(JSON.stringify(cap.reactProduction)!==JSON.stringify(technicalChartBrowser?chartBundleRecords(dependency).react:reactRecords(dependency)))throw Error('CF019 production dependency postcheck drift');
     }
    }
   }
@@ -495,20 +569,27 @@ async function execute(selected,terminalAction){
    // Installed Next writeAppTypeDeclarations.js uses these exact standard references.
    // The owned copy has no ignored next-env file; this adds declarations, never any/stubs.
    fs.writeFileSync(path.join(root,'next-env.d.ts'),'/// <reference types=\"next\" />\n/// <reference types=\"next/image-types/global\" />\n');
+   if(technicalDisplayOnly)fs.writeFileSync(path.join(root,'tsconfig.cf032.json'),JSON.stringify({extends:'./tsconfig.json',include:technicalDisplayType}));
+   if(technicalReadOnly)fs.writeFileSync(path.join(root,'tsconfig.cf031.json'),JSON.stringify({extends:'./tsconfig.json',include:technicalReadType}));
+   if(technicalBoundaryOnly)fs.writeFileSync(path.join(root,'tsconfig.cf021.json'),JSON.stringify({extends:'./tsconfig.json',include:technicalBoundaryType}));
    if(coreOnly)fs.writeFileSync(path.join(root,'tsconfig.cf022.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts',...coreType]}));
    if(supervisorOnly)fs.writeFileSync(path.join(root,'tsconfig.cf020.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts',...supervisorType]}));
    if(flowReviewOnly)fs.writeFileSync(path.join(root,'tsconfig.cf019.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts',...flowReviewType]}));
    if(fundamentalOnly)fs.writeFileSync(path.join(root,'tsconfig.cf015.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts',...fundamentalType]}));
    if(analysisOnly)fs.writeFileSync(path.join(root,'tsconfig.cf012.json'),JSON.stringify({extends:'./tsconfig.json',include:['next-env.d.ts','src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts']}));
-   console.log(await run(['node_modules/typescript/bin/tsc','--noEmit','--incremental','false',...(coreOnly?['-p','tsconfig.cf022.json']:supervisorOnly?['-p','tsconfig.cf020.json']:flowReviewOnly?['-p','tsconfig.cf019.json']:fundamentalOnly?['-p','tsconfig.cf015.json']:analysisOnly?['-p','tsconfig.cf012.json']:[])],180000));
+   console.log(await run(['node_modules/typescript/bin/tsc','--noEmit','--incremental','false',...(technicalDisplayOnly?['-p','tsconfig.cf032.json']:technicalReadOnly?['-p','tsconfig.cf031.json']:technicalBoundaryOnly?['-p','tsconfig.cf021.json']:coreOnly?['-p','tsconfig.cf022.json']:supervisorOnly?['-p','tsconfig.cf020.json']:flowReviewOnly?['-p','tsconfig.cf019.json']:fundamentalOnly?['-p','tsconfig.cf015.json']:analysisOnly?['-p','tsconfig.cf012.json']:[])],180000));
   }
+  if(technicalChartOnly&&selected.includes('lint'))console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',technicalChartFixture,'tests/tooling/safe-checks.test.mjs','scripts/check-local-ports.mjs'],180000));
+  if(technicalDisplayOnly&&selected.includes('lint'))console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',...technicalDisplayType,...technicalDisplayUnit.map(p=>'tests/'+p),'scripts/check-local-ports.mjs'],180000));
+  if(technicalReadOnly&&selected.includes('lint'))console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',...technicalReadType,'src/features/technical/lib/chart.ts',...technicalReadUnit.map(p=>'tests/'+p),'scripts/check-local-ports.mjs'],180000));
+  if(technicalBoundaryOnly&&selected.includes('lint'))console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',...technicalBoundaryType,'src/features/technical/lib/chart.ts',...technicalBoundaryUnit.map(p=>'tests/'+p),'scripts/check-local-ports.mjs'],180000));
   if(fixtureLint){console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',...fixtureSources],180000));}
   if(selected.includes('lint')&&(coreOnly||flowReviewOnly||supervisorOnly)){
    const report=path.join(root,'cf019-eslint.json');
    try{console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore','--format','json','--output-file',report,...(coreOnly?coreType:supervisorOnly?supervisorType:flowReviewType),...(coreOnly?coreUnit:supervisorOnly?supervisorUnit:flowReviewUnit).map(p=>'tests/'+p),...(coreOnly?['tests/integration/supervisor/chat-browser-fixture.mjs']:['tests/integration/flow/report-browser-fixture.mjs']),'scripts/check-local-ports.mjs'],180000));}
    finally{if(fs.existsSync(report)){const findings=JSON.parse(fs.readFileSync(report,'utf8')).flatMap(file=>file.messages.map(m=>({file:path.relative(root,file.filePath),line:m.line,rule:m.ruleId,severity:m.severity,message:m.message.split('\n')[0]})));console.log('CF019_LINT '+JSON.stringify(findings));}}
   }
-  if(selected.includes('lint')&&!fixtureLint&&!flowReviewOnly&&!supervisorOnly&&!coreOnly)console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
+  if(selected.includes('lint')&&!technicalChartOnly&&!technicalDisplayOnly&&!technicalReadOnly&&!technicalBoundaryOnly&&!fixtureLint&&!flowReviewOnly&&!supervisorOnly&&!coreOnly)console.log(await run(['node_modules/eslint/bin/eslint.js','--no-ignore',
    ...(flowReviewOnly?[...flowReviewType,...flowReviewUnit.map(p=>'tests/'+p),'tests/integration/flow/report-browser-fixture.mjs','scripts/check-local-ports.mjs']:fundamentalOnly?fundamentalLint:analysisOnly?['src/shared/server/flow-analysis-config.ts','src/features/flow/lib/analysis-request.ts','src/features/flow/components/analysis-request.tsx','src/app/research/page.tsx','src/app/page.tsx','src/shared/server/session-proxy.ts','src/app/api/private/[...path]/route.ts','tests/unit/flow/analysis-request.test.mjs','tests/unit/bff/session-proxy.test.mjs','tests/unit/config/ports.test.mjs','scripts/check-local-ports.mjs']:Object.values(relocationSources).filter(p=>/\.(ts|tsx)$/.test(p))),
    ...(flowReviewOnly||analysisOnly||fundamentalOnly?[]:[ 'src/features/technical/components/indicator-card.tsx',
    'src/shared/server/flow-demo-config.ts','src/app/flow/demo/page.tsx','src/features/flow/components/synthetic-demo.tsx','src/features/flow/lib/synthetic-demo.ts','src/app/api/private/[...path]/route.ts','src/proxy.ts','tests/unit/flow/synthetic-demo.test.mjs',

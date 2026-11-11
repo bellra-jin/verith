@@ -750,3 +750,223 @@ test('CF025 actual probe received response cap/parser violations cannot be recov
   if(kind==='incomplete')assert.equal((await job).ack,'unknown');else await assert.rejects(job,/ACK invalid/);
  }
 });
+
+test('CF021 technical boundary mode selects only the pure preview test, tooling and typed chart inputs',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalBoundaryUnit,['unit/technical/boundary-preview.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(caller.technicalBoundaryType,['src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts']);
+ assert.deepEqual(caller.technicalBoundaryExact,[...caller.technicalBoundaryType,...caller.technicalBoundaryUnit.map(p=>'tests/'+p),'src/features/technical/lib/chart.ts','tests/fixtures/cf021-technical-boundary.json']);
+ for(const mode of ['technical-boundary-unit','technical-boundary-type','technical-boundary-lint'])assert.ok(caller.modes.includes(mode));
+ for(const source of caller.technicalBoundaryExact)assert.equal(sourceAllowed(source),true);
+ const text=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const execute=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='execute');
+ const declaration=execute.body.statements.find(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(tree)==='technicalBoundaryOnly'));
+ const selection=execute.body.statements.find(n=>ts.isIfStatement(n)&&n.expression.getText(tree)==='technicalBoundaryOnly');
+ for(const [name,result] of [['unit','unit'],['type','type'],['lint','lint']]){
+  const ctx={selected:['technical-boundary-'+name]};vm.runInNewContext(declaration.getText(tree)+'\n'+selection.getText(tree),ctx,{timeout:100});assert.deepEqual(Array.from(ctx.selected),[result]);
+ }
+ assert.match(text,/technicalBoundaryOnly\?technicalBoundaryUnit:coreOnly\?coreUnit/);
+ assert.match(text,/technicalBoundaryOnly\?\['-p','tsconfig.cf021.json'\]/);
+ assert.doesNotMatch(caller.technicalBoundaryExact.join('\n'),/components\/|app\/|\.env|boundary_runtime/);
+});
+
+test('CF021 exact Technical worktree alias preserves dependency identity and rejects sibling lookalikes',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-technical-boundary','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,uid=1234,mode=0o40755,canonical=root}={}){
+  const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);
+  const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
+  return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
+ }
+ for(const sibling of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display','verith-technical-chart-browser'])assert.equal(check(path.join(workspace,sibling,'frontend')),path.dirname(dependency));
+ for(const root of [path.join(workspace,'verith-technical-boundary-extra','frontend'),path.join(workspace,'prefix-verith-technical-boundary','frontend'),'/other/verith-technical-boundary/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+
+test('CF031 read modes select exact pure decoder inputs and preserve CF021 selection',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalReadUnit,['unit/technical/boundary-read.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(caller.technicalReadType,['src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts']);
+ assert.deepEqual(caller.technicalReadExact,[...caller.technicalReadType,...caller.technicalReadUnit.map(p=>'tests/'+p),'src/features/technical/lib/chart.ts','tests/fixtures/cf031-technical-boundary-read.json']);
+ for(const name of caller.technicalReadExact)assert.equal(sourceAllowed(name),true);
+ for(const name of ['tests/fixtures/cf031-technical-boundary-read.json.adjacent','tests/fixtures/cf031-other.json','tests/unit/technical/boundary-read.test.mjs.adjacent'])assert.equal(sourceAllowed(name),false);
+ assert.deepEqual(caller.technicalBoundaryUnit,['unit/technical/boundary-preview.test.mjs','tooling/safe-checks.test.mjs']);
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const execute=tree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='execute');
+ const declaration=execute.body.statements.find(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(tree)==='technicalReadOnly'));
+ const selection=execute.body.statements.find(n=>ts.isIfStatement(n)&&n.expression.getText(tree)==='technicalReadOnly');
+ for(const mode of ['unit','type','lint']){
+  assert.ok(caller.modes.includes('technical-read-'+mode));
+  const ctx={selected:['technical-read-'+mode]};vm.runInNewContext(declaration.getText(tree)+'\n'+selection.getText(tree),ctx,{timeout:100});assert.deepEqual(Array.from(ctx.selected),[mode]);
+ }
+ const bad={selected:['technical-read-extra']};vm.runInNewContext(declaration.getText(tree)+'\n'+selection.getText(tree),bad,{timeout:100});assert.equal(bad.technicalReadOnly,undefined);assert.deepEqual(bad.selected,['technical-read-extra']);
+ assert.match(source,/technicalReadOnly\?technicalReadUnit:technicalBoundaryOnly\?technicalBoundaryUnit/);
+ assert.match(source,/technicalReadOnly\?\['-p','tsconfig.cf031.json'\]/);
+ assert.doesNotMatch(caller.technicalReadExact.join('\n'),/components\/|app\/|\.env|boundary_runtime/);
+});
+
+test('CF031 exact read worktree alias keeps negative provenance identity checks',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-technical-read-boundary','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,uid=1234,mode=0o40755,canonical=root}={}){
+  const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);
+  const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
+  return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
+ }
+ assert.equal(check(project),path.dirname(dependency));
+ for(const sibling of ['verith-technical-read-boundary-extra','prefix-verith-technical-read-boundary','verith-technical-read'])assert.throws(()=>check(path.join(workspace,sibling,'frontend')),/unreviewed metadata root/);
+ assert.throws(()=>check('/other/verith-technical-read-boundary/frontend'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+test('CF028 actual caller accepts only the six reviewed sibling aliases with the fixed dependency metadata',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const variables=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']);
+ const functions=new Set(['metadataRootFor','trusted']);
+ const selected=tree.statements.filter(node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>variables.has(d.name.getText(tree)))||ts.isFunctionDeclaration(node)&&functions.has(node.name?.text));
+ assert.equal(selected.length,5);
+ const code=selected.map(node=>node.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-supervisor-verification','frontend');
+ const dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(codeRoot,dep=dependency,{alias=dep,canonical=codeRoot,uid=1234,mode=0o40755}={}){
+  const real=new Map([[codeRoot,canonical],[dep,dep],[path.join(codeRoot,'node_modules'),alias],[path.dirname(dep),path.dirname(dep)]]);
+  const metadata=new Map([...real.values()].map(p=>[p,{uid,mode}]));
+  const limited={realpathSync(p){assert.ok(real.has(p),'finite synthetic path only: '+p);return real.get(p);},statSync(p){assert.ok(metadata.has(p),'finite synthetic metadata only');return metadata.get(p);}};
+  return vm.runInNewContext(code,{path,project,fs:limited,process:{getuid:()=>1234}},{timeout:100})(codeRoot,dep);
+ }
+ for(const name of ['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display','verith-technical-chart-browser'])assert.equal(check(path.join(workspace,name,'frontend')),path.dirname(dependency));
+ const ordinary=path.join(workspace,'ordinary','frontend');assert.equal(check(ordinary,path.join(ordinary,'node_modules')),ordinary);
+ for(const root of [path.join(workspace,'arbitrary','frontend'),path.join(workspace,'verith-supervisor-verification-extra','frontend'),path.join(workspace,'prefix-verith-supervisor-verification','frontend'),'/other/verith-supervisor-verification/frontend'])assert.throws(()=>check(root),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/verith/frontend/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{canonical:'/canonical/elsewhere'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{alias:'/other/node_modules'}),/code\/dependency identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+
+test('CF028 actual protected invocation retains separate code/metadata roots and owned package snapshot',()=>{
+ const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
+ const provenance=JSON.parse(fs.readFileSync('source-provenance.json','utf8'));
+ assert.equal(cap.packageSnapshot.sourceRoot,path.dirname(cap.dependency));
+ assert.equal(provenance.dependency,cap.dependency);
+ assert.equal(cap.packageSnapshot.snapshot,path.join(process.cwd(),'package.json'));
+ if(provenance.codeRoot!==cap.packageSnapshot.sourceRoot){
+  const workspace=path.dirname(path.dirname(provenance.codeRoot));
+  assert.ok(['verith-supervisor-core','verith-supervisor-verification','verith-technical-boundary','verith-technical-read-boundary','verith-technical-chart-display','verith-technical-chart-browser'].map(name=>path.join(workspace,name,'frontend')).includes(provenance.codeRoot));
+  assert.equal(cap.dependency,path.join(workspace,'verith','frontend','node_modules'));
+ }
+ console.log('CF028_ROOT_PROVENANCE '+JSON.stringify({codeRootKind:path.basename(path.dirname(provenance.codeRoot)),split:provenance.codeRoot!==cap.packageSnapshot.sourceRoot,manifestSHA:provenance.manifestSHA,workerPackageOwned:cap.packageSnapshot.snapshot===path.join(process.cwd(),'package.json')}));
+});
+test('CF032 exact display selection retains prior modes and only the declared readonly graph',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalDisplayUnit,['unit/technical/boundary-display.test.mjs','tooling/safe-checks.test.mjs']);
+ assert.deepEqual(caller.technicalDisplayType,['src/features/technical/components/technical-boundary-preview.tsx']);
+ assert.deepEqual(caller.technicalDisplayReadonly,['src/features/technical/lib/strict-boundary-read.ts','src/features/technical/lib/boundary-preview.ts','src/features/technical/model/types.ts','src/features/technical/lib/chart.ts','src/features/technical/components/technical-chart-panel.tsx','src/shared/lib/format.ts','tests/fixtures/cf031-technical-boundary-read.json']);
+ assert.deepEqual(caller.technicalDisplayExact,[...caller.technicalDisplayType,...caller.technicalDisplayUnit.map(p=>'tests/'+p),...caller.technicalDisplayReadonly]);
+ for(const mode of ['technical-display-unit','technical-display-type','technical-display-lint','technical-read-unit','technical-boundary-unit','core-browser'])assert.ok(caller.modes.includes(mode));
+ for(const source of caller.technicalDisplayExact)assert.equal(sourceAllowed(source),true);
+ assert.doesNotMatch(caller.technicalDisplayExact.join('\n'),/src\/app|backend\/|\.env|boundary_restore|mock-data/);
+});
+
+test('CF032 actual alias accepts only the new exact display sibling and preserves identity denials',()=>{
+ const source=fs.readFileSync('scripts/check-local-ports.mjs','utf8'),tree=ts.createSourceFile('caller.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);
+ const vars=new Set(['reviewedWorkspace','reviewedCodeRoots','reviewedDependencyRoot']),functions=new Set(['trusted','metadataRootFor']);
+ const selected=tree.statements.filter(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>vars.has(d.name.getText(tree)))||ts.isFunctionDeclaration(n)&&functions.has(n.name?.text));assert.equal(selected.length,5);
+ const code=selected.map(n=>n.getText(tree).replace(/^export /,'')).join('\n')+';metadataRootFor;';
+ const workspace='/synthetic/workspace',project=path.join(workspace,'verith-technical-chart-display','frontend'),dependency=path.join(workspace,'verith','frontend','node_modules');
+ function check(root,dep=dependency,{target=dep,canonical=root,uid=1234,mode=0o40755}={}){
+  const paths=new Map([[root,canonical],[dep,dep],[path.join(root,'node_modules'),target],[path.dirname(dep),path.dirname(dep)]]);
+  const fsMock={realpathSync(p){assert.ok(paths.has(p));return paths.get(p);},statSync(p){assert.ok([...paths.values()].includes(p));return {uid,mode};}};
+  return vm.runInNewContext(code,{project,path,fs:fsMock,process:{getuid:()=>1234}},{timeout:100})(root,dep);
+ }
+ assert.equal(check(project),path.dirname(dependency));
+ for(const name of ['verith-technical-chart-display-extra','prefix-verith-technical-chart-display','verith-technical-chart'])assert.throws(()=>check(path.join(workspace,name,'frontend')),/unreviewed metadata root/);
+ assert.throws(()=>check('/other/verith-technical-chart-display/frontend'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,'/other/dependency/node_modules'),/unreviewed metadata root/);
+ assert.throws(()=>check(project,dependency,{target:'/other/node_modules'}),/identity mismatch/);
+ assert.throws(()=>check(project,dependency,{canonical:'/other/code'}),/identity mismatch/);
+ assert.throws(()=>check(project,dependency,{uid:9999}),/untrusted dependency metadata/);
+ assert.throws(()=>check(project,dependency,{mode:0o40777}),/untrusted dependency metadata/);
+});
+
+test('CF032 actual React command checks identity before/after success and failed child without a permission grant',async()=>{
+ const {checkedReactCommand}=await import('../../scripts/check-local-ports.mjs');
+ const original=[{relative:'react/cjs/react.production.js',version:'19.2.4',size:1,sha256:'a'.repeat(64),identity:[{dev:'1',ino:'1'}]}];
+ let current=structuredClone(original),reads=0,invokes=0;
+ const proof={records:original,dependency:'/synthetic/dependency',sourceRoot:'/synthetic/source',readRecords(dep,root){assert.equal(dep,'/synthetic/dependency');assert.equal(root,'/synthetic/source');reads++;return current;}};
+ assert.equal(await checkedReactCommand(proof,async()=>{invokes++;return 'ok';}),'ok');
+ assert.equal(reads,2);assert.equal(invokes,1);
+ for(const field of ['relative','version','size','sha256','identity']){
+  current=structuredClone(original);current[0][field]='drift';
+  await assert.rejects(checkedReactCommand(proof,async()=>{invokes++;}),/React identity drift/);
+ }
+ assert.equal(invokes,1);
+ current=structuredClone(original);const childError=Error('synthetic child failure');reads=0;
+ await assert.rejects(checkedReactCommand(proof,async()=>{invokes++;throw childError;}),error=>error===childError);
+ assert.equal(reads,2);assert.equal(invokes,2);
+ current=structuredClone(original);reads=0;
+ await assert.rejects(checkedReactCommand(proof,async()=>{current[0].sha256='drift';throw childError;}),error=>error instanceof AggregateError&&error.errors[0]===childError&&/React identity drift/.test(error.errors[1].message));
+ assert.equal(reads,2);
+});
+
+test('CF032 display worker receives only five production records and no browser ports',()=>{
+ const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
+ if(!cap.cf032Display)return;
+ assert.equal(cap.workload,'unit');assert.deepEqual(cap.ports,[]);assert.ok(cap.lifetime<=120);
+ assert.equal(cap.cf022Core,undefined);assert.equal(cap.cf020Planning,undefined);
+ assert.deepEqual(cap.reactProduction.map(r=>r.relative),['react/cjs/react.production.js','react/cjs/react-jsx-runtime.production.js','react-dom/cjs/react-dom.production.js','react-dom/cjs/react-dom-client.production.js','scheduler/cjs/scheduler.production.js']);
+ for(const record of cap.reactProduction){assert.match(record.sha256,/^[0-9a-f]{64}$/);assert.ok(record.size>0);assert.match(record.version,/^\d+\.\d+\.\d+$/);}
+});
+test('CF033 fixed chart selection preserves production source and exactly three vendor additions',async()=>{
+ const caller=await import('../../scripts/check-local-ports.mjs');
+ assert.deepEqual(caller.technicalChartUnit,['tooling/safe-checks.test.mjs']);
+ assert.equal(caller.technicalChartFixture,'tests/integration/technical/chart-browser-fixture.mjs');
+ assert.deepEqual(caller.chartProductionFiles,['recharts/umd/Recharts.js','lucide-react/dist/cjs/lucide-react.js','next/dist/compiled/react-is/cjs/react-is.production.js']);
+ for(const mode of ['technical-chart-unit','technical-chart-lint','technical-chart-browser','core-browser','technical-display-unit','technical-read-unit'])assert.ok(caller.modes.includes(mode));
+ for(const p of caller.technicalChartExact)assert.equal(sourceAllowed(p),true);
+ assert.doesNotMatch(caller.technicalChartExact.join('\n'),/src\/app|backend\/|mock-data|\.env/);
+});
+
+test('CF033 actual closed production registry recognizes React19 elements/fragments and real chart/icon exports',async()=>{
+ const cap=JSON.parse(fs.readFileSync(process.env.ST001_SAFE_CAP,'utf8'));
+ if(!cap.cf033Chart)return;
+ assert.equal(cap.workload,'unit');assert.deepEqual(cap.ports,[]);assert.ok(cap.lifetime<=120);
+ const fixture=await import('../integration/technical/chart-browser-fixture.mjs');
+ assert.deepEqual(fixture.registryPreflight(fixture.chartRegistry(cap)),{element:true,fragment:true,chart:true,icons:true});
+ for(const field of ['sha256','relative','size']){
+  const bad=structuredClone(cap);bad.chartProduction[0][field]='drift';
+  assert.throws(()=>fixture.chartRegistry(bad),/CF033/);
+ }
+ const bad=structuredClone(cap);bad.chartMetadata[3].sha256='0'.repeat(64);assert.throws(()=>fixture.chartRegistry(bad),/CF033/);
+ const require=vm.runInNewContext(fixture.moduleProgram({react:'module.exports={};'}),{},{timeout:100});
+ assert.throws(()=>require('unregistered'),/unregistered module/);
+ assert.throws(()=>fixture.moduleProgram({'node:fs':'module.exports={};'}),/registry invalid/);
+});
+
+test('CF033 pure route/case/body functions are import safe and retain bounded terminal input',async()=>{
+ const fixture=await import('../integration/technical/chart-browser-fixture.mjs');
+ for(const p of ['/technical-preview','/bundle.js','/fixture.css','/fixture-finish'])assert.equal(fixture.fixtureTarget(p).status,200);
+ for(const p of ['//technical-preview','/technical-preview?x=1','/technical-preview#x','/%2e%2e/.env','http://example.test/technical-preview','/../x'])assert.equal(fixture.fixtureTarget(p).status,422);
+ assert.equal(fixture.fixtureTarget('/other.js').status,404);
+ const input=JSON.parse(fs.readFileSync('tests/fixtures/cf031-technical-boundary-read.json','utf8')),before=structuredClone(input),cases=fixture.fixtureCases(input);
+ assert.deepEqual(input,before);assert.deepEqual(Object.keys(cases),['A','B','empty','missing','error','invalid']);
+ assert.notEqual(cases.A.expected.request.data.context.report_id,cases.B.expected.request.data.context.report_id);
+ assert.deepEqual(cases.A.response.data.result.charts,cases.B.response.data.result.charts);
+ assert.equal(cases.error.response.data,null);assert.deepEqual(cases.empty.response.data.coverage.available_periods,[]);
+ const {EventEmitter}=await import('node:events');
+ const request=new EventEmitter();request.resume=()=>{};const body=fixture.readFixtureBody(request);request.emit('data',Buffer.from('{"action":"complete"}'));request.emit('end');assert.equal(await body,'{"action":"complete"}');
+ let resumed=0;const large=new EventEmitter();large.resume=()=>{resumed++;};const rejected=fixture.readFixtureBody(large);large.emit('data',Buffer.alloc(1025));await assert.rejects(rejected,/body limit/);assert.equal(resumed,1);
+});

@@ -175,31 +175,39 @@ class AIClient:
         except (httpx.HTTPError,httpx.InvalidURL):raise AIUnavailableError('Flow engine unavailable') from None
 
     async def analyze_technical(self, payload: dict) -> dict:
-        """`/internal/technical/analyze` 호출 → 응답 JSON(dict) 반환.
+        """Legacy unauthenticated execution is closed before transport."""
+        raise AIUnavailableError('Technical execution unavailable')
 
-        payload 는 TechnicalAgentInput 형태(ticker/query/request_id/as_of).
-        """
-        url = self._base_url + _ANALYZE_PATH
+    async def technical_boundary(self,payload:dict)->dict:
+        """Fixed synthetic typed boundary; no retry, proxy, redirect or production engine."""
+        from urllib.parse import urlsplit
+        from src.modules.technical.domain.execution_boundary import REQUEST_LIMIT,RESPONSE_LIMIT,WAIT_SECONDS,parse_request,canonical,decode,BoundaryInvalid
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout, transport=self._transport
-            ) as client:
-                resp = await client.post(url, json=payload)
-        except httpx.TimeoutException as exc:
-            raise AITimeoutError("AI 서버 응답 timeout") from exc
-        except httpx.HTTPError as exc:
-            # 연결 실패 등 — 메시지에 payload/URL 세부는 싣지 않는다.
-            raise AIUnavailableError(f"AI 서버 연결 실패: {type(exc).__name__}") from exc
-
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code == 422:
-            raise AIValidationError("AI 요청 검증 실패(422)")
-        if resp.status_code == 504:
-            raise AITimeoutError("AI 서버 timeout(504)")
-        if resp.status_code in (502, 503):
-            raise AIUnavailableError(f"AI 서버 사용 불가({resp.status_code})")
-        raise AIUnavailableError(f"AI 서버 오류({resp.status_code})")
+            url=urlsplit(self._base_url);httpx.URL(self._base_url);token=self._flow_token.encode('ascii')
+            if url.scheme not in {'http','https'} or not url.hostname or url.port==0 or url.username or url.password or url.path not in {'','/'} or url.query or url.fragment or len(token)<32 or any(c<32 or c>126 for c in token):raise ValueError()
+        except (ValueError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
+        try:
+            parse_request(payload);body=canonical(payload).encode('utf8')
+            if len(body)>REQUEST_LIMIT:raise BoundaryInvalid()
+        except (ValueError,TypeError,UnicodeError,RecursionError):raise AIValidationError('Technical boundary input invalid') from None
+        try:
+            async with asyncio.timeout(WAIT_SECONDS):
+                async with httpx.AsyncClient(timeout=WAIT_SECONDS,transport=self._transport,trust_env=False,follow_redirects=False) as client:
+                    async with client.stream('POST',self._base_url+'/internal/technical/boundary',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Technical-Service-Token':token.decode('ascii')}) as response:
+                        if response.status_code==504:raise AITimeoutError('Technical boundary deadline exceeded')
+                        if response.status_code!=200:raise AIUnavailableError('Technical boundary unavailable')
+                        if response.headers.get('content-encoding','identity').lower()!='identity':raise AIContractError('Technical boundary result invalid')
+                        raw=bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(raw)+len(chunk)>RESPONSE_LIMIT:raise AIContractError('Technical boundary result invalid')
+                            raw.extend(chunk)
+                        try:
+                            value=decode(raw)
+                            if type(value) is not dict:raise BoundaryInvalid()
+                            return value
+                        except (ValueError,TypeError,UnicodeError,RecursionError):raise AIContractError('Technical boundary result invalid') from None
+        except (TimeoutError,httpx.TimeoutException):raise AITimeoutError('Technical boundary deadline exceeded') from None
+        except (httpx.HTTPError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
 
     async def analyze_fundamental(self, payload: dict) -> dict:
         """One bounded internal Financial request. No redirect, environment proxy or retry."""

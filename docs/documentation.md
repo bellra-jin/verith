@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## CF-021 내부 Technical typed boundary
+
+[공통 envelope](contracts/analysis-agent-envelope-v1.md)·[Technical boundary](contracts/technical-boundary-v1.md)·[이식/직접 검사와 한계](work/CF-021-technical-boundary.md)를 따른다. 기존 WIP를 최신 develop의 별도 작업공간에서 완성한 비영속 합성 왕복과 차트 props 검증이다. public Supervisor/Technical·owner 저장/usage·실제 engine/provider·브라우저 수용은 열지 않는다. 기존 Flow/Fundamental 계약과 News 제외를 보존한다.
+
 ## CF-024 Supervisor private 검증 조립
 
 [조립 계약](contracts/supervisor-core-v1.md#cf-024-private-검증-조립)·[직접 검증과 남은 경계](work/CF-024-supervisor-live-verifier.md)를 따른다. 실제 Principal/준비/CF023 epoch를 기존 gateway·ASGI·durable budget에 조립하는 무키 합성 단계다. 실제 key 전송·계수 수수료 근거·live 모델/브라우저·운영 인수는 별도로 남는다.

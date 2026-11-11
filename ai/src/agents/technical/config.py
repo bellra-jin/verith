@@ -396,8 +396,7 @@ INTRADAY_HIGH_RANGE_POSITION_THRESHOLD: float = 0.66  # 레인지 위치 ≥ 0.6
 INTRADAY_LOW_RANGE_POSITION_THRESHOLD: float = 0.34   # 레인지 위치 ≤ 0.34(비율) → 하방 1표
 INTRADAY_DIRECTION_MIN_AGREEMENT: int = 2           # 최소 2개 지표 합의해야 방향 확정
 # synthesis/intraday_adjustment.py · schemas/intraday.py — 보정 한도/개수
-INTRADAY_CONFIDENCE_ADJUSTMENT_CAP: float = 0.05  # confidence/signal_score 보정 절대값 상한(±)
-INTRADAY_RISK_NOTE_MAX_COUNT: int = 3             # intraday risk_notes 최대 개수
+from .domain.intraday_limits import INTRADAY_CONFIDENCE_ADJUSTMENT_CAP, INTRADAY_RISK_NOTE_MAX_COUNT
 # services/kis_client.py — 분봉 역방향 페이징 상한
 INTRADAY_MINUTE_MAX_CALLS: int = 20               # 30건×20 ≈ 600봉(1일 ~391) — 무한 루프 방지 상한
 INTRADAY_MARKET_OPEN_HHMMSS: str = "090000"       # 이 시각 이전으로는 더 역방향 조회하지 않는다

@@ -428,3 +428,13 @@ POST하거나 새 key를 만들지 않는다. hash/storage await 중 취소도 s
 또는 model 요청까지 취소한다는 보장은 추가하지 않는다. 이 회귀는 실제 함수와
 주입 IO/가짜 시계의 무키 검증이며 React mount·실제 로그인·Backend/PG·공급자·
 청구 확인이 아니다. 기존 250m 보수 예약과 consumed 실행 기록은 변경하지 않는다.
+
+### CF037 고정 단일 재검증
+
+기존 frozen 부모150m, 선행 timeout 소비50m 및 closed retry1의 unknown50m을 별도로 검증해250m을 이월한다. 새 명시 동의의 고정 ordinal2 하나만 추가50m·누적300m으로 표현하며, 같은 canonical namespace/bootstrap의 once identity는 source·동의 ID·invocation 변경으로 늘어나지 않는다. 첫 질문의 무료 count1·generation1·HTTP2, 자동 provider retry0을 유지한다. 과거 hold는 청구액이나 환불 가능액이 아니다.
+
+과거 artifact의 semantic SHA는 provider5 계약으로 검증하고 현재 실행은 병합된 provider55/verifier60 계약으로 별도 검증한다. 이 분기에서 provider_seconds만5→55인 파생 차이를 허용하며 질문·prompt/schema·모델·가격·token cap·request/projection은 그대로 대조한다. 기존 controller의 credential provenance와 새 helper의 exact code provenance를 각각 고정하고 controller·gateway·guard·AI32를 수정하지 않는다. 키 source는 기존 AI 서비스의 단일 경로이며 dotenv 탐색·fallback은 없다.
+
+최초 독립 소비 기록과 실제 readback 후 같은 invocation의 ordered local fsync ACK를 사용한다. callback5초·시작/입력120초·lease600초·preload30초·cleanup30초를 갱신 없이 유지한다. once/이력 소실·변조·조회 불명이나 ACK 손실은 추가 송신 없이 보류·증거를 보존한다. 이 분기의 구현·합성 검사는 실제 발급이나 공급자 품질 검증을 대신하지 않는다.
+
+정산 observed와 의미 품질 미수용은 별도로 보고한다. helper는 의미 rejected를 MEANING_REJECTED, 다른 미보완 상태를 MEANING_NOT_SUPPLEMENTED로 표시하며 FIRST_SETTLEMENT_UNCONFIRMED는 실제 정산 미확정에 유지한다. 의미 실패도 다음 송신을 허용하지 않으며 기존 회계·cleanup과 보수 예약을 보존한다. raw 후보가 남지 않은 실제 실행의 세부 거절 원인은 소급 추정하지 않는다.

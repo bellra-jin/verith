@@ -7,6 +7,11 @@ import { randomUUID } from 'node:crypto';
 
 const demoPath='/api/flow/synthetic-demo/runs';
 const analysisPath='/api/flow/analyses';
+const technicalOwnedPath='/api/technical/owned-reports';
+function technicalReadProxyError(code:string,status:number){
+ return Response.json({schema_version:'technical.owned-read.v1',request_id:randomUUID(),data:null,error:{code,message:'Technical result unavailable'}},
+   {status,headers:{'Cache-Control':'private, no-store',Vary:'Cookie, Origin'}});
+}
 export function demoProxyError(code:string,status:number) {
   return Response.json({request_id:randomUUID(),data:null,error:{code,message:'합성 데모 요청을 처리할 수 없습니다.'}},
     {status,headers:{'Cache-Control':'private, no-store',Vary:'Cookie, Origin'}});
@@ -33,6 +38,8 @@ async function boundedRead(reader:ReadableStreamDefaultReader<Uint8Array>,signal
 }
 
 export async function sessionProxy(request: Request, path: string, query = '') {
+  const technicalOwned=path===technicalOwnedPath||path.startsWith(technicalOwnedPath+'/');
+  const technicalDetail=technicalOwned&&path!==technicalOwnedPath;
   const core=path.startsWith('/api/supervisor/core');
   const planning=path==='/api/flow/plans'||path.startsWith('/api/flow/plans/');
   const demo=path===demoPath || path.startsWith(demoPath+'/');
@@ -40,11 +47,18 @@ export async function sessionProxy(request: Request, path: string, query = '') {
   const fundamentalReports=fundamental&&path.startsWith('/api/fundamental/reports');
   const currentAnalysisPath=fundamental?'/api/fundamental/analyses':analysisPath;
   const analysis=core || planning || fundamental || path===analysisPath || path.startsWith(analysisPath+'/');
-  const guarded=demo||analysis;
-  const reject=core?coreProxyError:analysis?analysisProxyError:demoProxyError;
+  const guarded=demo||analysis||technicalOwned;
+  const reject=technicalOwned?technicalReadProxyError:core?coreProxyError:analysis?analysisProxyError:demoProxyError;
+  if(technicalOwned){
+    if(request.method!=='GET')return reject('FEATURE_UNAVAILABLE',403);
+    if(technicalDetail&&!/^\/api\/technical\/owned-reports\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(path))return reject(path.slice(technicalOwnedPath.length+1).includes('/')?'FEATURE_UNAVAILABLE':'INPUT_INVALID',path.slice(technicalOwnedPath.length+1).includes('/')?403:422);
+    const pairs=[...new URLSearchParams(query)],values=Object.fromEntries(pairs);
+    if(query.length>256||technicalDetail&&query!==''||pairs.length!==Object.keys(values).length||Object.keys(values).some(k=>!['stock_code','limit','offset'].includes(k))||values.stock_code!==undefined&&!/^[0-9]{6}$/.test(values.stock_code)
+      ||['limit','offset'].some(k=>values[k]!==undefined&&!/^[0-9]{1,5}$/.test(values[k]))||Number(values.limit??10)<1||Number(values.limit??10)>20||Number(values.offset??0)>10000)return reject('INPUT_INVALID',422);
+  }
   if(analysis&&!(fundamental?fundamentalAnalysisEnabled():flowAnalysisEnabled()))return reject('FEATURE_UNAVAILABLE',403);
   const preparationPost=path==='/api/supervisor/core/preparations'&&request.method==='POST';
-  const analysisSignal=analysis?AbortSignal.timeout(core?(preparationPost?95000:path==='/api/supervisor/core/requests'&&request.method==='POST'?145000:16000):planning?12000:fundamental?70000:130000):undefined;
+  const analysisSignal=technicalOwned?AbortSignal.timeout(20000):analysis?AbortSignal.timeout(core?(preparationPost?95000:path==='/api/supervisor/core/requests'&&request.method==='POST'?145000:16000):planning?12000:fundamental?70000:130000):undefined;
   const bodySignal=preparationPost?AbortSignal.timeout(16000):analysisSignal;
   if(demo && !flowDemoEnabled())return demoProxyError('FEATURE_UNAVAILABLE',403);
   const base = sessionBackendUrl();
@@ -66,7 +80,7 @@ export async function sessionProxy(request: Request, path: string, query = '') {
     }
   }
   let body: ArrayBuffer | undefined;
-  if(guarded) {
+  if(guarded&&!technicalOwned) {
     const idPattern='[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}';
     const root=core?(path.startsWith('/api/supervisor/core/requests')?'/api/supervisor/core/requests':path.startsWith('/api/supervisor/core/preparations')?'/api/supervisor/core/preparations':'/api/supervisor/core/prepare'):planning?'/api/flow/plans':fundamentalReports?'/api/fundamental/reports':analysis?currentAnalysisPath:demoPath;
     const detail=new RegExp('^'+root+'/'+idPattern+'$').test(path);
@@ -91,7 +105,7 @@ export async function sessionProxy(request: Request, path: string, query = '') {
       }catch{return reject((core||planning)&&(bodySignal?.aborted||analysisSignal?.aborted)?'DEADLINE_EXCEEDED':'INPUT_INVALID',(core||planning)&&(bodySignal?.aborted||analysisSignal?.aborted)?504:422);}finally{try{reader?.releaseLock();}catch{ /* cancelled read */ }}
     }
   }
-  const forwarded = new Headers({Accept:'application/json',...((core||planning)?{'Accept-Encoding':'identity'}:{})});
+  const forwarded = new Headers({Accept:'application/json',...((core||planning||technicalOwned)?{'Accept-Encoding':'identity'}:{})});
   // No caller-supplied owner/user/service headers; Backend verifies cookie + Origin + CSRF.
   for (const name of ['cookie','origin','x-csrf-token']) {
     const value = request.headers.get(name);
@@ -99,23 +113,23 @@ export async function sessionProxy(request: Request, path: string, query = '') {
   }
   if(body!==undefined)forwarded.set('content-type',request.headers.get('content-type') ?? 'application/json');
   try {
-    const upstream = await fetch(base + path + query, {method:request.method,headers:forwarded,...(body===undefined?{}:{body}),cache:'no-store',redirect:'manual',...(analysis?{signal:analysisSignal}:{})});
-    if((core||planning)&&(upstream.status>=300&&upstream.status<400||![null,'identity'].includes(upstream.headers.get('content-encoding')?.toLowerCase()??null))){await upstream.body?.cancel();return reject('SERVICE_UNAVAILABLE',503);}
+    const upstream = await fetch(base + path + query, {method:request.method,headers:forwarded,...(body===undefined?{}:{body}),cache:'no-store',redirect:'manual',...(analysis||technicalOwned?{signal:analysisSignal}:{})});
+    if((core||planning||technicalOwned)&&(upstream.status>=300&&upstream.status<400||![null,'identity'].includes(upstream.headers.get('content-encoding')?.toLowerCase()??null))){await upstream.body?.cancel();return reject('SERVICE_UNAVAILABLE',503);}
     for (const cookie of upstream.headers.getSetCookie()) headers.append('Set-Cookie',cookie);
     for (const key of ['content-type','location']) {
       const value=upstream.headers.get(key);
       if (value) headers.set(key,value);
     }
-    if(analysis){
+    if(analysis||technicalOwned){
       const reader=upstream.body?.getReader();const chunks:Uint8Array[]=[];let size=0;
-      try{if(reader)while(true){const next=await boundedRead(reader,analysisSignal);if(next.done)break;size+=next.value.byteLength;if(size>(core?65536:planning?16384:fundamentalReports?2097152:32768)){await reader.cancel();return reject('RESULT_CONTRACT_INVALID',502);}chunks.push(next.value);}}
+      try{if(reader)while(true){const next=await boundedRead(reader,analysisSignal);if(next.done)break;size+=next.value.byteLength;if(size>(technicalOwned?(technicalDetail?4259840:65536):core?65536:planning?16384:fundamentalReports?2097152:32768)){await reader.cancel();return reject('RESULT_CONTRACT_INVALID',502);}chunks.push(next.value);}}
       finally{try{reader?.releaseLock();}catch{ /* cancelled read */ }}
       const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
       return new Response(upstream.status===204?null:bytes,{status:upstream.status,headers});
     }
     return new Response(upstream.status===204 ? null : upstream.body,{status:upstream.status,headers});
   } catch {
-    if(guarded)return reject((core||planning)&&analysisSignal?.aborted?'DEADLINE_EXCEEDED':'SERVICE_UNAVAILABLE',(core||planning)&&analysisSignal?.aborted?504:503);
+    if(guarded)return reject((core||planning||technicalOwned)&&analysisSignal?.aborted?'DEADLINE_EXCEEDED':'SERVICE_UNAVAILABLE',(core||planning||technicalOwned)&&analysisSignal?.aborted?504:503);
     return Response.json({detail:{code:'SERVICE_UNAVAILABLE',message:'요청을 처리할 수 없습니다.'}},{status:503,headers});
   }
 }

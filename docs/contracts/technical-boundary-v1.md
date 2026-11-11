@@ -1,6 +1,6 @@
 # Technical boundary v1
 
-[공통 envelope](analysis-agent-envelope-v1.md)의 단일 비영속 적용이다. 공개 Technical route/BFF/UI·DB writer·owner lifecycle·사용 한도는 열지 않는다.
+[공통 envelope](analysis-agent-envelope-v1.md)의 CF021 비영속 적용을 기록한다. 아래 CF035는 별도 내부 저장을, CF036은 인증된 본인 저장 결과의 GET/BFF/화면 조회를 추가한다. Technical 실행·공개 save·Supervisor launch·사용 한도는 여전히 연결하지 않는다.
 
 ## Typed 입력과 단일 adapter
 
@@ -56,3 +56,57 @@ snapshot TEXT의 배열/숫자/원문은 유지한다. detached preview의 chart
 실행/비용 영수증이 아니다. execution_mode synthetic/cutoff unverified 한계를 유지한다.
 
 공개 Technical 실행·HTTP/BFF/UI·Supervisor launch·사용 한도·실제 모델·삭제/follow-up 연결은 이번 범위가 아니다.
+
+
+## CF-036 본인 저장 목록과 차트 조회
+
+채팅의 ‘저장된 차트 결과 보기 · 조회 전용’ native link는 `/reports/technical`로 연결한다. 목록의 상세 링크는
+기존 `/reports/technical/{report_id}` URL을 사용한다. 두 page는 force-dynamic/revalidate 0이며 기존 AppShell과
+owned read client를 조합한다. legacy GET/trace/follow-up과 모든 KIS 수치 검증 주장은 상세에서 제거한다.
+실행되지 않은 Technical 분석을 Supervisor Outcome으로 표시하거나 합성 결과를 실제 자료로 표현하지 않는다.
+
+Backend의 새 GET은 `/api/technical/owned-reports`와 정확 canonical UUID 상세 하나뿐이다. configured auth와
+실제 `request_principal(mutation=False)` 및 CF035의 fresh Principal/session 검증을 사용한다. 목록 query는 선택적
+ASCII 6자리 stock_code, limit 기본 10·범위 1..20, offset 기본 0·범위 0..10000으로 닫는다. 중복·알 수 없는 key와
+상세 query·추가 segment·비허용 method는 거절한다. 전체 Backend read는 dependency 정리를 포함해 15초로 제한한다.
+기존 `/api/technical/reports`·save/analyze·DELETE·trace/follow-up·직접 AI proxy는 계속 닫혀 있다.
+
+목록 SQL은 CF035와 같은 root/snapshot owner 및 전체 Technical index 정확 한 개·같은 owner 조건을 적용한다.
+created_at DESC/report_id DESC의 고정 순서로 limit+1을 선택하고 선택된 모든 행을 기존 read로 다시 검증한다.
+검증 실패 행을 조용히 건너뛰지 않는다. 카드에는 report_id, stock, created_at, requested_as_of,
+execution_mode=`synthetic`, cutoff_validation=`unverified`만 반환하며 원질문·owner/session·실행 ID를 담지 않는다.
+목록이 비어 있는 상태와 schema가 준비되지 않은 오류를 구분한다.
+
+wire는 `schema_version=technical.owned-read.v1`, transport request_id, 상호 배타적인 data/error를 사용한다.
+목록 data는 items/limit/offset/has_more다. 상세 data는 report_id/created_at/request_json/request_sha256/
+result_json/result_sha256이다. request TEXT와 SHA는 검증된 별도 B 입력에서, result TEXT와 SHA는 별도 저장 결과에서
+전달한다. result.request_snapshot을 independent expected로 사용하지 않는다. URL·outer ID·B report ID를 각각 대조한다.
+기존 canonical TEXT를 JSONB나 validator의 재직렬화로 대체하지 않는다.
+
+모든 성공/실패에 private/no-store와 Vary Cookie, Origin을 적용한다. 오류는 원문 없는 고정 code/message이며
+401 AUTH_REQUIRED, 403 AUTH_REQUEST_INVALID/FEATURE_UNAVAILABLE, 404 RESOURCE_NOT_FOUND, 422 INPUT_INVALID,
+502 RESULT_CONTRACT_INVALID, 503 SERVICE_UNAVAILABLE, 504 DEADLINE_EXCEEDED로 구분한다. 타인·legacy NULL·부재와
+SQL eligibility 탈락은 같은 404다. UTF-8 serializer를 유지하고 목록 decoded cap은 65,536 bytes,
+상세는 4,259,840 bytes다. 이 상세 한도는 B 입력 16 KiB와 결과 2 MiB TEXT의 string escaping 여유를 포함하며
+저장본을 잘라서 반환하지 않는다.
+
+same-origin BFF는 `/api/private/technical/owned-reports`와 정확 상세 GET만 고정 Backend 경로로 전달한다.
+Cookie/Origin·local Host·중복 Cookie·spoofed 인증 헤더 제거, identity/no redirect/no-store를 유지하고 새 GET의
+fetch와 decoded streaming을 합쳐 진입부터 20초의 비갱신 기한과 동일 wire 한도를 적용한다. 다른 Flow·준비·확인·
+인증 기한이나 응답 한도는 바꾸지 않는다.
+
+Frontend는 원 request/result TEXT의 UTF-8 SHA를 그대로 검사한 뒤 JSON.parse와 기존 CF031 unknown decoder에
+전달한다. Python canonical JSON을 JS JSON.stringify로 다시 만들어 hash하지 않는다. 기존 decoder가 표시할 수 없는
+unsafe integer 등을 거절하면 고정 표시 오류로 닫으며 원 DB TEXT를 반올림하지 않는다. 검증된 preview는 기존
+TechnicalBoundaryPreview에 전달하고 합성·cutoff 미검증·생성/발행 시각 미보고·빈/미제공 상태를 유지한다.
+
+조회는 전 session 확인 15초, BFF 20초, 후 session 확인 15초와 검증 여유를 포함한 전체 55초의 비갱신 동작이다.
+중복 클릭은 동기 잠금과 pending으로 막고 settlement 뒤 명시 GET 재시도만 제공한다. session/owner 변경·401·
+선택/URL 변경·hide/pagehide/back·unmount에서는 내용을 숨기고 이전 세대 응답 및 hash await 후 채택을 막는다.
+reportId로 구분한 읽기 session과 기존 chart binding key가 첫 render의 옛 차트 노출과 새 보고서의 기간/brush/toggle
+잔류를 차단한다. 동일 binding의 단순 rerender는 chart를 다시 mount하지 않는다. owner·원문·결과를 storage에 복제하지 않는다.
+
+[집중 검사와 실제 화면 기록](../work/CF-036-technical-owned-read.md)은 단위/BFF 함수, 실제 소유 PG와 인증 ASGI,
+합성 HTTP의 mounted React/Recharts를 각각 구분한다. 이 연결은 실제 Google 로그인부터 PG/BFF/화면까지 이어진
+전체 E2E 또는 실제 engine/KIS 품질 검증이 아니다. 후속 실행에는 authenticated/lazy engine, sync/SDK budget,
+전용 owned execution profile·durable lifecycle/멱등·Technical usage 검증이 별도로 필요하다.

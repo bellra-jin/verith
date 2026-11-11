@@ -72,7 +72,7 @@ async def get_report(session: AsyncSession, report_id: UUID) -> TechnicalReport 
     return await session.get(TechnicalReport, report_id)
 
 
-def owned_statement(report_id, owner_user_id):
+def owned_selection(owner_user_id):
     """Filter root and snapshot owners and ALL Technical indexes before loading."""
     indexes = (select(AgentReport.agent_report_id)
         .where(AgentReport.agent_type == 'technical')
@@ -81,9 +81,23 @@ def owned_statement(report_id, owner_user_id):
                 func.count().filter(AgentReport.owner_user_id == owner_user_id) == 1))
     return (select(TechnicalReport, TechnicalReportSnapshot)
         .join(TechnicalReportSnapshot, TechnicalReportSnapshot.report_id == TechnicalReport.id)
-        .where(TechnicalReport.id == report_id, TechnicalReport.owner_user_id == owner_user_id,
+        .where(TechnicalReport.owner_user_id == owner_user_id,
                TechnicalReportSnapshot.owner_user_id == owner_user_id, TechnicalReport.id.in_(indexes))
         .execution_options(populate_existing=True))
+
+
+def owned_statement(report_id, owner_user_id):
+    return owned_selection(owner_user_id).where(TechnicalReport.id == report_id)
+
+
+def owned_ids_statement(owner_user_id, *, stock_code=None, limit=10, offset=0):
+    statement = owned_selection(owner_user_id).with_only_columns(TechnicalReport.id)
+    if stock_code is not None: statement = statement.where(TechnicalReport.stock_code == stock_code)
+    return statement.order_by(TechnicalReport.created_at.desc(), TechnicalReport.id.desc()).limit(limit+1).offset(offset)
+
+
+async def owned_ids(session, owner_user_id, **query):
+    return list(await session.scalars(owned_ids_statement(owner_user_id, **query)))
 
 
 async def get_owned_storage(session, report_id, owner_user_id):

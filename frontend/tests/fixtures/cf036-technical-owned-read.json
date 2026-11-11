@@ -1,0 +1,85 @@
+{
+  "schema": "cf036.synthetic-fixture.v1",
+  "list": {
+    "schema_version": "technical.owned-read.v1",
+    "request_id": "30000000-0000-4000-8000-000000000001",
+    "data": {
+      "items": [
+        {
+          "report_id": "00000000-0000-4000-8000-000000000006",
+          "stock": {
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "market": "KOSPI"
+          },
+          "created_at": "2026-11-11T00:00:00+00:00",
+          "requested_as_of": "2026-11-09T00:00:00+00:00",
+          "execution_mode": "synthetic",
+          "cutoff_validation": "unverified"
+        },
+        {
+          "report_id": "00000000-0000-4000-8000-000000000016",
+          "stock": {
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "market": "KOSPI"
+          },
+          "created_at": "2026-11-11T00:00:00+00:00",
+          "requested_as_of": "2026-11-09T00:00:00+00:00",
+          "execution_mode": "synthetic",
+          "cutoff_validation": "unverified"
+        }
+      ],
+      "limit": 10,
+      "offset": 0,
+      "has_more": false
+    },
+    "error": null
+  },
+  "detail": {
+    "schema_version": "technical.owned-read.v1",
+    "request_id": "30000000-0000-4000-8000-000000000001",
+    "data": {
+      "report_id": "00000000-0000-4000-8000-000000000006",
+      "created_at": "2026-11-11T00:00:00+00:00",
+      "request_json": "{\"data\":{\"conditions\":{\"periods\":[\"3m\",\"1y\",\"5y\"],\"profile\":\"technical.multiframe.v1\"},\"context\":{\"admission_request_id\":\"00000000-0000-4000-8000-000000000004\",\"analysis_id\":\"00000000-0000-4000-8000-000000000003\",\"attempt_id\":\"00000000-0000-4000-8000-000000000005\",\"input_fingerprint\":\"686afe4cdb3fff08bce2219ec49c4c29586a4f4b67748c65bd36c75ac64b1bf9\",\"report_id\":\"00000000-0000-4000-8000-000000000006\"},\"operation\":\"technical.boundary.v1\",\"original_query\":\"  삼성전자 이동평균과 RSI 차트 분석  \",\"requested_as_of\":\"2026-11-09T00:00:00+00:00\",\"requested_views\":[\"technical\"],\"stock\":{\"market\":\"KOSPI\",\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\"}},\"error\":null,\"request_id\":\"00000000-0000-4000-8000-000000000001\",\"schema_version\":\"analysis.agent.v1\",\"trace_id\":\"00000000-0000-4000-8000-000000000002\"}",
+      "request_sha256": "f4ff2e500737054aca9a76604858ea6ab99054425e3eadfcea8b52dc5b9d2109",
+      "result_json": "{\"data\":{\"boundary_observed_at\":\"2026-11-09T00:00:01+00:00\",\"coverage\":{\"available_periods\":[\"3m\",\"5y\"],\"cutoff_validation\":\"unverified\",\"engine_generated_at\":null,\"periods\":[{\"candle_unit\":\"D\",\"count\":2,\"end\":\"2026-11-06\",\"period\":\"3m\",\"start\":\"2026-11-05\",\"status\":\"available\"},{\"candle_unit\":\"D\",\"count\":0,\"end\":null,\"period\":\"1y\",\"start\":null,\"status\":\"empty\"},{\"candle_unit\":\"W\",\"count\":1,\"end\":\"2026-11-02\",\"period\":\"5y\",\"start\":\"2026-11-02\",\"status\":\"available\"}],\"requested_periods\":[\"3m\",\"1y\",\"5y\"],\"source_published_at\":null,\"unreported_reason\":\"engine_does_not_report\"},\"execution_mode\":\"synthetic\",\"request_sha256\":\"f4ff2e500737054aca9a76604858ea6ab99054425e3eadfcea8b52dc5b9d2109\",\"request_snapshot\":{\"conditions\":{\"periods\":[\"3m\",\"1y\",\"5y\"],\"profile\":\"technical.multiframe.v1\"},\"context\":{\"admission_request_id\":\"00000000-0000-4000-8000-000000000004\",\"analysis_id\":\"00000000-0000-4000-8000-000000000003\",\"attempt_id\":\"00000000-0000-4000-8000-000000000005\",\"input_fingerprint\":\"686afe4cdb3fff08bce2219ec49c4c29586a4f4b67748c65bd36c75ac64b1bf9\",\"report_id\":\"00000000-0000-4000-8000-000000000006\"},\"operation\":\"technical.boundary.v1\",\"original_query\":\"  삼성전자 이동평균과 RSI 차트 분석  \",\"requested_as_of\":\"2026-11-09T00:00:00+00:00\",\"requested_views\":[\"technical\"],\"stock\":{\"market\":\"KOSPI\",\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\"}},\"result\":{\"as_of\":\"2026-11-09T00:00:00+00:00\",\"charts\":[{\"chart_data\":{\"annotations\":[{\"date\":\"2026-11-06\",\"id\":\"price\",\"importance\":\"medium\",\"kind\":\"golden_cross\",\"label\":\"합성 교차\",\"meta\":{\"original\":0},\"price\":102,\"source\":\"code\"},{\"date\":\"2026-11-06\",\"id\":\"level\",\"importance\":\"high\",\"kind\":\"support_touch\",\"label\":\"합성 지지\",\"meta\":{},\"price\":99,\"source\":\"code\"},{\"date\":\"2026-11-06\",\"id\":\"rsi\",\"importance\":\"low\",\"kind\":\"rsi_oversold\",\"label\":\"합성 RSI\",\"meta\":{\"rsi\":0},\"price\":null,\"source\":\"code\"}],\"candle_unit\":\"D\",\"candles\":[{\"close\":102,\"date\":\"2026-11-05\",\"high\":105,\"low\":99,\"open\":100,\"trading_value\":0,\"volume\":0},{\"close\":102,\"date\":\"2026-11-06\",\"high\":105,\"low\":99,\"open\":100,\"trading_value\":0,\"volume\":0}],\"overlays\":{\"moving_average\":[{\"points\":[{\"date\":\"2026-11-06\",\"value\":0}],\"window\":5}],\"support_resistance\":[]},\"subcharts\":{\"rsi\":{\"overbought\":70,\"oversold\":30,\"period\":14,\"points\":[{\"date\":\"2026-11-06\",\"value\":0}]},\"volume\":{\"avg_window\":20,\"bars\":[{\"avg_volume\":null,\"date\":\"2026-11-06\",\"is_spike\":false,\"volume\":0}]}}},\"period\":\"3m\"},{\"chart_data\":{\"annotations\":[],\"candle_unit\":\"D\",\"candles\":[],\"overlays\":{\"moving_average\":[],\"support_resistance\":[]},\"subcharts\":{\"rsi\":{\"overbought\":70,\"oversold\":30,\"period\":14,\"points\":[]},\"volume\":{\"avg_window\":20,\"bars\":[]}}},\"period\":\"1y\"},{\"chart_data\":{\"annotations\":[{\"date\":\"2026-11-02\",\"id\":\"price\",\"importance\":\"medium\",\"kind\":\"golden_cross\",\"label\":\"합성 교차\",\"meta\":{\"original\":0},\"price\":102,\"source\":\"code\"},{\"date\":\"2026-11-02\",\"id\":\"level\",\"importance\":\"high\",\"kind\":\"support_touch\",\"label\":\"합성 지지\",\"meta\":{},\"price\":99,\"source\":\"code\"},{\"date\":\"2026-11-02\",\"id\":\"rsi\",\"importance\":\"low\",\"kind\":\"rsi_oversold\",\"label\":\"합성 RSI\",\"meta\":{\"rsi\":0},\"price\":null,\"source\":\"code\"}],\"candle_unit\":\"W\",\"candles\":[{\"close\":102,\"date\":\"2026-11-02\",\"high\":105,\"low\":99,\"open\":100,\"trading_value\":0,\"volume\":0}],\"overlays\":{\"moving_average\":[{\"points\":[{\"date\":\"2026-11-02\",\"value\":0}],\"window\":5}],\"support_resistance\":[]},\"subcharts\":{\"rsi\":{\"overbought\":70,\"oversold\":30,\"period\":14,\"points\":[{\"date\":\"2026-11-02\",\"value\":0}]},\"volume\":{\"avg_window\":20,\"bars\":[{\"avg_volume\":null,\"date\":\"2026-11-02\",\"is_spike\":false,\"volume\":0}]}}},\"period\":\"5y\"}],\"data_status\":\"data_limited\",\"interpretation\":{\"source\":\"template_fallback\",\"text\":\"합성 주입 결과\"},\"regime\":{\"alignment_flag\":\"neutral\",\"daily_regime\":\"unavailable\",\"final_regime\":\"unavailable\",\"monthly_trend\":\"unavailable\",\"regime_context\":\"합성 경계 자료\",\"weekly_trend\":\"unavailable\"},\"request_id\":\"00000000-0000-4000-8000-000000000001\",\"resolved_stock_name\":\"엔진 표시 보조값\",\"risk\":null,\"signal\":{\"confidence\":0,\"confidence_basis\":\"합성\",\"confidence_level\":\"low\",\"consensus\":\"neutral\",\"signal_score\":0},\"source\":\"KIS\",\"technical_signals\":[{\"detail\":\"합성\",\"detail_source\":\"template_fallback\",\"indicator\":\"rsi\",\"metrics\":[],\"signal\":\"neutral\",\"value\":null,\"weight\":0}],\"ticker\":\"005930\",\"trace_id\":\"00000000-0000-4000-8000-000000000002\",\"verification\":{\"calc_passed\":true,\"label_matched\":true,\"outcome\":\"template_fallback\",\"regen_count\":0,\"regime_passed\":true}}},\"error\":null,\"request_id\":\"00000000-0000-4000-8000-000000000001\",\"schema_version\":\"analysis.agent.v1\",\"trace_id\":\"00000000-0000-4000-8000-000000000002\"}",
+      "result_sha256": "a0752ce67781feb97f6f906d01fd95fabdd7a061e35e82d1f54e4ef47b909d71"
+    },
+    "error": null
+  },
+  "second_detail": {
+    "schema_version": "technical.owned-read.v1",
+    "request_id": "30000000-0000-4000-8000-000000000001",
+    "data": {
+      "report_id": "00000000-0000-4000-8000-000000000016",
+      "created_at": "2026-11-11T00:00:00+00:00",
+      "request_json": "{\"data\":{\"conditions\":{\"periods\":[\"3m\",\"1y\",\"5y\"],\"profile\":\"technical.multiframe.v1\"},\"context\":{\"admission_request_id\":\"00000000-0000-4000-8000-000000000004\",\"analysis_id\":\"00000000-0000-4000-8000-000000000003\",\"attempt_id\":\"00000000-0000-4000-8000-000000000005\",\"input_fingerprint\":\"686afe4cdb3fff08bce2219ec49c4c29586a4f4b67748c65bd36c75ac64b1bf9\",\"report_id\":\"00000000-0000-4000-8000-000000000016\"},\"operation\":\"technical.boundary.v1\",\"original_query\":\"  삼성전자 이동평균과 RSI 차트 분석  \",\"requested_as_of\":\"2026-11-09T00:00:00+00:00\",\"requested_views\":[\"technical\"],\"stock\":{\"market\":\"KOSPI\",\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\"}},\"error\":null,\"request_id\":\"00000000-0000-4000-8000-000000000011\",\"schema_version\":\"analysis.agent.v1\",\"trace_id\":\"00000000-0000-4000-8000-000000000002\"}",
+      "request_sha256": "a294b748109e923404f17e910c1288996d3608e0252fcd10f5d90efb5b2a14c4",
+      "result_json": "{\"data\":{\"boundary_observed_at\":\"2026-11-09T00:00:01+00:00\",\"coverage\":{\"available_periods\":[\"3m\",\"5y\"],\"cutoff_validation\":\"unverified\",\"engine_generated_at\":null,\"periods\":[{\"candle_unit\":\"D\",\"count\":2,\"end\":\"2026-11-06\",\"period\":\"3m\",\"start\":\"2026-11-05\",\"status\":\"available\"},{\"candle_unit\":\"D\",\"count\":0,\"end\":null,\"period\":\"1y\",\"start\":null,\"status\":\"empty\"},{\"candle_unit\":\"W\",\"count\":1,\"end\":\"2026-11-02\",\"period\":\"5y\",\"start\":\"2026-11-02\",\"status\":\"available\"}],\"requested_periods\":[\"3m\",\"1y\",\"5y\"],\"source_published_at\":null,\"unreported_reason\":\"engine_does_not_report\"},\"execution_mode\":\"synthetic\",\"request_sha256\":\"a294b748109e923404f17e910c1288996d3608e0252fcd10f5d90efb5b2a14c4\",\"request_snapshot\":{\"conditions\":{\"periods\":[\"3m\",\"1y\",\"5y\"],\"profile\":\"technical.multiframe.v1\"},\"context\":{\"admission_request_id\":\"00000000-0000-4000-8000-000000000004\",\"analysis_id\":\"00000000-0000-4000-8000-000000000003\",\"attempt_id\":\"00000000-0000-4000-8000-000000000005\",\"input_fingerprint\":\"686afe4cdb3fff08bce2219ec49c4c29586a4f4b67748c65bd36c75ac64b1bf9\",\"report_id\":\"00000000-0000-4000-8000-000000000016\"},\"operation\":\"technical.boundary.v1\",\"original_query\":\"  삼성전자 이동평균과 RSI 차트 분석  \",\"requested_as_of\":\"2026-11-09T00:00:00+00:00\",\"requested_views\":[\"technical\"],\"stock\":{\"market\":\"KOSPI\",\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\"}},\"result\":{\"as_of\":\"2026-11-09T00:00:00+00:00\",\"charts\":[{\"chart_data\":{\"annotations\":[{\"date\":\"2026-11-06\",\"id\":\"price\",\"importance\":\"medium\",\"kind\":\"golden_cross\",\"label\":\"합성 교차\",\"meta\":{\"original\":0},\"price\":102,\"source\":\"code\"},{\"date\":\"2026-11-06\",\"id\":\"level\",\"importance\":\"high\",\"kind\":\"support_touch\",\"label\":\"합성 지지\",\"meta\":{},\"price\":99,\"source\":\"code\"},{\"date\":\"2026-11-06\",\"id\":\"rsi\",\"importance\":\"low\",\"kind\":\"rsi_oversold\",\"label\":\"합성 RSI\",\"meta\":{\"rsi\":0},\"price\":null,\"source\":\"code\"}],\"candle_unit\":\"D\",\"candles\":[{\"close\":102,\"date\":\"2026-11-05\",\"high\":105,\"low\":99,\"open\":100,\"trading_value\":0,\"volume\":0},{\"close\":102,\"date\":\"2026-11-06\",\"high\":105,\"low\":99,\"open\":100,\"trading_value\":0,\"volume\":0}],\"overlays\":{\"moving_average\":[{\"points\":[{\"date\":\"2026-11-06\",\"value\":0}],\"window\":5}],\"support_resistance\":[]},\"subcharts\":{\"rsi\":{\"overbought\":70,\"oversold\":30,\"period\":14,\"points\":[{\"date\":\"2026-11-06\",\"value\":0}]},\"volume\":{\"avg_window\":20,\"bars\":[{\"avg_volume\":null,\"date\":\"2026-11-06\",\"is_spike\":false,\"volume\":0}]}}},\"period\":\"3m\"},{\"chart_data\":{\"annotations\":[],\"candle_unit\":\"D\",\"candles\":[],\"overlays\":{\"moving_average\":[],\"support_resistance\":[]},\"subcharts\":{\"rsi\":{\"overbought\":70,\"oversold\":30,\"period\":14,\"points\":[]},\"volume\":{\"avg_window\":20,\"bars\":[]}}},\"period\":\"1y\"},{\"chart_data\":{\"annotations\":[{\"date\":\"2026-11-02\",\"id\":\"price\",\"importance\":\"medium\",\"kind\":\"golden_cross\",\"label\":\"합성 교차\",\"meta\":{\"original\":0},\"price\":102,\"source\":\"code\"},{\"date\":\"2026-11-02\",\"id\":\"level\",\"importance\":\"high\",\"kind\":\"support_touch\",\"label\":\"합성 지지\",\"meta\":{},\"price\":99,\"source\":\"code\"},{\"date\":\"2026-11-02\",\"id\":\"rsi\",\"importance\":\"low\",\"kind\":\"rsi_oversold\",\"label\":\"합성 RSI\",\"meta\":{\"rsi\":0},\"price\":null,\"source\":\"code\"}],\"candle_unit\":\"W\",\"candles\":[{\"close\":102,\"date\":\"2026-11-02\",\"high\":105,\"low\":99,\"open\":100,\"trading_value\":0,\"volume\":0}],\"overlays\":{\"moving_average\":[{\"points\":[{\"date\":\"2026-11-02\",\"value\":0}],\"window\":5}],\"support_resistance\":[]},\"subcharts\":{\"rsi\":{\"overbought\":70,\"oversold\":30,\"period\":14,\"points\":[{\"date\":\"2026-11-02\",\"value\":0}]},\"volume\":{\"avg_window\":20,\"bars\":[{\"avg_volume\":null,\"date\":\"2026-11-02\",\"is_spike\":false,\"volume\":0}]}}},\"period\":\"5y\"}],\"data_status\":\"data_limited\",\"interpretation\":{\"source\":\"template_fallback\",\"text\":\"합성 주입 결과\"},\"regime\":{\"alignment_flag\":\"neutral\",\"daily_regime\":\"unavailable\",\"final_regime\":\"unavailable\",\"monthly_trend\":\"unavailable\",\"regime_context\":\"합성 경계 자료\",\"weekly_trend\":\"unavailable\"},\"request_id\":\"00000000-0000-4000-8000-000000000011\",\"resolved_stock_name\":\"엔진 표시 보조값\",\"risk\":null,\"signal\":{\"confidence\":0,\"confidence_basis\":\"합성\",\"confidence_level\":\"low\",\"consensus\":\"neutral\",\"signal_score\":0},\"source\":\"KIS\",\"technical_signals\":[{\"detail\":\"합성\",\"detail_source\":\"template_fallback\",\"indicator\":\"rsi\",\"metrics\":[],\"signal\":\"neutral\",\"value\":null,\"weight\":0}],\"ticker\":\"005930\",\"trace_id\":\"00000000-0000-4000-8000-000000000002\",\"verification\":{\"calc_passed\":true,\"label_matched\":true,\"outcome\":\"template_fallback\",\"regen_count\":0,\"regime_passed\":true}}},\"error\":null,\"request_id\":\"00000000-0000-4000-8000-000000000011\",\"schema_version\":\"analysis.agent.v1\",\"trace_id\":\"00000000-0000-4000-8000-000000000002\"}",
+      "result_sha256": "de9e012b9e234f94a5af174bcf4311a3f07892629367a5bc33489e0fbe9cada1"
+    },
+    "error": null
+  },
+  "empty": {
+    "schema_version": "technical.owned-read.v1",
+    "request_id": "30000000-0000-4000-8000-000000000001",
+    "data": {
+      "items": [],
+      "limit": 10,
+      "offset": 0,
+      "has_more": false
+    },
+    "error": null
+  },
+  "error": {
+    "schema_version": "technical.owned-read.v1",
+    "request_id": "30000000-0000-4000-8000-000000000001",
+    "data": null,
+    "error": {
+      "code": "RESOURCE_NOT_FOUND",
+      "message": "Technical result unavailable"
+    }
+  }
+}

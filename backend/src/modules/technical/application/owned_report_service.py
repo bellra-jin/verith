@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
+import re
 
 from sqlalchemy import func, select
 from db.models.common.agent_report import AgentReport
@@ -42,6 +43,7 @@ class TechnicalStoredReport:
     frozen: FrozenAnalysisResult
     preview: dict
     coverage: dict
+    created_at: datetime
 
 
 def canonical_text(value, limit):
@@ -155,7 +157,7 @@ def restore_snapshot(snapshot):
                                                 'input_sha256','result_sha256','binding_sha256')})
     _, response, preview = checked(binding, frozen)
     if snapshot.owner_user_id != caller.owner_user_id: raise TechnicalStorageInputError()
-    return binding, TechnicalStoredReport(frozen,preview,response['data']['coverage'])
+    return binding, TechnicalStoredReport(frozen,preview,response['data']['coverage'],snapshot.created_at)
 
 
 def check_projection(actual, expected, *, generated_id=False):
@@ -225,3 +227,27 @@ class TechnicalOwnedReportService:
                 return result
             except (ValueError, TypeError, AttributeError, KeyError, UnicodeError, RecursionError):
                 raise TechnicalStoredPayloadError() from None
+
+    async def list_owned(self, *, stock_code=None, limit=10, offset=0):
+        if (type(limit) is not int or not 1 <= limit <= 20 or type(offset) is not int or not 0 <= offset <= 10000
+                or stock_code is not None and (type(stock_code) is not str or not re.fullmatch('[0-9]{6}',stock_code))):
+            raise TechnicalStorageInputError()
+        with self.session.no_autoflush:
+            principal = await self._authorize()
+            ids = await repo.owned_ids(self.session,principal.user_id,stock_code=stock_code,limit=limit,offset=offset)
+            items = []
+            for report_id in ids:
+                result = await self.read(report_id)
+                if result is None: raise TechnicalStoredPayloadError()
+                items.append(dict(report_id=str(report_id),stock=result.preview['stock'],
+                    created_at=result.created_at.isoformat(),requested_as_of=result.frozen.context.as_of.isoformat(),
+                    execution_mode='synthetic',cutoff_validation='unverified'))
+            return dict(items=items[:limit],limit=limit,offset=offset,has_more=len(items)>limit)
+
+    async def read_projection(self, report_id):
+        result = await self.read(report_id)
+        if result is None: return None
+        # Independent expected B is the validated stored input TEXT, never result.request_snapshot.
+        return dict(report_id=str(result.frozen.report_id),created_at=result.created_at.isoformat(),
+            request_json=result.frozen.input_json,request_sha256=result.frozen.input_sha256,
+            result_json=result.frozen.result_json,result_sha256=result.frozen.result_sha256)

@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import os
 import re
+import sys
+import threading
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from dotenv import load_dotenv
 
 # 종목코드 형식(6자리 숫자). 입력 계약(TechnicalAgentInput) validator 와 동일 규칙을 지원 정책 함수에도
 # 둔다 — kis_client 등 **계약 밖 경계**에서도 형식 방어가 되도록(경계 방어를 단일 정책 함수에 모은다).
@@ -122,6 +122,15 @@ def _find_env_file() -> Path | None:
     return None
 
 
+def _load_env_file() -> Path | None:
+    """Explicit callers only; preserve process-env precedence and file lookup."""
+    env_path = _find_env_file()
+    if env_path is not None:
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=False)
+    return env_path
+
+
 def load_kis_settings() -> KISSettings:
     """.env(또는 환경변수)에서 KIS 인증정보를 읽어 KISSettings로 반환한다.
 
@@ -129,10 +138,7 @@ def load_kis_settings() -> KISSettings:
       어떤 키가 빠졌는지 명시하며 즉시 실패한다(fail-fast).
     - 구/타 프로젝트 키(KIS_APP_KEY/KIS_APP_SECRET)가 남아 있으면 혼동 방지 경고를 낸다.
     """
-    env_path = _find_env_file()
-    if env_path is not None:
-        # 이미 설정된 실제 환경변수는 .env보다 우선(override=False).
-        load_dotenv(env_path, override=False)
+    env_path = _load_env_file()
 
     # 공식 미지원 키가 남아 있으면 경고 (fail은 아님).
     leftover = [k for k in UNSUPPORTED_ENV_KEYS if os.getenv(k)]
@@ -357,17 +363,14 @@ def _env_bool(name: str, *, default: bool = False) -> bool:
     if value in _ENV_BOOL_FALSE:
         return False
     warnings.warn(
-        f"[config] {name}={raw!r} 는 인식할 수 없는 bool 값입니다 — 운영 안전을 위해 False로 처리합니다.",
+        f"[config] {name} 은 인식할 수 없는 bool 설정입니다 — 운영 안전을 위해 False로 처리합니다.",
         stacklevel=2,
     )
     return False
 
 
-# .env(있으면)를 로드해 override를 반영한다(override=False — 실제 환경변수 우선). 기본은 반드시 False.
-_intraday_env_file = _find_env_file()
-if _intraday_env_file is not None:
-    load_dotenv(_intraday_env_file, override=False)
-INTRADAY_FETCH_ENABLED: bool = _env_bool("INTRADAY_FETCH_ENABLED", default=False)
+# Import is inert. Explicit setup publishes these defaults or one runtime snapshot.
+INTRADAY_FETCH_ENABLED: bool = False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7.3-b Trace sink 결선 (관측). §7.3의 "운영 결선은 AI endpoint 브랜치에서 한다"의 실제 결선.
@@ -375,9 +378,73 @@ INTRADAY_FETCH_ENABLED: bool = _env_bool("INTRADAY_FETCH_ENABLED", default=False
 #     trace_logger가 secret-scrub + 원본 query hash-only(§10·§13)라 파일로 남겨도 PII 안전.
 #     기본 on(로컬 관측). 끄려면 `TECHNICAL_TRACE_ENABLED=off`. 경로는 `TECHNICAL_TRACE_PATH`로 override.
 # ─────────────────────────────────────────────────────────────────────────────
-TECHNICAL_TRACE_ENABLED: bool = _env_bool("TECHNICAL_TRACE_ENABLED", default=True)
+TECHNICAL_TRACE_ENABLED: bool = True
 _DEFAULT_TRACE_PATH = Path(__file__).resolve().parents[3] / "traces" / "technical_trace.jsonl"
-TECHNICAL_TRACE_PATH: str = os.getenv("TECHNICAL_TRACE_PATH") or str(_DEFAULT_TRACE_PATH)
+TECHNICAL_TRACE_PATH: str = str(_DEFAULT_TRACE_PATH)
+
+
+@dataclass(frozen=True)
+class RuntimeSettings:
+    intraday_fetch_enabled: bool
+    trace_enabled: bool
+    trace_path: str = field(repr=False)
+
+
+class TechnicalRuntimeUnavailable(RuntimeError):
+    def __init__(self):
+        super().__init__('Technical runtime unavailable')
+
+
+_runtime_lock = threading.RLock()
+_runtime_state = 'new'
+_runtime_settings: RuntimeSettings | None = None
+_runtime_readers = frozenset(
+    prefix + suffix
+    for prefix in ('src.agents.technical.', 'agents.technical.')
+    for suffix in ('application.orchestration.pipeline_steps',
+                   'application.orchestration.technical_graph',
+                   'application.orchestration.technical_supervisor', 'application.agent')
+)
+
+
+def _reject_late_runtime() -> None:
+    if any(name in sys.modules for name in _runtime_readers):
+        raise TechnicalRuntimeUnavailable()
+
+
+def initialize_runtime() -> RuntimeSettings:
+    """Publish one immutable flag/path snapshot before runtime imports.
+
+    Failure is latched. A process that loaded a default-state pipeline cannot be
+    repaired by reloading modules or patching their copied flags.
+    """
+    global _runtime_state, _runtime_settings
+    with _runtime_lock:
+        if _runtime_state == 'ready':
+            return _runtime_settings
+        if _runtime_state != 'new':
+            raise TechnicalRuntimeUnavailable()
+        _runtime_state = 'initializing'
+        try:
+            _reject_late_runtime()
+            _load_env_file()
+            settings = RuntimeSettings(
+                intraday_fetch_enabled=_env_bool('INTRADAY_FETCH_ENABLED', default=False),
+                trace_enabled=_env_bool('TECHNICAL_TRACE_ENABLED', default=True),
+                trace_path=os.getenv('TECHNICAL_TRACE_PATH') or str(_DEFAULT_TRACE_PATH),
+            )
+            if type(settings.trace_path) is not str:
+                raise TechnicalRuntimeUnavailable()
+            _reject_late_runtime()
+        except BaseException as error:
+            _runtime_state = 'failed'
+            if isinstance(error, Exception):
+                raise TechnicalRuntimeUnavailable() from None
+            raise
+        globals().update(INTRADAY_FETCH_ENABLED=settings.intraday_fetch_enabled,
+            TECHNICAL_TRACE_ENABLED=settings.trace_enabled, TECHNICAL_TRACE_PATH=settings.trace_path,
+            _runtime_settings=settings, _runtime_state='ready')
+        return settings
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 14. 1D intraday(Beta) 판단 상수 (config.md §12). intraday builder/synthesis/kis_client가 사용한다.
@@ -439,9 +506,7 @@ def load_openai_settings() -> OpenAiSettings:
     두지 않는다(중복 방지). 누락 시 어디에 무엇을 넣어야 하는지 명시하며 즉시 실패한다 —
     이 config error는 client 생성 시점 오류이며 LlmCallError(호출 실패)와 구분된다.
     반환값(키 문자열)은 로그·trace·repr 어디에도 남기지 않는다(dataclass repr에서 제외)."""
-    env_path = _find_env_file()
-    if env_path is not None:
-        load_dotenv(env_path, override=False)  # 실제 환경변수가 .env보다 우선
+    env_path = _load_env_file()
     api_key = (os.getenv(OPENAI_API_KEY_ENV) or "").strip()
     model = (os.getenv(OPENAI_MODEL_ENV) or "").strip()
     missing = [name for name, val in ((OPENAI_API_KEY_ENV, api_key), (OPENAI_MODEL_ENV, model)) if not val]

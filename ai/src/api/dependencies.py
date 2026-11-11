@@ -7,15 +7,14 @@ FastAPI `Depends`로 연결하며, 테스트는 `app.dependency_overrides`로 fa
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
-from src.agents.technical.config import TECHNICAL_TRACE_ENABLED, TECHNICAL_TRACE_PATH
-from src.agents.technical.infrastructure.llm.utils import LlmClient
-from src.agents.technical.infrastructure.observability.trace_logger import JsonlTraceSink, TraceSink
 from src.shared.runtime.deadline import Deadline
-from src.agents.technical.infrastructure.cache_service import OhlcvCache, default_cache
-from src.agents.technical.infrastructure.openai_llm_client import default_openai_client
-from src.agents.technical.application.orchestration.technical_supervisor import OhlcvFetcher
+if TYPE_CHECKING:
+    from src.agents.technical.infrastructure.llm.utils import LlmClient
+    from src.agents.technical.infrastructure.observability.trace_logger import TraceSink
+    from src.agents.technical.infrastructure.cache_service import OhlcvCache
+    from src.agents.technical.application.orchestration.technical_supervisor import OhlcvFetcher
 from src.shared.api.errors import ai_unavailable
 from src.supervisor.application.execution.adapters import AgentAdapter, default_adapters
 from src.supervisor.domain.planning.fallback_lookup import FallbackLookupProtocol
@@ -25,7 +24,17 @@ from src.supervisor.infrastructure.backend.resolve_client import ResolverProtoco
 
 # endpoint가 deadline을 만든 뒤 client를 생성해야 하므로(요청 timeout을 client에 주입) client를 바로
 # 반환하지 않고 **팩토리**를 반환한다. 테스트는 이 팩토리를 override해 fake LLM을 주입한다.
-LlmClientFactory = Callable[[Deadline | None], LlmClient]
+LlmClientFactory = Callable[[Deadline | None], 'LlmClient']
+# Preserve the existing explicit override point without importing its provider.
+default_openai_client: Callable | None = None
+
+
+def _setup_technical_runtime():
+    try:
+        from src.agents.technical.config import initialize_runtime
+        return initialize_runtime()
+    except RuntimeError:
+        raise ai_unavailable() from None
 
 
 def get_llm_client() -> LlmClientFactory:
@@ -34,6 +43,10 @@ def get_llm_client() -> LlmClientFactory:
     `default_openai_client(deadline=…)`가 `.env`에서 key/model을 읽고 누락 시 RuntimeError를 낸다.
     이를 `AI_UNAVAILABLE(502)`로 바꾸되 **원문 메시지는 노출하지 않는다**(`from None`으로 chain 차단).
     deadline을 client에 넘겨 per-call timeout을 남은 예산 이하로 줄인다."""
+    _setup_technical_runtime()
+    global default_openai_client
+    if default_openai_client is None:
+        from src.agents.technical.infrastructure.openai_llm_client import default_openai_client
     def make(deadline: Deadline | None = None) -> LlmClient:
         try:
             return default_openai_client(deadline=deadline)
@@ -46,11 +59,14 @@ def get_fetcher() -> OhlcvFetcher | None:
     """KIS OHLCV fetcher. 기본 None = supervisor 기본 KIS fetcher 사용.
 
     테스트는 이 의존성을 override해 fake fetcher를 주입한다(실 KIS 호출 방지)."""
+    _setup_technical_runtime()
     return None
 
 
 def get_cache() -> OhlcvCache | None:
     """Redis OHLCV 캐시. `REDIS_URL` 미설정/연결 실패면 None(캐시 비활성) — endpoint 실패 아님."""
+    _setup_technical_runtime()
+    from src.agents.technical.infrastructure.cache_service import default_cache
     return default_cache()
 
 
@@ -60,9 +76,11 @@ def get_trace_sink() -> TraceSink | None:
     `trace.node()`가 이미 duration을 측정하므로 sink만 주면 파일에 쌓인다. trace_logger가
     secret-scrub + 원본 query hash-only(§10·§13)라 PII 안전. `TECHNICAL_TRACE_ENABLED=off`면
     None(=supervisor Noop). 경로는 `TECHNICAL_TRACE_PATH`. 테스트는 InMemoryTraceSink로 override한다."""
-    if not TECHNICAL_TRACE_ENABLED:
+    settings = _setup_technical_runtime()
+    if not settings.trace_enabled:
         return None
-    return JsonlTraceSink(TECHNICAL_TRACE_PATH)
+    from src.agents.technical.infrastructure.observability.trace_logger import JsonlTraceSink
+    return JsonlTraceSink(settings.trace_path)
 
 
 def get_resolver() -> ResolverProtocol:

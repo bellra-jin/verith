@@ -472,3 +472,24 @@ rollback/unknown·session context 정리도 그대로다. timeout은 미사용 �
 이번 absolute deadline은 Backend route→PreparationService.post의 내부 전달이다. exchange/build의 기존 AI wire에는
 이 monotonic 값이 포함되지 않고 production phase provider도 없다. Backend의 바깥 취소가 실제 외부 provider
 작업 중단이나 과금0을 보장하지 않으며, 그 연결은 production 조립의 미완료 선행조건으로 남는다.
+
+
+## CF043 · AI start/continue 직전의 fresh 준비 검사
+
+새 준비 winner만 첫 await 전에 strict canonical request/draft/spec와 현재 Principal을 분리해 고정한다.
+서버 생성 id/attempt/owner/optional epoch·root/parent/depth·TTL과 기존 ancestor primitive projection은 admission
+commit 전에 요청 수명의 frozen binding으로 결합한다. 원문·token·Principal은 repr/log나 새 영속 기록에 남기지 않는다.
+
+실제 post→build→exchange의 start/continue 각각 전에 기존 validate_principal(lock=True)와 owner-bound
+repo.lineage/closure/clock을 재사용한다. fresh pending leaf 및 ancestor identity, 현재 요청의 독립 spec/draft/epoch,
+기존 frame/plan·candidate binding을 대조한다. child의 NULL 원문은 유지하며 pending child를 완성 plan처럼 assembled하지 않는다.
+
+검사 commit ACK로 SQL 잠금을 끝낸 뒤 HTTP를 보낸다. DB clock 직전 monotonic 시각과 최소 TTL의 남은 시간을
+보수적으로 결합하고, commit ACK 후 및 payload 재검증 후 전송 직전에 같은 TTL/CF042 deadline을 다시 확인한다.
+새75초·TTL·key나 비용 권위를 만들지 않는다. ACK 불명·drift·폐기·만료·취소는 다음 phase를 보내지 않으며,
+closure는 기존 safe get/view·redaction으로 돌아간다. 특히 이미 start 중 DELETE된 late_delete는 추가 continue0과
+200/deleted/plan=None을 유지한다. 이미 보낸 start를 미송신으로 소급하지 않는다.
+
+이 검사는 직전의 fresh 관측이며 commit 다음 순간의 철회까지 원자적으로 차단하지 않는다. HTTP 동안 DB lock을
+보유해 그 한계를 숨기지 않는다. 동일 key replay/GET/adopt/confirm은 새 모델 경로가 아니고 private None75도 보존한다.
+운영 epoch/정책·인증된 reserve/settlement 서비스와 실제 count/generation 권위는 여전히 후속이다.

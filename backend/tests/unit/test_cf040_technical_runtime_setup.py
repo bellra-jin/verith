@@ -566,6 +566,28 @@ def test_already_expired_request_has_no_count_or_SDK():
     assert not h.counter.calls and not h.dispatched and not h.budget.snapshot()
 
 
+def test_clock_conversion_cannot_extend_original_duration_when_UTC_lags():
+    h=strict_adapter()
+    with pytest.raises(h.a['_StrictLlmFailure'],match='^CLOCK_INVALID$'):
+        h.a['TechnicalRequestLlmBudget'](policy=h.policy,analysis_id=uuid4(),attempt_id=uuid4(),
+            reserved_nano=10000,started_at=h.started,deadline_at=h.started+timedelta(seconds=60),
+            counter=h.counter,clock=lambda:0,utcnow=lambda:h.started-timedelta(seconds=60))
+    assert not h.dispatched and not h.counter.calls
+
+
+def test_clock_conversion_observation_delay_and_later_wall_rollback_do_not_extend():
+    h=strict_adapter();clock=[0]
+    def now():clock[0]=5;return h.started+timedelta(seconds=20)
+    budget=h.a['TechnicalRequestLlmBudget'](policy=h.policy,analysis_id=uuid4(),attempt_id=uuid4(),
+        reserved_nano=10000,started_at=h.started,deadline_at=h.started+timedelta(seconds=60),
+        counter=h.counter,clock=lambda:clock[0],utcnow=now)
+    assert budget._remaining()==35
+    budget._utcnow=lambda:h.started-timedelta(seconds=60);clock[0]=39
+    assert budget._remaining()==1
+    clock[0]=41
+    with pytest.raises(h.a['_StrictLlmFailure'],match='DEADLINE_EXCEEDED'):budget._remaining()
+
+
 def test_caller_policy_reference_mutation_does_not_rebind_frozen_budget():
     h=strict_adapter();object.__setattr__(h.policy,'model','mutated')
     assert h.client.complete('synthetic')=='synthetic result'

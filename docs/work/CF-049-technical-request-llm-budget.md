@@ -14,11 +14,13 @@ CF049 v1.1의 정확6파일이다. CF048 CI 대기 중 부모가 순차 조건�
 
 기존 `technical-runtime-self/unit`에서 실제 helper/class/complete/factory의 고정 이름 AST만 compile/exec한다. actual openai/config factory/graph 모듈·환경·provider를 import/호출하지 않으며, 기존5 AI exact pin/6 pure Flow origins·worker/guard·source/dependency 사후 대조와 자기 root 정리를 유지한다.
 
-최종 보호 unit 147개 통과, guard0. legacy 호환, 명시 strict 누락/정책·계수·retry·model/cap/prompt 거절, N+1/동시 cap·여러 adapter 공유·다른 요청 격리, 소비 후 만료·후속 SDK0, usage 누락/불일치·status/빈 text/refusal/metadata 거절, 역순 응답의 ordinal 귀속, deadline/timeout-only 축소와 의미 변조 거절, unsafe snapshot 변조, 고정 비밀 sentinel 비노출을 확인했다. self 결과와 원격 exact-head CI는 최종 게시 시 별도 대조한다.
+최종 보호 unit 149개 통과, guard0. legacy 호환, 명시 strict 누락/정책·계수·retry·model/cap/prompt 거절, N+1/동시 cap·여러 adapter 공유·다른 요청 격리, 소비 후 만료·후속 SDK0, usage 누락/불일치·status/빈 text/refusal/metadata 거절, 역순 응답의 ordinal 귀속, deadline/timeout-only 축소와 의미 변조 거절, unsafe snapshot 변조, 고정 비밀 sentinel 비노출을 확인했다. self 결과와 원격 exact-head CI는 최종 게시 시 별도 대조한다.
 
 두 실제 thread barrier 회귀는 A 소비/미진입 뒤 B unknown 폐쇄이면 A SDK0·환급0, A entered 선형화 뒤 B 폐쇄이면 A의 관측/결과와 아직 미진입 call을 구분함을 확인한다. SDK 대기 중 다른 call이 진행하므로 I/O 동안 budget lock을 잡지 않는다. 실제 HTTP 경합이나 강제 thread 취소 증거는 아니다.
 
 중간 unit 1건은 검증된 0-token을 잘못 음성으로 둔 fixture 때문에 실패했다. 제품의 exact nonnegative 계수 계약을 유지하고 음성을 -1/과대값으로 수정한 뒤 전체 집중 unit을 확인했다. 이전 실패 로그는 보존한다.
+
+PR 게시 후 기한 변환을 추가 대조해, local UTC가 원 시작시각보다 이르면 CLOCK_INVALID로 닫고 UTC 관측 전 monotonic 기준점에서 원 duration 이하만 변환하도록 보완했다. UTC 관측 지연과 이후 wall-clock 역행에도 원 기한이 늘지 않는 집중 회귀 두 개를 추가했다.
 
 ## 미완료
 

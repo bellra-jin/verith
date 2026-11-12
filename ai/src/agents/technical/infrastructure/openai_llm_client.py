@@ -51,7 +51,7 @@ _COUNT_MAPPING = 'technical.responses.model-input.v1'
 _STRICT_REASONS = frozenset({'POLICY_INVALID','DEADLINE_EXCEEDED','SDK_POLICY_INVALID',
     'COUNT_UNAVAILABLE','COUNT_INVALID','CLOSED','BUDGET_EXCEEDED','PROMPT_INVALID',
     'SDK_UNKNOWN','COUNT_FAILED','USAGE_UNKNOWN','USAGE_LIMIT_MISMATCH',
-    'RESPONSE_METADATA_MISMATCH','RESPONSE_NOT_COMPLETED','TEXT_INVALID'})
+    'RESPONSE_METADATA_MISMATCH','RESPONSE_NOT_COMPLETED','TEXT_INVALID','CLOCK_INVALID'})
 _STRICT_POLICY_FIELDS = frozenset({'operation','enabled','currency','supported_tickers',
     'user_daily_limit','service_daily_limit','daily_budget_nano','attempt_reserve_nano',
     'deadline_seconds','model','service_tier','price_id','price_evidence_sha256',
@@ -224,7 +224,13 @@ class TechnicalRequestLlmBudget:
         self._reserved=reserved_nano
         self._utcnow=utcnow or (lambda:datetime.now(UTC));self._clock=clock
         self._deadline_at=deadline_at
-        self._monotonic_deadline=clock()+max(0,(deadline_at-self._utcnow()).total_seconds())
+        anchor=clock()  # precede the wall-clock observation; include its delay conservatively
+        now=self._utcnow()
+        if (type(anchor) not in (int,float) or not math.isfinite(anchor)
+                or type(now) is not datetime or now.utcoffset()!=UTC.utcoffset(None) or now<started_at):
+            raise _StrictLlmFailure('CLOCK_INVALID')
+        remaining=max(0,min((deadline_at-now).total_seconds(),(deadline_at-started_at).total_seconds()))
+        self._monotonic_deadline=anchor+remaining
         self._identity=_strict_sha(_strict_json(dict(analysis_id=str(analysis_id),attempt_id=str(attempt_id),
             policy_sha256=self._policy_sha,reserved_nano=reserved_nano,
             started_at=started_at.isoformat(),deadline_at=deadline_at.isoformat())))

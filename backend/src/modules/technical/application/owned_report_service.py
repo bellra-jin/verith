@@ -182,9 +182,21 @@ class TechnicalOwnedReportService:
             principal = await self._authorize()
             request, _, _ = checked(binding,frozen)
             if principal.user_id != binding.caller_context.owner_user_id: raise AuthenticationRequired()
-            if (await repo.storage_root_for_update(self.session,frozen.report_id) is not None or
-                    await repo.technical_indexes(self.session,frozen.report_id)):
-                raise TechnicalReportConflict()
+            root = await repo.storage_root_for_update(self.session,frozen.report_id)
+            indexes = await repo.technical_indexes(self.session,frozen.report_id)
+            if root is not None or indexes:
+                if root is None:
+                    raise TechnicalReportConflict()
+                # An existing ID is reusable only as a fully verified exact replay.
+                # Reuse the SQL owner/index/snapshot/child validation, without
+                # updating the admission session, flushing or committing anything.
+                try:
+                    stored = await self.read(frozen.report_id)
+                except TechnicalStoredPayloadError:
+                    raise TechnicalReportConflict() from None
+                if stored is None or stored.frozen != frozen:
+                    raise TechnicalReportConflict()
+                return StagedReportReference(frozen.report_id,principal.user_id)
             if await repo.get_stock(self.session,request['data']['stock']['stock_code']) is None:
                 raise TechnicalStorageInputError()
             stamp = await self.session.scalar(select(func.clock_timestamp()))

@@ -74,7 +74,16 @@ async def _verify(proof):
             await session.rollback()
             return value
 
-    check(await scalar(text('SELECT version_num FROM alembic_version')) == 'c35001a7e0001','Technical revision')
+    # Later additive migrations may follow CF035; compare to this copied
+    # source graph and require the Technical snapshot revision in its lineage.
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    config = Config()
+    config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
+    graph = ScriptDirectory.from_config(config)
+    heads = graph.get_heads()
+    check(len(heads) == 1 and 'c35001a7e0001' in {r.revision for r in graph.walk_revisions()},'Technical migration lineage')
+    check(await scalar(text('SELECT version_num FROM alembic_version')) == heads[0],'Technical source graph head')
     async with owned_session(proof) as session:
         a,b = AuthUser(id=uuid4()),AuthUser(id=uuid4()); session.add_all([a,b]); await session.flush()
         _,pa = await issue_session(session,a); _,pa2 = await issue_session(session,a); _,pb = await issue_session(session,b)
@@ -106,6 +115,33 @@ async def _verify(proof):
     check(len((await read(pa2,rid)).preview['charts']) == 3,'detached preview')
     check(await read(pb,rid) is None and await read(pa,legacy_root.id) is None,'other owner and legacy hidden')
     groups.append('stage_flush_visibility_commit_restore_new_session_detached_owner')
+    # Same stored ID and exact canonical bytes are read-only replay, not a new
+    # storage/execution claim. Dirty unrelated ORM state must not autoflush.
+    async with owned_session(proof) as session:
+        stock = await session.scalar(select(Stock).where(Stock.stock_code == '005930'))
+        stock.stock_name = 'unrelated local change must not flush'
+        statements = []
+        def trace(connection,cursor,statement,parameters,context,executemany):
+            statements.append(statement.lstrip().split()[0].upper())
+        connection = session.bind.sync_connection
+        event.listen(connection,'before_cursor_execute',trace)
+        try:
+            replay = await TechnicalOwnedReportService(session,principal=pa2).stage(binding,frozen)
+        finally: event.remove(connection,'before_cursor_execute',trace)
+        check(replay.report_id == rid and replay.owner_user_id == pa.user_id,'exact stored replay reference')
+        check(statements and set(statements) == {'SELECT'},'replay performed SQL writes')
+        check(session.is_modified(stock),'replay committed or discarded unrelated caller changes')
+        await session.rollback()
+    for principal in (pa,pb):
+        other_binding,other_output = storage_fixture(principal.user_id,report_id=rid,request_id=uuid4())
+        async with owned_session(proof) as session:
+            try: await TechnicalOwnedReportService(session,principal=principal).stage(other_binding,other_output)
+            except TechnicalReportConflict: pass
+            else: check(False,'nonidentical or other-owner stage replay accepted')
+            await session.rollback()
+    check((await read(pa2,rid)).frozen == frozen,'replay changed stored canonical bytes')
+    groups.append('exact_stage_replay_select_only_dirty_session_conflicts')
+
     for kind in ('expired','revoked','forged'):
         if kind == 'forged': principal = replace(pa,token_digest=b'!'*32)
         else:
@@ -230,7 +266,7 @@ async def _verify(proof):
     try: await migration(proof,'c23001a7e0001',downgrade=True)
     except RuntimeError: pass
     else: check(False,'nonempty owned storage downgrade accepted')
-    check(await scalar(text('SELECT version_num FROM alembic_version')) == 'c35001a7e0001','failed downgrade preserves revision')
+    check(await scalar(text('SELECT version_num FROM alembic_version')) == heads[0],'failed downgrade preserves revision')
     legacy_after = await scalar(text('SELECT row_to_json(t)::text FROM technical_reports t WHERE id=:id').bindparams(id=legacy_root.id))
     check(legacy_before == legacy_after,'legacy row rewritten')
     groups.append('nonempty_downgrade_rejected_legacy_unchanged')

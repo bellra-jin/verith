@@ -80,6 +80,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(repo,'storage_root_for_update',AsyncMock(return_value=None))
     monkeypatch.setattr(repo,'technical_indexes',AsyncMock(return_value=[]))
     monkeypatch.setattr(repo,'get_stock',AsyncMock(return_value=object()))
+    monkeypatch.setattr(repo,'get_owned_storage',AsyncMock(return_value=None))
     return p,binding,frozen,session,authorize
 
 
@@ -290,3 +291,36 @@ def test_readonly_pin_and_origin_mismatch_rejected(monkeypatch):
     module = sys.modules['agents.flow.api.payload']
     with patch.object(module.__spec__,'origin','/unapproved/payload.py'):
         with pytest.raises(AssertionError,match='readonly source origin'): load_flow_compat()
+
+
+async def test_identical_stage_replay_reads_verified_snapshot_without_any_write(monkeypatch):
+    p,b,f,s,auth,root,snapshot,index,children,reference = await staged(monkeypatch)
+    repo.storage_root_for_update.return_value=root
+    before=(len(s.rows),snapshot.owner_session_id,index.owner_session_id,snapshot.result_json)
+    s.flush.reset_mock();s.scalar.reset_mock();auth.reset_mock()
+    current=replace(p,session_id=uuid4())
+    replay=await service.TechnicalOwnedReportService(s,principal=current).stage(b,f)
+    assert replay==reference
+    assert (len(s.rows),snapshot.owner_session_id,index.owner_session_id,snapshot.result_json)==before
+    s.flush.assert_not_awaited();s.scalar.assert_not_awaited();s.commit.assert_not_awaited()
+    assert auth.await_count==2 and all(call.kwargs=={'lock':True} for call in auth.await_args_list)
+    assert snapshot.owner_session_id==p.session_id!=current.session_id
+
+
+@pytest.mark.parametrize('attack',['different_result','different_binding','other_owner','snapshot','duplicate_index','child'])
+async def test_existing_stage_rejects_nonidentical_or_inconsistent_replay(monkeypatch,attack):
+    p,b,f,s,auth,root,snapshot,index,children,reference=await staged(monkeypatch)
+    repo.storage_root_for_update.return_value=root
+    if attack=='different_result':
+        value=json.loads(f.result_json)
+        value['data']['boundary_observed_at']=(datetime.fromisoformat(value['data']['boundary_observed_at'])+timedelta(seconds=1)).isoformat()
+        f=FrozenAnalysisResult.freeze(context=f.context,report_id=f.report_id,input_schema=f.input_schema,result_schema=f.result_schema,input_json=f.input_json,result_json=canonical_json(value))
+    elif attack=='different_binding':b,f=storage_fixture(p.user_id,report_id=f.report_id,request_id=uuid4())
+    elif attack=='other_owner':repo.get_owned_storage.return_value=None
+    elif attack=='snapshot':snapshot.result_json='{}'
+    elif attack=='duplicate_index':repo.technical_indexes.return_value=[index,index]
+    else:children[-1][0].outcome='corrupted'
+    s.flush.reset_mock();s.scalar.reset_mock();count=len(s.rows)
+    with pytest.raises(service.TechnicalReportConflict):await service.TechnicalOwnedReportService(s,principal=p).stage(b,f)
+    assert len(s.rows)==count
+    s.flush.assert_not_awaited();s.scalar.assert_not_awaited();s.commit.assert_not_awaited()

@@ -511,9 +511,12 @@ CF048_SOURCES = frozenset({
     "backend/db/models/technical/execution_admission.py",
     "backend/db/models/registry.py",
     "backend/db/migrations/versions/20261112_c48001a7e0001_technical_execution_admission.py",
+    "backend/db/migrations/versions/20261112_c50001a7e0001_technical_result_completion.py",
     "backend/src/modules/technical/domain/execution_admission.py",
     "backend/src/modules/technical/infrastructure/execution_admission_repository.py",
     "backend/src/modules/technical/application/execution_admission_service.py",
+    "backend/src/modules/technical/infrastructure/execution_completion_repository.py",
+    "backend/src/modules/technical/application/execution_completion.py",
     "backend/tests/unit/test_cf048_technical_admission.py",
     "backend/scripts/cf035_technical_owned_check.py",
     ".github/workflows/pr-ci.yml",
@@ -521,7 +524,8 @@ CF048_SOURCES = frozenset({
 CF048_TESTS = ("tests/unit/test_cf048_technical_admission.py",)
 CF048_INPUTS = {p:CF035_INPUTS[p] for p in (
     "backend/src/modules/auth/application/session_service.py",
-    "backend/db/models/auth/models.py", "backend/db/models/common/stock.py")}
+    "backend/db/models/auth/models.py", "backend/db/models/common/stock.py",
+    "frontend/tests/fixtures/cf031-technical-boundary-read.json")}
 CF048_COMPAT = dict(CF035_COMPAT)  # Existing worker Flow-origin sentinel, six pure files.
 NEW.update(CF048_SOURCES)
 
@@ -565,7 +569,7 @@ def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_e
         result.discard('backend/scripts/cf026_supervisor_live_controller.py')
         result.discard('backend/tests/unit/test_cf026_supervisor_live_controller.py')
     if technical_admission_only:
-        result = {p for p in result if not p.startswith(('ai/', 'frontend/')) or p in CF048_COMPAT}
+        result = {p for p in result if not p.startswith(('ai/', 'frontend/')) or p in CF048_COMPAT or p in CF048_INPUTS}
         result.discard('backend/scripts/cf026_supervisor_live_controller.py')
         result.discard('backend/tests/unit/test_cf026_supervisor_live_controller.py')
     if technical_runtime_only:

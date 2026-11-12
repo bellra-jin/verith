@@ -12,7 +12,7 @@ from uuid import UUID,uuid4
 from sqlalchemy import select,func
 from db.models.common.stock import Stock
 from src.modules.auth.application.session_service import AuthenticationRequired,Principal,validate_principal
-from src.modules.analysis.application.ports import AnalysisAdapter,AnalysisProfile
+from src.modules.analysis.application.ports import AnalysisAdapter,AnalysisProfile,ResultCompletionProfile
 from src.shared.infrastructure.clients.ai_client import AIContractError,AIValidationError
 
 class AnalysisCoordinator:
@@ -46,6 +46,7 @@ class AnalysisCoordinator:
         except Exception:pass # Never infer that a previous ambiguous commit did not happen.
 
     async def post(self,body,request_id):
+        if isinstance(self.profile,ResultCompletionProfile):raise self._error('INPUT_INVALID')
         known=None
         try:
             body=self.profile.parse(body)
@@ -121,21 +122,52 @@ class AnalysisCoordinator:
         except Exception:
             await self._rollback();raise self._error('SERVICE_UNAVAILABLE',id) from None
 
-    async def _receive(self,id,token,response):
+    async def receive(self,expected,token,response):
+        """Receive an already claimed run; never re-admit, re-claim or dispatch."""
+        if not isinstance(self.profile,ResultCompletionProfile) or type(token) is not bytes or len(token)!=32:
+            raise self._error('INPUT_INVALID')
+        if self.session.new or self.session.dirty or self.session.deleted:raise self._error('SERVICE_UNAVAILABLE')
+        expected,response=self.profile.freeze_received(expected,response)
+        return await self._receive(expected.analysis_id,bytes(token),response,expected=expected)
+
+    async def publish(self,id):
+        """Explicit publication recovery only; GET remains non-publishing."""
+        if not isinstance(self.profile,ResultCompletionProfile):raise self._error('INPUT_INVALID')
+        if self.session.new or self.session.dirty or self.session.deleted:raise self._error('SERVICE_UNAVAILABLE',id)
+        try:
+            row=await self._locked(id)
+            await self.profile.repository.expire(self.session,row)
+            await self.profile.validate_state(self.session,row,self.principal)
+            return await self._publish(row)
+        except asyncio.CancelledError:
+            await self._rollback();raise
+        except self.profile.preserved_errors:
+            await self._rollback();raise
+        except Exception:
+            await self._rollback();raise self._error('SERVICE_UNAVAILABLE',id) from None
+
+    async def _receive(self,id,token,response,*,expected=None):
+        completion=isinstance(self.profile,ResultCompletionProfile)
+        if completion and expected is None:raise self._error('INPUT_INVALID',id)
         try:
             row=await self._locked(id);await self.profile.repository.expire(self.session,row)
+            if completion:await self.profile.check_receive(self.session,row,self.principal,expected,token)
             if not hmac.compare_digest(row.claim_digest,hashlib.sha256(token).digest()):raise self._error('RESULT_CONTRACT_INVALID',id)
-            if row.state!='running':
+            if row.state!=(self.profile.receiving_state if completion else 'running'):
+                if completion:await self.profile.verify_replay(self.session,row,self.principal,response)
                 view=self._view(row);await self.session.commit();return view
             try:
                 adapter:AnalysisAdapter=self._adapter(row)
                 frozen=adapter.validate_and_freeze(response)
             except self.profile.contract_errors:
-                row.state='failed';row.error_code='RESULT_CONTRACT_INVALID'
+                if completion:await self.profile.prepare_terminal(self.session,row,'failed','RESULT_CONTRACT_INVALID')
+                else:row.state='failed';row.error_code='RESULT_CONTRACT_INVALID'
                 view=self._view(row);await self.session.commit();return view
             try:
-                row=await self.profile.repository.accept(self.session,row,hashlib.sha256(token).digest(),report_id=frozen.report_id,
-                    input_json=frozen.input_json,input_sha256=frozen.input_sha256,result_json=frozen.result_json,result_sha256=frozen.result_sha256)
+                if completion:row=await self.profile.accept_result(self.session,row,hashlib.sha256(token).digest(),frozen)
+                else:
+                    row=await self.profile.repository.accept(self.session,row,hashlib.sha256(token).digest(),report_id=frozen.report_id,
+                        input_json=frozen.input_json,input_sha256=frozen.input_sha256,result_json=frozen.result_json,result_sha256=frozen.result_sha256)
             except self.profile.snapshot_conflicts as error:
                 if not self.profile.confirmed_snapshot_conflict(error):raise
                 await self._rollback()
@@ -153,6 +185,8 @@ class AnalysisCoordinator:
         try:
             row=await self._locked(id)
             return await self._publish(row)
+        except asyncio.CancelledError:
+            await self._rollback();raise
         except self.profile.preserved_errors:
             await self._rollback();raise
         except Exception:
@@ -167,9 +201,19 @@ class AnalysisCoordinator:
         try:
             await adapter.stage(self.session,self.principal,frozen)
         except self.profile.publish_errors as error:
-            confirmed_conflict=self.profile.confirmed_conflict(error)
+            completion=isinstance(self.profile,ResultCompletionProfile)
+            confirmed_conflict=False if completion else self.profile.confirmed_conflict(error)
             await self._rollback()
             row=await self._locked(analysis_id)
+            if completion:
+                disposition=await self.profile.publication_recovery(self.session,row,self.principal,frozen,error)
+                if row.state=='result_ready' and disposition=='conflict':
+                    await self.profile.prepare_terminal(self.session,row,'failed','RESULT_CONFLICT')
+                    await self.session.commit()
+                    raise self._error('RESULT_CONFLICT',analysis_id) from None
+                # Same stored data or an uncertain lookup is not a conflict.
+                # Preserve the durable ready snapshot for explicit recovery.
+                raise self._error('SERVICE_UNAVAILABLE',analysis_id) from None
             existing=await self.profile.report_exists(self.session,report_id)
             if row.state=='result_ready' and (confirmed_conflict or existing):
                 row.state='failed';row.error_code='RESULT_CONFLICT'
@@ -177,14 +221,18 @@ class AnalysisCoordinator:
                 raise self._error('RESULT_CONFLICT',analysis_id) from None
             raise self._error('SERVICE_UNAVAILABLE',analysis_id) from None
         row.state='stored'
+        if isinstance(self.profile,ResultCompletionProfile):await self.profile.prepare_terminal(self.session,row,'stored')
         await self.session.flush()
         view=self._view(row)
         await self.session.commit() # Root/children/index/stored are one transaction.
         return view
 
     async def get(self,id):
+        if isinstance(self.profile,ResultCompletionProfile) and (self.session.new or self.session.dirty or self.session.deleted):
+            raise self._error('SERVICE_UNAVAILABLE',id)
         try:
             row=await self._locked(id);await self.profile.repository.expire(self.session,row)
+            if isinstance(self.profile,ResultCompletionProfile):await self.profile.validate_state(self.session,row,self.principal)
             view=self._view(row);await self.session.commit();return view # Never publish or call AI.
         except self.profile.preserved_errors:
             await self._rollback();raise

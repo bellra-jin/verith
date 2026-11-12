@@ -26,6 +26,14 @@ class TechnicalAdmissionError(ValueError):
         super().__init__(self.code)
 
 
+class TechnicalCompletionError(ValueError):
+    def __init__(self,code='INPUT_INVALID',analysis_id=None):
+        allowed={'INPUT_INVALID','RESOURCE_NOT_FOUND','RESULT_CONTRACT_INVALID','RESULT_CONFLICT','SERVICE_UNAVAILABLE'}
+        self.code=code if code in allowed else 'SERVICE_UNAVAILABLE'
+        self.analysis_id=UUID(int=analysis_id.int) if type(analysis_id) is UUID else None
+        super().__init__(self.code)
+
+
 def canonical(value):
     def shape(item):
         if type(item) is dict:
@@ -194,6 +202,8 @@ class Policy:
 
 SPEC_JSON = canonical(SPEC)
 SPEC_SHA256 = sha(SPEC_JSON)
+COMPLETION_FORMAT = 'technical.result-completion.v1'
+COMPLETION_FIELDS = ('completion_format','input_sha256','result_sha256','binding_sha256','accepted_at','error_code')
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +240,7 @@ class RunReceipt:
         integer(self.reserved_nano);integer(self.held_nano)
         if self.held_nano != self.reserved_nano or self.deadline_at <= self.as_of or self.spec_sha256 != SPEC_SHA256:
             raise TechnicalAdmissionError('STORED_INVALID')
-        if type(self.state) is not str or self.state not in {'admitted', 'claimed', 'unknown'}:
+        if type(self.state) is not str or self.state not in {'admitted', 'claimed', 'unknown','result_ready','stored','failed'}:
             raise TechnicalAdmissionError('STORED_INVALID')
         if self.claim_consumed_at is not None:
             utc(self.claim_consumed_at)
@@ -241,10 +251,41 @@ class RunReceipt:
             if self.redacted_at < self.as_of:
                 raise TechnicalAdmissionError('STORED_INVALID')
         if (self.state == 'admitted' and self.claim_consumed_at is not None
-                or self.state == 'claimed' and self.claim_consumed_at is None
-                or (self.state == 'unknown') != (self.redacted_at is not None)
+                or self.state in {'claimed','result_ready','stored','failed'} and self.claim_consumed_at is None
+                or (self.state in {'unknown','stored','failed'}) != (self.redacted_at is not None)
                 or (self.state == 'unknown' and (type(self.unknown_reason) is not str or self.unknown_reason not in REASONS))
                 or (self.state != 'unknown' and self.unknown_reason is not None)):
+            raise TechnicalAdmissionError('STORED_INVALID')
+
+
+@dataclass(frozen=True,slots=True)
+class CompletionReceipt:
+    """Owner state/hash view only; never claim or provider/publication authority."""
+    run: RunReceipt
+    completion_format: str | None=None
+    input_sha256: str | None=None
+    result_sha256: str | None=None
+    binding_sha256: str | None=None
+    accepted_at: datetime | None=None
+    error_code: str | None=None
+
+    def __post_init__(self):
+        if type(self.run) is not RunReceipt:raise TechnicalAdmissionError('STORED_INVALID')
+        self.run.__post_init__()
+        if self.accepted_at is None:
+            if any(getattr(self,k) is not None for k in COMPLETION_FIELDS if k not in {'accepted_at','error_code'}):
+                raise TechnicalAdmissionError('STORED_INVALID')
+            if self.run.state in {'result_ready','stored'}:raise TechnicalAdmissionError('STORED_INVALID')
+        else:
+            utc(self.accepted_at)
+            if (self.completion_format!=COMPLETION_FORMAT or self.run.claim_consumed_at is None
+                    or not self.run.claim_consumed_at<=self.accepted_at<self.run.deadline_at
+                    or self.run.state not in {'result_ready','stored','failed','unknown'}
+                    or self.run.redacted_at is not None and self.run.redacted_at<self.accepted_at):
+                raise TechnicalAdmissionError('STORED_INVALID')
+            for key in ('input_sha256','result_sha256','binding_sha256'):digest(getattr(self,key))
+        if ((self.run.state=='failed' and self.error_code not in {'RESULT_CONTRACT_INVALID','RESULT_CONFLICT'})
+                or self.run.state!='failed' and self.error_code is not None):
             raise TechnicalAdmissionError('STORED_INVALID')
 
 

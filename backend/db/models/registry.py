@@ -37,6 +37,7 @@ from db.models.technical.report_signal import TechnicalReportSignal
 from db.models.technical.report_verification import TechnicalReportVerification
 from db.models.technical.technical_report import TechnicalReport
 from db.models.technical.report_snapshot import TechnicalReportSnapshot
+from db.models.technical.execution_admission import TechnicalUsagePeriod, TechnicalAnalysisRun
 
 # News
 from db.models.news.news import News
@@ -84,6 +85,8 @@ __all__ = [
     "TechnicalReportVerification",
     "TechnicalReport",
     "TechnicalReportSnapshot",
+    "TechnicalUsagePeriod",
+    "TechnicalAnalysisRun",
     "News",
     "NewsReport",
     "FlowReport",

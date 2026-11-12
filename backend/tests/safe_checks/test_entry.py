@@ -842,6 +842,52 @@ class CF023Boundary(unittest.TestCase):
         self.assertEqual(meaning.sha(proposals.semantic_spec()),contracts.MEANING_SPEC_SHA256)
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
+class CF048Boundary(unittest.TestCase):
+    def test_exact_Technical_collection_readonly_pins_and_existing_guard(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        self.assertEqual(c.CF048_TESTS,('tests/unit/test_cf048_technical_admission.py',))
+        self.assertEqual(c.CF048_COMPAT,c.CF035_COMPAT)
+        self.assertEqual(len(c.CF048_INPUTS),3)
+        for path,digest in (c.CF048_INPUTS|c.CF048_COMPAT).items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,path)).hexdigest(),digest)
+        for path in c.CF048_SOURCES:
+            self.assertTrue(c.regular_bytes(root,path));self.assertFalse(c.source_allowed(path+'.adjacent'))
+        indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_admission_only=True)
+        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF048_COMPAT))
+        self.assertFalse(any(p.startswith('frontend/') for p in selected))
+        self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
+
+    def test_fixed_modes_and_two_CI_calls_use_existing_clean_launch(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('technical-admission-self','technical-admission-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertEqual(run.call_args.kwargs,{'technical_admission_only':True})
+                self.assertEqual(run.call_args.args[1],('self-test' if mode.endswith('self') else 'unit',))
+        text=(Path(__file__).resolve().parents[3]/'.github/workflows/pr-ci.yml').read_text()
+        for mode in ('technical-admission-self','technical-admission-unit'):
+            lines=[line for line in text.splitlines() if line.strip().endswith(' '+mode)]
+            self.assertEqual(len(lines),1)
+            self.assertIn('env -i LANG=en_US.UTF-8 TZ=UTC',lines[0])
+            self.assertIn(' -I -S -B ',lines[0])
+
+    def test_SQL_only_owned_flag_and_no_extra_execution_inputs(self):
+        import ast
+        root=Path(__file__).resolve().parents[3]
+        text=(root/'backend/scripts/cf002_interactive_login.py').read_text()
+        self.assertIn('--verify-technical-admission-db',text)
+        self.assertIn('verify_technical_admission(proof)',text)
+        tree=ast.parse((root/'backend/src/modules/technical/application/execution_admission_service.py').read_text())
+        imports={n.module for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)}|{a.name for n in ast.walk(tree) if isinstance(n,ast.Import) for a in n.names}
+        self.assertFalse(any(name and name.split('.')[0] in {'httpx','openai','dotenv','redis','langgraph'} for name in imports))
+
+
 class CF024Boundary(unittest.TestCase):
     def test_CF047_exact_readonly_bootstrap_inputs_and_tamper_rejection(self):
         import ast,hashlib
@@ -1263,6 +1309,7 @@ if __name__ == "__main__":
     technical_owned_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf036_self_only",False)
     technical_runtime_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf040_self_only",False)
     graph_focused=json.loads(Path(sys.argv[1]).read_text()).get("technical_graph_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(TechnicalGraphBoundary if graph_focused else CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    admission_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf048_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF048Boundary if admission_focused else TechnicalGraphBoundary if graph_focused else CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

@@ -368,3 +368,14 @@ SELECT-only reconcile은 `newly_authorized=False`다. observed도 자동 환급�
 unknown/anomalous는 기존 예약을 유지하며 계정을 막는다. terminal ACK가 없는 held는 정산 미확인이다.
 다운그레이드는 새 grant 표를 잠근 뒤 비어 있을 때만 허용한다. 이 migration은 기존 정책/행을
 발급·갱신하거나 실제 운영 DB에 자동 적용하지 않는다.
+
+## CF048 · Technical 전용 접수와 보수 hold
+
+`c48001a7e0001`은 `c45001a7e0001` 뒤에 두 표만 추가한다. 기존 Flow/Supervisor 회계는 변경하지 않는다.
+
+- `technical_usage_periods`: operation/KST 일자 UNIQUE인 서비스 단일 기간. UTC 시작/끝과 명시 policy/가격/cap TEXT·SHA, 사용자/서비스 횟수·금액 상한, 누적 횟수/예약·blocked를 보존한다. 같은 날 정책 교체나 카운터 감소는 금지다.
+- `technical_analysis_runs`: owner/operation/key digest UNIQUE. 원 admission session ID, 고정 서버 ID 6개, intent·Stock·spec snapshot/hash, 원 period/policy, 시작/기한, claim digest/소비 시각, admitted/claimed/unknown·고정 이유·redaction 시각과 예약/hold를 저장한다. 원 session에는 신규 FK를 걸지 않으며 원 owner와 period-policy에는 RESTRICT FK를 둔다.
+
+INSERT/UPDATE guard는 identity·정책/기간·실행당 예약과 정책의 deadline 상한을 결합한다. claim은 한 번만 소비하고 intent는 NULL로만 삭제할 수 있다. DELETE/TRUNCATE와 hold 환급은 금지다. deferred trigger는 commit 최종 상태에서 run COUNT/예약 합과 period 누적값·사용자 한도를 대조한다. downgrade는 새 두 표의 ACCESS EXCLUSIVE 잠금 아래 비어 있을 때만 허용한다.
+
+이 표는 내부 SQL 접수/로컬 claim이며 provider 송신권·정산이나 운영 활성화가 아니다. [서비스 계약](../../docs/contracts/technical-boundary-v1.md#cf048-technical-전용-접수와-로컬-claim)과 [직접 검증](../../docs/work/CF-048-technical-admission.md)을 따른다.

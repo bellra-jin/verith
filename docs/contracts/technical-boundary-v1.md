@@ -183,3 +183,15 @@ CF039/CF040 위의 후속 고정 검사는 검토된 별도 64-wheel site와 정
 ACK 불명 복구는 caller가 아는 key의 readonly/no-autoflush 조회이며 새 claim 권위가 없다. 취소/timeout/만료/원문 삭제/불확실 송신은 unknown 및 원 예약/횟수를 보존한다. get/claim/close_unknown에서 만료를 처리할 때 intent를 실제 NULL로 만들며 자동 sweeper/정산/환급은 없다. owner/run/period 삭제나 새 날짜로 원 key·hold를 초기화하지 않는다.
 
 E는 admission intent hash, B는 기존 strict boundary wire/fingerprint, S는 기존 owned-stage wrapper/hash다. 이를 같은 hash로 취급하지 않는다. 후속 공통 coordinator가 admission/claim SQL과 commit/ACK의 유일한 소유자가 되어 한 번만 수행해야 한다. 이 서비스를 먼저 호출한 뒤 coordinator.post로 다시 접수·예약하는 방식은 금지다. 이번에는 adapter/hook·엔진/owned writer·Supervisor 확정 dispatch·실제 provider 송신/요금 정산·운영 정책을 연결하지 않는다. [검증과 미완료](../work/CF-048-technical-admission.md)를 따른다.
+
+## CF049 명시 opt-in 요청별 LLM 소비와 전 호출 증거
+
+기존 legacy `complete(prompt)`와 `last_usage` 계약은 유지한다. 명시 `strict=True`는 `TechnicalRequestLlmBudget`을 필수로 받고, 누락/실패에서 legacy로 fallback하지 않는다. 한 실행의 모든 adapter가 budget 하나를 공유해야 한다. 원 CF048 policy canonical bytes/독립 expected hash·typed projection, run/attempt·예약·UTC 시작/기한을 깊게 고정하며 재호출/관측 usage로 소비를 초기화하거나 환급하지 않는다. CF048을 import하거나 Flow/시험 예산을 가져오지 않는다.
+
+strict는 최종 model/input projection과 원 prompt·request identity에 결합된 계수 영수증을 명시 trusted DI로 받고 그 의존성의 `verify`와 고정 mapping/version/provenance 결합을 요구한다. 단순 token 정수/hash/boolean은 계수 근거가 아니다. 실제 Technical 계수 구현/provenance는 아직 없으며 기본 DI=None은 SDK0으로 닫힌다. 합성 issuer/verify는 실제 정확 계수 증명이 아니고, 임의 주입 구현의 진위를 문자열/hash 형식 검사만으로 보증하지 않는다. 향후 실사용 DI의 구현·provenance 검토가 필수다. count transport/API를 자동 생성하지 않는다.
+
+최대1..4 call cap과 보수 hold를 lock 아래 SDK 전에 소비하고, 같은 lock에서 미폐쇄·원 ordinal·미진입·기한을 다시 확인해 entered 권위를 한 번 선형화한다. 계수/SDK I/O 동안 lock을 유지하지 않는다. unknown이 먼저 닫았으면 이미 소비한 미진입 call은 SDK0·hold 유지이며, 이미 entered인 call은 응답을 원 ordinal에 끝까지 보존한다. 계수 전 캡처 SDK/responses/create identity와 retry0·model/tier/output cap/store=False를 대기 후 재검사한다. 원 UTC와 한 번 결합한 monotonic·더 짧은 기존 Deadline 및 per-call timeout을 계속 좁히며, 늦게 반환한 응답도 usage 먼저 보존한 뒤 텍스트 채택을 거절한다.
+
+최대4개의 불변 snapshot은 원 identity/hash·fixed model/tier/caps·보수 hold·entered/response_received·각 usage/추정액 또는 unknown·텍스트 수용/고정 이유/경과를 구분한다. missing/invalid usage는 0으로 채우지 않고 completed 아닌 status/refusal/빈 text·cap/count 불일치/예외/취소는 sticky closed다. 원문 prompt/응답·provider 자유 metadata·키/자유 exception은 저장하지 않는다. output byte cap은 추출 텍스트 수용 한도이며 SDK 전체 decoded body의 메모리/transport read cap은 아니다.
+
+entered는 로컬 진입 권위이며 wire/처리/청구 관측이 아니다. SDK 객체의 retry 설정 검사와 adapter dispatch 횟수는 임의 callable의 내부 HTTP/재시도를 입증하지 않는다. 프로세스 재시작/동일 run의 새 budget 차단은 CF048 claim과 후속 단일 coordinator 조립의 책임이다. 실제 SDK/endpoint/proxy/계수 provenance·Backend→엔진→저장·durable 승인/정산·Supervisor dispatch·운영 활성화는 미완료다. [직접 검사와 한계](../work/CF-049-technical-request-llm-budget.md)를 따른다.

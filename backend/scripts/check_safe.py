@@ -453,7 +453,7 @@ CF040_TESTS = ("tests/unit/test_cf040_technical_runtime_setup.py",)
 CF040_COMPAT = dict(CF035_COMPAT)
 CF040_INPUTS = {'ai/src/agents/technical/config.py': '6979246321e8a2eb703d0441591f114c0daf1976021dbd7b15d40eaf55b5277a', 'ai/src/api/dependencies.py': '5ffaa8909eee2cd3fe4f512cc839b7ba206d4fb27d314fe58b9cab31ab0f0dab', 'ai/src/agents/technical/domain/intraday_limits.py': '27499058b141918eb8560b0f3eb6ecdc7839124f66160cf8f4ca06d53e374ff7', 'ai/src/shared/runtime/deadline.py': '4a51cd138da3a37d158e03019e4b38c203bd276948a21987b0d07d35a68cb60e'}
 CF040_SOURCES = frozenset({"backend/tests/unit/test_cf040_technical_runtime_setup.py", "backend/scripts/check_safe.py", "backend/tests/safe_checks/test_entry.py"})
-CF040_INPUTS['ai/src/agents/technical/infrastructure/openai_llm_client.py']='df51b98c08114f18d49f62d8d2f221cbfaed348b65a2e863df352e0a3689a859'
+CF040_INPUTS['ai/src/agents/technical/infrastructure/openai_llm_client.py']='d6d51d7d8940c790eb097d3e0d2477a572ed56a5c37096f8345dc63904bea668'
 NEW.update(CF040_INPUTS)
 NEW.update(CF040_SOURCES)
 

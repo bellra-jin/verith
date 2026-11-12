@@ -1,6 +1,9 @@
 """OpenAI LLM client adapter — Technical Agent의 `complete(prompt) -> str` 계약 구현.
 
-**순수 어댑터**다: OpenAI Responses API 호출 → `output_text` 추출 → 예외를 `LlmCallError`로
+명시 opt-in strict 경로는 요청별 로컬 소비/전 호출 증거를 추가한다. 계수 DI는 기본 unavailable이며,
+Backend claim/영속 정산·실제 SDK/계수 provenance·운영 활성화를 대신하지 않는다. legacy는 기존 계약이다.
+
+legacy 경로는 OpenAI Responses API 호출 → `output_text` 추출 → 예외를 `LlmCallError`로
 변환하는 것만 한다. supervisor/node orchestration·prompt 구조·응답 schema·검증 로직은 건드리지 않고,
 기존 fake LLM과 **교체 가능한 adapter**로 동작한다(구조적 Protocol `complete`).
 
@@ -24,7 +27,16 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
+from dataclasses import dataclass, fields, replace
+from datetime import datetime, UTC
+import hashlib
+import json
+import math
+import re
+import threading
 from typing import Any
+from uuid import UUID
 
 import openai
 
@@ -33,6 +45,312 @@ from .llm.utils import LlmCallError
 from ....shared.runtime.deadline import Deadline, DeadlineExceeded
 
 logger = logging.getLogger(__name__)
+
+_STRICT_MAX = 2**63-1
+_COUNT_MAPPING = 'technical.responses.model-input.v1'
+_STRICT_REASONS = frozenset({'POLICY_INVALID','DEADLINE_EXCEEDED','SDK_POLICY_INVALID',
+    'COUNT_UNAVAILABLE','COUNT_INVALID','CLOSED','BUDGET_EXCEEDED','PROMPT_INVALID',
+    'SDK_UNKNOWN','COUNT_FAILED','USAGE_UNKNOWN','USAGE_LIMIT_MISMATCH',
+    'RESPONSE_METADATA_MISMATCH','RESPONSE_NOT_COMPLETED','TEXT_INVALID'})
+_STRICT_POLICY_FIELDS = frozenset({'operation','enabled','currency','supported_tickers',
+    'user_daily_limit','service_daily_limit','daily_budget_nano','attempt_reserve_nano',
+    'deadline_seconds','model','service_tier','price_id','price_evidence_sha256',
+    'input_nano_per_token','output_nano_per_token','input_token_cap','output_token_cap',
+    'input_byte_cap','output_byte_cap','max_calls'})
+
+
+class _StrictLlmFailure(RuntimeError):
+    """Only module-owned fixed reasons, never provider or caller text."""
+    def __init__(self,reason):
+        super().__init__(reason if type(reason) is str and reason in _STRICT_REASONS else 'POLICY_INVALID')
+
+
+def _strict_json(value):
+    return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False)
+
+
+def _strict_sha(value):
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+
+def _strict_int(value, *, zero=False):
+    if type(value) is not int or not (0 if zero else 1)<=value<=_STRICT_MAX:
+        raise _StrictLlmFailure('POLICY_INVALID')
+    return value
+
+
+def _strict_hash(value):
+    if type(value) is not str or re.fullmatch('[0-9a-f]{64}',value) is None:
+        raise _StrictLlmFailure('POLICY_INVALID')
+
+
+def _strict_same_callable(left,right):
+    if left is right:return True
+    # Re-reading a Python bound method creates a new method object. Compare its
+    # actual receiver/function identities, without invoking caller equality.
+    owner=getattr(left,'__self__',None);function=getattr(left,'__func__',None)
+    return (owner is not None and function is not None
+            and owner is getattr(right,'__self__',None) and function is getattr(right,'__func__',None))
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class TechnicalLlmPolicy:
+    """Full CF048 bytes/hash plus an independently supplied typed projection."""
+    policy_json: str
+    policy_sha256: str
+    model: str
+    service_tier: str
+    price_id: str
+    price_evidence_sha256: str
+    input_nano_per_token: int
+    output_nano_per_token: int
+    input_token_cap: int
+    output_token_cap: int
+    input_byte_cap: int
+    output_byte_cap: int
+    max_calls: int
+    attempt_reserve_nano: int
+
+    def validated(self):
+        try:
+            _strict_hash(self.policy_sha256)
+            if type(self.policy_json) is not str or len(self.policy_json.encode('utf-8'))>16384:
+                raise _StrictLlmFailure('POLICY_INVALID')
+            def unique(pairs):
+                result={}
+                for key,value in pairs:
+                    if key in result:raise _StrictLlmFailure('POLICY_INVALID')
+                    result[key]=value
+                return result
+            value=json.loads(self.policy_json,object_pairs_hook=unique)
+            if (type(value) is not dict or set(value)!=_STRICT_POLICY_FIELDS
+                    or _strict_json(value)!=self.policy_json or _strict_sha(self.policy_json)!=self.policy_sha256
+                    or value['operation']!='technical.analysis.v1' or value['enabled'] is not True
+                    or value['currency']!='USD' or value['service_tier']!='default'):
+                raise _StrictLlmFailure('POLICY_INVALID')
+            for field in fields(self):
+                if field.name not in {'policy_json','policy_sha256'}:
+                    supplied=getattr(self,field.name)
+                    if type(supplied) is not type(value[field.name]) or supplied!=value[field.name]:
+                        raise _StrictLlmFailure('POLICY_INVALID')
+            numbers=_STRICT_POLICY_FIELDS-{'operation','enabled','currency','supported_tickers','model','service_tier','price_id','price_evidence_sha256'}
+            for name in numbers:_strict_int(value[name])
+            for name in ('model','price_id'):
+                if type(value[name]) is not str or re.fullmatch('[A-Za-z0-9_.:-]{1,128}',value[name]) is None:
+                    raise _StrictLlmFailure('POLICY_INVALID')
+            _strict_hash(value['price_evidence_sha256'])
+            tickers=value['supported_tickers']
+            if (type(tickers) is not list or not 1<=len(tickers)<=1000
+                    or any(type(t) is not str or re.fullmatch('[0-9]{6}',t) is None for t in tickers)
+                    or tickers!=sorted(set(tickers)) or value['user_daily_limit']>value['service_daily_limit']
+                    or value['deadline_seconds']>86400 or not 1<=value['max_calls']<=4):
+                raise _StrictLlmFailure('POLICY_INVALID')
+            hold=_strict_int(_strict_int(self.input_token_cap*self.input_nano_per_token)
+                             +_strict_int(self.output_token_cap*self.output_nano_per_token))
+            if not _strict_int(hold*self.max_calls)<=self.attempt_reserve_nano<=value['daily_budget_nano']:
+                raise _StrictLlmFailure('POLICY_INVALID')
+            return value
+        except (ValueError,TypeError,UnicodeError,RecursionError,OverflowError):
+            raise _StrictLlmFailure('POLICY_INVALID') from None
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class TechnicalTokenCount:
+    """An opaque receipt must also be authenticated by the trusted count DI.
+
+    Constructing these integers/hashes is insufficient. No production Technical
+    count implementation is supplied here; missing DI remains unavailable.
+    """
+    input_tokens: int
+    model: str
+    mapping: str
+    version: str
+    provenance_sha256: str
+    prompt_sha256: str
+    projection_sha256: str
+    request_sha256: str
+    receipt: Any
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class TechnicalLlmEvidence:
+    ordinal: int
+    analysis_id: UUID
+    attempt_id: UUID
+    policy_sha256: str
+    request_sha256: str
+    prompt_sha256: str
+    projection_sha256: str
+    model: str
+    service_tier: str
+    input_token_cap: int
+    output_token_cap: int
+    held_nano: int
+    entered: bool=False
+    response_received: bool=False
+    usage: tuple[int,int,int] | None=None
+    estimated_nano: int | None=None
+    response_model: str='unknown'
+    response_tier: str='unknown'
+    text_accepted: bool=False
+    reason: str | None=None
+    elapsed_ms: int=0
+
+
+class TechnicalRequestLlmBudget:
+    """One request-local, thread-safe consumed budget; no reset or durable claim.
+
+    The explicitly injected counter must count the exact projection and verify
+    its own opaque receipt/provenance. Arbitrary DI/SDK internals are outside
+    this local gate's provenance guarantee. No tokenizer/API is auto-created.
+    """
+    def __init__(self, *, policy, analysis_id, attempt_id, reserved_nano, started_at,
+                 deadline_at, counter=None, clock=time.monotonic, utcnow=None):
+        if type(policy) is not TechnicalLlmPolicy:
+            raise _StrictLlmFailure('POLICY_INVALID')
+        policy=TechnicalLlmPolicy(**{field.name:getattr(policy,field.name) for field in fields(policy)})
+        limits=policy.validated()
+        if (type(analysis_id) is not UUID or type(attempt_id) is not UUID or not analysis_id.int
+                or not attempt_id.int or analysis_id==attempt_id
+                or type(started_at) is not datetime or type(deadline_at) is not datetime
+                or started_at.utcoffset()!=UTC.utcoffset(None) or deadline_at.utcoffset()!=UTC.utcoffset(None)
+                or not 0<(deadline_at-started_at).total_seconds()<=limits['deadline_seconds']
+                or type(reserved_nano) is not int or reserved_nano!=policy.attempt_reserve_nano):
+            raise _StrictLlmFailure('POLICY_INVALID')
+        self._policy=policy
+        self._unit_prices=(policy.input_nano_per_token,policy.output_nano_per_token)
+        self._policy_json,self._policy_sha=policy.policy_json,policy.policy_sha256
+        self._analysis_id,self._attempt_id=UUID(int=analysis_id.int),UUID(int=attempt_id.int)
+        self._reserved=reserved_nano
+        self._utcnow=utcnow or (lambda:datetime.now(UTC));self._clock=clock
+        self._deadline_at=deadline_at
+        self._monotonic_deadline=clock()+max(0,(deadline_at-self._utcnow()).total_seconds())
+        self._identity=_strict_sha(_strict_json(dict(analysis_id=str(analysis_id),attempt_id=str(attempt_id),
+            policy_sha256=self._policy_sha,reserved_nano=reserved_nano,
+            started_at=started_at.isoformat(),deadline_at=deadline_at.isoformat())))
+        self._counter=counter
+        self._counter_binding=None if counter is None else tuple(getattr(counter,k,None) for k in ('mapping','version','provenance_sha256'))
+        self._lock=threading.Lock();self._records=();self._closed=None
+
+    def snapshot(self):
+        with self._lock:
+            return tuple(replace(record,analysis_id=UUID(int=record.analysis_id.int),
+                attempt_id=UUID(int=record.attempt_id.int)) for record in self._records)
+
+    @property
+    def closed_reason(self):
+        with self._lock:return self._closed
+
+    def _close(self,reason):
+        with self._lock:
+            if self._closed is None:self._closed=reason
+
+    def _remaining(self):
+        remaining=min(self._monotonic_deadline-self._clock(),(self._deadline_at-self._utcnow()).total_seconds())
+        if not math.isfinite(remaining) or remaining<=0:raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+        return remaining
+
+    def _policy_check(self):
+        self._policy.validated()
+        if (self._policy.policy_json,self._policy.policy_sha256)!=(self._policy_json,self._policy_sha):
+            raise _StrictLlmFailure('POLICY_INVALID')
+
+    def _request_check(self,adapter,request,dispatch=None):
+        self._policy_check();p=self._policy
+        if dispatch is not None:
+            sdk,responses,create=dispatch
+            if (adapter._client is not sdk or sdk.responses is not responses
+                    or not _strict_same_callable(responses.create,create)):
+                raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        if (adapter.model!=p.model or type(adapter._max_output_tokens) is not int
+                or adapter._max_output_tokens!=p.output_token_cap or adapter._store is not False
+                or type(getattr(adapter._client,'max_retries',None)) is not int or adapter._client.max_retries!=0
+                or type(adapter._timeout) not in (int,float) or not math.isfinite(adapter._timeout) or adapter._timeout<=0
+                or request['model']!=p.model or request['service_tier']!=p.service_tier
+                or request['max_output_tokens']!=p.output_token_cap or request['store'] is not False
+                or request.get('temperature')!=adapter._temperature):
+            raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        if adapter._temperature is not None and (type(adapter._temperature) not in (int,float)
+                or not math.isfinite(adapter._temperature) or not 0<=adapter._temperature<=2):
+            raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        self._remaining()
+
+    def _request_sha(self,request):
+        return _strict_sha(_strict_json({'request_identity':self._identity,'generation':request}))
+
+    def _count(self,request,prompt_sha,projection_sha,request_sha):
+        with self._lock:
+            if self._closed is not None:raise _StrictLlmFailure('CLOSED')
+            self._remaining()
+            if len(self._records)>=self._policy.max_calls:raise _StrictLlmFailure('BUDGET_EXCEEDED')
+        counter=self._counter
+        if counter is None:raise _StrictLlmFailure('COUNT_UNAVAILABLE')
+        # No lock during the injected counting/receipt verification operation.
+        evidence=counter.count(model=request['model'],input=request['input'],mapping=_COUNT_MAPPING,
+            prompt_sha256=prompt_sha,projection_sha256=projection_sha,request_sha256=request_sha)
+        if type(evidence) is not TechnicalTokenCount:raise _StrictLlmFailure('COUNT_INVALID')
+        _strict_int(evidence.input_tokens,zero=True)
+        _strict_hash(evidence.provenance_sha256)
+        for value in (evidence.prompt_sha256,evidence.projection_sha256,evidence.request_sha256):_strict_hash(value)
+        if (evidence.input_tokens>self._policy.input_token_cap or evidence.model!=request['model']
+                or type(evidence.model) is not str or type(evidence.mapping) is not str
+                or evidence.mapping!=_COUNT_MAPPING or type(evidence.version) is not str
+                or re.fullmatch('[A-Za-z0-9_.:-]{1,128}',evidence.version) is None
+                or self._counter_binding!=(evidence.mapping,evidence.version,evidence.provenance_sha256)
+                or self._counter_binding!=tuple(getattr(counter,k,None) for k in ('mapping','version','provenance_sha256'))
+                or evidence.prompt_sha256!=prompt_sha or evidence.projection_sha256!=projection_sha
+                or evidence.request_sha256!=request_sha or evidence.receipt is None
+                or type(evidence.receipt) in (bool,int,float)
+                or counter.verify(evidence,model=request['model'],input=request['input'],mapping=_COUNT_MAPPING,
+                    prompt_sha256=prompt_sha,projection_sha256=projection_sha,request_sha256=request_sha) is not True):
+            raise _StrictLlmFailure('COUNT_INVALID')
+        return evidence.input_tokens
+
+    def _reserve(self,adapter,request,prompt_sha,projection_sha,request_sha,dispatch):
+        with self._lock:
+            if self._closed is not None:raise _StrictLlmFailure('CLOSED')
+            self._request_check(adapter,request,dispatch)
+            if self._request_sha(request)!=request_sha:raise _StrictLlmFailure('COUNT_INVALID')
+            hold=self._policy.input_token_cap*self._policy.input_nano_per_token+self._policy.output_token_cap*self._policy.output_nano_per_token
+            if (len(self._records)>=self._policy.max_calls
+                    or _strict_int(sum(r.held_nano for r in self._records)+hold)>self._reserved):
+                raise _StrictLlmFailure('BUDGET_EXCEEDED')
+            ordinal=len(self._records)+1
+            self._records+= (TechnicalLlmEvidence(ordinal,self._analysis_id,self._attempt_id,self._policy_sha,
+                request_sha,prompt_sha,projection_sha,self._policy.model,self._policy.service_tier,
+                self._policy.input_token_cap,self._policy.output_token_cap,hold),)
+            return ordinal
+
+    def _enter(self,ordinal,adapter,request,request_sha,dispatch):
+        with self._lock:
+            record=self._records[ordinal-1]
+            if self._closed is not None or record.entered or record.request_sha256!=request_sha:
+                raise _StrictLlmFailure('CLOSED')
+            self._request_check(adapter,request,dispatch)
+            if self._request_sha(request)!=request_sha:raise _StrictLlmFailure('COUNT_INVALID')
+            remaining=min(float(adapter._timeout),self._remaining())
+            if adapter._deadline is not None:
+                narrower=adapter._deadline.remaining_seconds()
+                if type(narrower) not in (int,float) or not math.isfinite(narrower) or narrower<=0:
+                    raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+                remaining=min(remaining,narrower)
+            if not math.isfinite(remaining) or remaining<=0:raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+            self._records=self._records[:ordinal-1]+(replace(record,entered=True),)+self._records[ordinal:]
+            return remaining
+
+    def _finish(self,ordinal, *, response_received=False, usage=None, model='unknown',tier='unknown',
+                accepted=False,reason=None,elapsed_ms=0):
+        with self._lock:
+            if accepted:
+                self._policy_check();self._remaining()
+            if reason is not None and self._closed is None:self._closed=reason
+            if ordinal is None:return
+            record=self._records[ordinal-1]
+            estimate=None if usage is None else usage[0]*self._unit_prices[0]+usage[1]*self._unit_prices[1]
+            if estimate is not None and estimate>_STRICT_MAX:estimate=None
+            self._records=self._records[:ordinal-1]+(replace(record,response_received=response_received,
+                usage=usage,estimated_nano=estimate,response_model=model,response_tier=tier,text_accepted=accepted,
+                reason=reason,elapsed_ms=max(0,min(_STRICT_MAX,elapsed_ms))),)+self._records[ordinal:]
 
 
 class OpenAiLlmClient:
@@ -52,6 +370,8 @@ class OpenAiLlmClient:
         timeout: float = OPENAI_TIMEOUT_SECONDS,
         store: bool = OPENAI_STORE,
         deadline: Deadline | None = None,
+        strict: bool = False,
+        request_budget: TechnicalRequestLlmBudget | None = None,
     ) -> None:
         self._client = client
         self.model = model
@@ -60,6 +380,9 @@ class OpenAiLlmClient:
         self._timeout = timeout
         self._store = store  # False면 OpenAI 측 application state 미저장(stateless)
         self._deadline = deadline  # 있으면 per-call timeout을 남은 예산 이하로 줄인다(60초 계약 보호)
+        if type(strict) is not bool or (strict and type(request_budget) is not TechnicalRequestLlmBudget):
+            raise LlmCallError('TECHNICAL_LLM_POLICY_INVALID') from None
+        self._strict,self._request_budget=strict,request_budget
         # 후속 trace 배선용 best-effort 노출 — **마지막 성공 호출**의 토큰 사용량(실패/미호출 시 None).
         # 동시 실행에서 request-scoped state로 신뢰하지 말 것(공유 client면 다른 요청이 덮을 수 있음).
         self.last_usage: dict[str, int] | None = None
@@ -71,6 +394,8 @@ class OpenAiLlmClient:
         OpenAI 예외는 chain을 끊어(`from None`) raw 오류가 상위 traceback에 노출되지 않게 한다.
         """
         self.last_usage = None  # 진입 시 리셋 — 어떤 실패든 last_usage=None 보장
+        if self._strict:
+            return self._complete_strict(prompt)
         # deadline이 있으면 per-call timeout을 남은 예산 이하로 줄인다. 남은 예산이 없으면 호출 안 함.
         timeout = self._timeout
         if self._deadline is not None:
@@ -102,6 +427,82 @@ class OpenAiLlmClient:
         text = _extract_text(response)          # 빈 output이면 여기서 LlmCallError(last_usage는 None 유지)
         self.last_usage = _extract_usage(response)  # text 추출 성공 후에만 usage 저장
         return text
+
+    def _complete_strict(self,prompt):
+        budget=self._request_budget
+        if type(budget) is not TechnicalRequestLlmBudget:
+            raise LlmCallError('TECHNICAL_LLM_POLICY_INVALID') from None
+        ordinal=None;received=False;usage=None;model=tier='unknown';phase='VALIDATION'
+        started=time.perf_counter()
+        try:
+            if type(prompt) is not str:
+                raise _StrictLlmFailure('PROMPT_INVALID')
+            try:raw=prompt.encode('utf-8')
+            except UnicodeError:raise _StrictLlmFailure('PROMPT_INVALID') from None
+            if not raw or len(raw)>budget._policy.input_byte_cap:
+                raise _StrictLlmFailure('PROMPT_INVALID')
+            request=dict(model=self.model,input=prompt,max_output_tokens=self._max_output_tokens,
+                store=self._store,service_tier=budget._policy.service_tier)
+            if self._temperature is not None:request['temperature']=self._temperature
+            budget._request_check(self,request)
+            prompt_sha=_strict_sha(prompt)
+            projection_sha=_strict_sha(_strict_json({'model':request['model'],'input':prompt}))
+            request_sha=budget._request_sha(request)
+            sdk=self._client;responses=sdk.responses;create=responses.create
+            dispatch=(sdk,responses,create)
+            if not callable(create):raise _StrictLlmFailure('SDK_POLICY_INVALID')
+            phase='COUNT'
+            count=budget._count(request,prompt_sha,projection_sha,request_sha)
+            phase='VALIDATION'
+            ordinal=budget._reserve(self,request,prompt_sha,projection_sha,request_sha,dispatch)
+            timeout=budget._enter(ordinal,self,request,request_sha,dispatch)
+            phase='SDK'
+            response=create(**request,timeout=timeout)
+            received=True
+            observed=_extract_usage(response)
+            if observed is not None and all(value<=_STRICT_MAX for value in observed.values()):
+                usage=tuple(observed[key] for key in ('input_tokens','output_tokens','total_tokens'))
+            raw_model=getattr(response,'model',None);raw_tier=getattr(response,'service_tier',None)
+            model='unknown' if raw_model is None else 'match' if type(raw_model) is str and raw_model==budget._policy.model else 'mismatch'
+            tier='unknown' if raw_tier is None else 'match' if type(raw_tier) is str and raw_tier==budget._policy.service_tier else 'mismatch'
+            if usage is None:raise _StrictLlmFailure('USAGE_UNKNOWN')
+            if usage[0]!=count or usage[0]>budget._policy.input_token_cap or usage[1]>budget._policy.output_token_cap:
+                raise _StrictLlmFailure('USAGE_LIMIT_MISMATCH')
+            if model=='mismatch' or tier=='mismatch':raise _StrictLlmFailure('RESPONSE_METADATA_MISMATCH')
+            status=getattr(response,'status',None)
+            if type(status) is not str or status!='completed':raise _StrictLlmFailure('RESPONSE_NOT_COMPLETED')
+            # Usage is captured before text/quality validation and remains even
+            # when completed output is empty, malformed or over its UTF-8 cap.
+            raw_text=getattr(response,'output_text',None)
+            if type(raw_text) is not str or not raw_text.strip():raise _StrictLlmFailure('TEXT_INVALID')
+            try:output_bytes=raw_text.encode('utf-8')
+            except UnicodeError:raise _StrictLlmFailure('TEXT_INVALID') from None
+            if len(output_bytes)>budget._policy.output_byte_cap:raise _StrictLlmFailure('TEXT_INVALID')
+            output=getattr(response,'output',None)
+            if getattr(response,'refusal',None) is not None:raise _StrictLlmFailure('RESPONSE_NOT_COMPLETED')
+            if output is not None:
+                if type(output) is not list:raise _StrictLlmFailure('RESPONSE_NOT_COMPLETED')
+                for item in output:
+                    for content in getattr(item,'content',()) or ():
+                        if getattr(content,'type',None)=='refusal':raise _StrictLlmFailure('RESPONSE_NOT_COMPLETED')
+            text=raw_text.strip()  # accept the exact UTF-8-capped text snapshot, not a second property read
+            if self._deadline is not None:
+                narrower=self._deadline.remaining_seconds()
+                if type(narrower) not in (int,float) or not math.isfinite(narrower) or narrower<=0:
+                    raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+            budget._finish(ordinal,response_received=True,usage=usage,model=model,tier=tier,accepted=True,
+                elapsed_ms=int((time.perf_counter()-started)*1000))
+            self.last_usage=dict(zip(('input_tokens','output_tokens','total_tokens'),usage))
+            return text
+        except BaseException as error:
+            supplied=str(error) if type(error) is _StrictLlmFailure else None
+            reason=supplied if supplied in _STRICT_REASONS else 'SDK_UNKNOWN' if phase=='SDK' else 'COUNT_FAILED' if phase=='COUNT' else 'POLICY_INVALID'
+            budget._finish(ordinal,response_received=received,usage=usage,model=model,tier=tier,reason=reason,
+                elapsed_ms=int((time.perf_counter()-started)*1000))
+            if isinstance(error,asyncio.CancelledError):raise asyncio.CancelledError() from None
+            if isinstance(error,KeyboardInterrupt):raise KeyboardInterrupt() from None
+            if isinstance(error,SystemExit):raise SystemExit(1) from None
+            raise LlmCallError('TECHNICAL_LLM_'+reason) from None
 
 
 def _extract_text(response: Any) -> str:
@@ -138,6 +539,8 @@ def default_openai_client(
     max_retries: int = OPENAI_MAX_RETRIES,
     store: bool = OPENAI_STORE,
     deadline: Deadline | None = None,
+    strict: bool = False,
+    request_budget: TechnicalRequestLlmBudget | None = None,
 ) -> OpenAiLlmClient:
     """운영용 OpenAI client 생성. **API key·model 누락은 여기서 fail-fast**(config error, LlmCallError 아님).
 
@@ -146,6 +549,11 @@ def default_openai_client(
     으로 60초 계약 안에서 agent-level 재생성/fallback을 우선한다. `store=False`로 OpenAI 측 저장을 끈다.
     `run_technical_agent`는 이걸 자동 호출하지 않는다 — endpoint 통합에서 주입한다(A안).
     """
+    if type(strict) is not bool or (strict and type(request_budget) is not TechnicalRequestLlmBudget):
+        raise LlmCallError('TECHNICAL_LLM_POLICY_INVALID') from None
+    if strict:
+        try:request_budget._policy_check()
+        except _StrictLlmFailure:raise LlmCallError('TECHNICAL_LLM_POLICY_INVALID') from None
     settings = load_openai_settings()  # api_key·model 누락 시 RuntimeError(어디에 무엇을 넣을지 명시)
     sdk_client = openai.OpenAI(api_key=settings.api_key, timeout=timeout, max_retries=max_retries)
     return OpenAiLlmClient(
@@ -156,4 +564,6 @@ def default_openai_client(
         timeout=timeout,
         store=store,
         deadline=deadline,
+        strict=strict,
+        request_budget=request_budget,
     )

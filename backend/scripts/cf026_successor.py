@@ -384,7 +384,8 @@ def code_directory_identity(path):
 def reviewed_execution_root(source, data, module_hash):
     code_root = source.code_root.path
     if data.get("retry", {}).get("ordinal") in {2,3,4}:
-        code_root = code_root.parent / ("verith-supervisor-post-alignment-revalidation" if data["retry"]["ordinal"]==4 else "verith-supervisor-single-revalidation")
+        name = "verith-supervisor-closed-provider0-recovery" if data["retry"].get("recovery") is not None else "verith-supervisor-post-alignment-revalidation"
+        code_root = code_root.parent / (name if data["retry"]["ordinal"]==4 else "verith-supervisor-single-revalidation")
         expected = dict(path=str(code_root), directory=code_directory_identity(code_root), helper_sha256=module_hash)
         if data["retry"].get("current_code") != expected:
             raise Closed("CODE_DRIFT")
@@ -431,6 +432,10 @@ def check_retry(d, base):
     independent history check. They do not mint authority or restore consumed rights.
     """
     retry = d["retry"]
+    if type(retry) is dict and 'recovery' in retry:
+        check_closed_provider0_recovery(d, base)
+        ordinary=C.decode(C.canonical(d));ordinary['retry'].pop('recovery')
+        return check_retry4(ordinary, base)
     if type(retry) is dict and retry.get("ordinal") == 4:
         return check_retry4(d, base)
     if type(retry) is dict and retry.get("ordinal") == 3:
@@ -726,6 +731,7 @@ class Journal:
             or len(old["journal"]) >= (24 if event.get("phase") in {"final_accounting", "closing", "cleanup_confirmed"} else 21)
         ):
             raise Closed("JOURNAL_LIMIT")
+        event = event | getattr(self, 'recovery_context', {})
         value = old | dict(status=status, journal=[*old["journal"], event])
         if rights is not None:
             if any(type(rights[k]) is not int or not old["rights"][k] <= rights[k] <= 1 for k in old["rights"]):
@@ -781,6 +787,8 @@ class Session:
                     invocation=self.scope.data["invocation"], phase=operation,
                     additional_reserve_nano=50000000, total_reserved_nano=reservation_total(self.scope),
                     count_cap=1, generation_cap=1, http_cap=2, retry_cap=0)
+        if self.scope.data.get('retry',{}).get('recovery') is not None:
+            args.update(additional_reserve_nano=0, **recovery_context(self.scope))
         if "retry" in self.scope.data:
             args.update(retry_ordinal=self.scope.data["retry"]["ordinal"], retry_of_sha256=self.scope.data["retry"]["record_body_sha256"])
         if record is not None:
@@ -807,7 +815,8 @@ class Session:
                 if self.lease is None:
                     ordinal=self.scope.data.get('retry',{}).get('ordinal')
                     end = ('2026-11-12T08:00:00+00:00' if ordinal==4 else '2026-11-11T21:00:00+00:00' if ordinal==3 else None) if not self.synthetic else None
-                    self.lease = Lease(ack["issued_at"], self.scope.data["consent_at"], self.clock, not_after=end)
+                    consent=self.scope.data.get('retry',{}).get('recovery',{}).get('consent_at',self.scope.data['consent_at'])
+                    self.lease = Lease(ack["issued_at"], consent, self.clock, not_after=end)
                 elif C.parse_expiry(ack["issued_at"]) != self.lease.issued:
                     raise Closed("LEASE_DRIFT")
                 self.sequence = ack["sequence"]
@@ -1268,6 +1277,9 @@ async def _run(scope=None, *, source=None, authority=None, journal=None, synthet
         raise Closed("DEFAULT_UNAVAILABLE")
     clock = clock or Clock()
     scope.check(source, authority, synthetic=synthetic)
+    if scope.data.get('retry',{}).get('recovery') is not None:
+        check_recovery_claim(scope, required=True)
+        journal.recovery_context = recovery_context(scope)
     journal_scope = dict(path=str(journal.path), directory=journal.directory, lock=journal.lock_pin)
     if journal.scope_sha256 != scope.sha256 or scope.data["journal"] != journal_scope:
         raise Closed("JOURNAL_SCOPE")
@@ -1518,6 +1530,177 @@ def check_retry3(d, base):
 # Exact pre-CF038 contract, used only to validate already-consumed history.
 PRE_ALIGNMENT_SEMANTIC='c3cb325b4b4e92cf72b1ff62714dec6e12f8637220dcaa0b2d9443644b397251'
 PRE_ALIGNMENT_PROMPT='519c74093fd260c424e68feb877c963c318815237d5177522054ce2b1d728f39'
+
+
+RECOVERY_MARKER='CF037_ORDINAL4_CLOSED_PROVIDER0_RECOVERY_ONCE'
+RECOVERY_SCHEMA='cf037.ordinal4.closed-provider0-recovery.v1'
+RECOVERY_HISTORY={
+    'state':('successor-journal-retry-4-replacement-1/state.json','995663a6eed5b42282089236e8a3ab2da6db30fe5b991003dcac051fc892aac8'),
+    'phases':('successor-phases-retry-4-replacement-1.json','b96d8396338a5a0e34aff2aeb361a7438edf4782d6e9907478a3ec51190479f5'),
+    'postflight':('actual-independent-postflight.json','50994caa428c7457e6a1c8884e615e9e86494ad7ada9977bf5301c823ca7c994'),
+    'diagnostic':('actual-driver-UUID-diagnostic.json','e31d1093660dbd5d369e7d003cf096e19c29dc981adbdc32fd9a6e421e62daa7'),
+    'terminal':('actual-terminal.json','ac0251dd1edb5cb5ebf3bc60a6ddffe6e906fc8d12ebc1cb99e9ef5b05f329e6'),
+    'readback':('actual-supersession-readback.json','397dea8bcb971290aaffa5572b31cce79746308f4fc9b0b70b97458c000a68e1'),
+    'inputs':('reviewed-successor-inputs.json','fd11e5b529f7e4f3794191c187a3b95d09eb7e8885b7b35a7b79ec7feb0f103a'),
+    'manifest':('final-manifest.json','8e731160bc92a8785dff9be3c822973c6bd24c20e26b3c966d0fc2c665004f30'),
+}
+_RECOVERY_CLAIMED=set()
+
+
+def recovery_once(scope):
+    return C.digest(dict(successor_once=once_identity(scope),poststart_provider0_recovery=1))
+
+
+def recovery_context(scope):
+    r=scope.data['retry']['recovery'];claim=r.get('claim')
+    return dict(recovery_ordinal=1,recovery_once=recovery_once(scope),nominal_allocation_nano=50000000,
+        new_reserve_nano=0,total_reserved_nano=400000000,carried_reserved_nano=400000000,
+        allocation_reference_sha256=r['allocation_reference_sha256'],closed_state_sha256=r['evidence']['state']['sha256'],
+        closed_readback_sha256=r['evidence']['readback']['sha256'],closed_terminal_sha256=r['evidence']['terminal']['sha256'],
+        consumer_source_sha256=r['consumer_source_sha256'],claim_sha256=claim['sha256'] if claim else None,
+        predecessor_bootstrap=scope.data['predecessor_bootstrap'],draft_sha256=scope.data['request']['draft_sha256'],
+        request_sha256=scope.data['request']['request_sha256'],projection_sha256=scope.data['request']['projection_sha256'],
+        semantic_sha256=scope.data['semantic_sha256'],price_sha256=scope.data['price_sha256'])
+
+
+def claim_parent_stamp(path):
+    path=C.no_links(path);info=path.lstat()
+    if not C.stat.S_ISDIR(info.st_mode) or info.st_uid!=os.getuid() or C.stat.S_IMODE(info.st_mode)!=0o700:
+        raise Closed('RETRY_EVIDENCE')
+    return [info.st_dev,info.st_ino,info.st_uid,info.st_mode,info.st_nlink,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
+
+
+def recovery_claim_path(scope):
+    headers=[a.path for a in scope.artifacts if a.name=='header']
+    if len(headers)!=1:raise Closed('RETRY_EVIDENCE')
+    return headers[0].parent/'poststart-provider0-recovery1.json'
+
+
+def check_recovery_claim(scope, *, required=False):
+    r=scope.data['retry']['recovery'];pin=r['claim'];path=recovery_claim_path(scope)
+    if pin is None:
+        if required or path.exists() or claim_parent_stamp(path.parent)!=r['claim_parent_before']:
+            raise Closed('ALREADY_USED')
+        return
+    if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256','parent_after'} or pin['path']!=str(path):raise Closed('RETRY_EVIDENCE')
+    value=Artifact('claim',path,pin['stamp_json'],pin['sha256']).verify(path.parent.parent.parent)
+    expected=dict(schema='cf037.ordinal4.closed-provider0-claim.v1',recovery_once=recovery_once(scope),
+        successor_once=once_identity(scope),namespace=scope.data['namespace'],predecessor_bootstrap=scope.data['predecessor_bootstrap'],
+        invocation=scope.data['invocation'],process_id=os.getpid(),consumer_source_sha256=r['consumer_source_sha256'],
+        closed_state_sha256=r['evidence']['state']['sha256'],parent_before=r['claim_parent_before'],
+        nominal_allocation_nano=50000000,new_reserve_nano=0,total_reserved_nano=400000000)
+    if value!=expected or claim_parent_stamp(path.parent)!=pin['parent_after']:raise Closed('RETRY_EVIDENCE')
+
+
+def create_recovery_claim(scope, lock_fd):
+    """Fixed sibling claim, never an allocator; missing/deleted evidence stays used."""
+    r=scope.data['retry']['recovery'];path=recovery_claim_path(scope);lock=path.parent/'execution.lock'
+    if recovery_once(scope) in _RECOVERY_CLAIMED:raise Closed('ALREADY_USED')
+    if C.identity(os.fstat(lock_fd))!=r['canonical_lock']['identity'] or C.regular(lock,0o600)!=r['canonical_lock']['identity']:
+        raise Closed('RETRY_EVIDENCE')
+    fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    check_recovery_claim(scope)
+    _RECOVERY_CLAIMED.add(recovery_once(scope))
+    value=dict(schema='cf037.ordinal4.closed-provider0-claim.v1',recovery_once=recovery_once(scope),
+        successor_once=once_identity(scope),namespace=scope.data['namespace'],predecessor_bootstrap=scope.data['predecessor_bootstrap'],
+        invocation=scope.data['invocation'],process_id=os.getpid(),consumer_source_sha256=r['consumer_source_sha256'],
+        closed_state_sha256=r['evidence']['state']['sha256'],parent_before=r['claim_parent_before'],
+        nominal_allocation_nano=50000000,new_reserve_nano=0,total_reserved_nano=400000000)
+    C.exclusive_private_file(path,value);C.fsync_directory(path.parent)
+    raw,identity=C.read_fixed(path,0o600)
+    if C.decode(raw)!=value:raise Closed('JOURNAL_ACK_UNKNOWN')
+    return dict(path=str(path),stamp_json=C.canonical(identity),sha256=hashlib.sha256(raw).hexdigest(),parent_after=claim_parent_stamp(path.parent))
+
+
+def validate_closed_provider0_state(records):
+    """Fixed historical state predicate, separate from immutable artifact hashes."""
+    post=records['postflight'];state=records['state'];phases=records['phases'];events=state['journal']
+    account=[e for e in events if e.get('phase')=='final_accounting']
+    if (state['status']!='closed' or state['rights']!={'count':0,'generation':0} or state['preparation'] is not None or len(account)!=1
+        or events[-1]['phase']!='cleanup_confirmed' or len([e for e in events if e.get('phase')=='closing' and e.get('external_accounting_ACK') is True])!=1
+        or phases['sequence']!=4 or phases['phases']!=['reserve','issue','start','accounting']
+        or account[0]['ledger']!={'attempts':[],'blocked':False,'count':0,'generation':0,'reserved':0}
+        or account[0]['diagnostic']['supplier_stages']!=[] or account[0]['diagnostic']['segment']!='before_supplier'
+        or account[0]['diagnostic']['generation_authority_verified'] is not False or account[0]['diagnostic']['verifier_returned'] is not False
+        or account[0]['quality'] is not None or account[0]['gateway_diagnostic'] is not None
+        or any(post.get(k) is not True for k in ('closing_ACK','cleanup_journal','canonical_lock_released','exact_owned_container_absent','source_copies_absent'))
+        or post['preserved_reserved_nano']!=400000000 or records['terminal']['exit_code']!=1
+        or records['terminal']['output']!='SUCCESSOR_FAILED\r\nCF037_ENTRY_RESTORED_FALSE\r\n'):raise Closed('RETRY_EVIDENCE')
+
+
+def check_closed_provider0_recovery(d, base):
+    """Only the pinned closed B6R start-before-supplier failure, never other closed runs."""
+    r=d['retry'].get('recovery')
+    keys={'schema','ordinal','evidence','historical_code','consumer_source','consumer_source_sha256','canonical_lock',
+          'claim_parent_before','claim','allocation_reference_sha256','consent_message_id','consent_at'}
+    if (type(r) is not dict or set(r)!=keys or r['schema']!='cf037.ordinal4.closed-provider0-recovery-input.v1'
+        or type(r['ordinal']) is not int or r['ordinal']!=1 or d['retry'].get('ordinal')!=4
+        or r['consent_message_id']!='Sentinel_ecdb1aed91dc819193954bd64d788aa0'
+        or r['consent_at']!='2026-11-12T01:33:50.213277+00:00'):raise Closed('RETRY_SCOPE')
+    home=base/'.cf037-ordinal4-preaccept-replacement-20261112'
+    if type(r['evidence']) is not dict or set(r['evidence'])!=set(RECOVERY_HISTORY):raise Closed('RETRY_EVIDENCE')
+    records={}
+    for name,(rel,expected_hash) in RECOVERY_HISTORY.items():
+        pin=r['evidence'][name];path=home/rel
+        if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256'} or pin['path']!=str(path) or pin['sha256']!=expected_hash:raise Closed('RETRY_EVIDENCE')
+        if name=='inputs':
+            # This exact immutable historical input is 68,558 bytes. Generic
+            # artifacts and live stdin/readback retain their original 64KiB cap.
+            raw,_=C.read_fixed(path,0o600,C.decode(pin['stamp_json']),limit=131072)
+            if hashlib.sha256(raw).hexdigest()!=expected_hash:raise Closed('RETRY_EVIDENCE')
+            records[name]=C.decode(raw)
+        else:
+            records[name]=Artifact(name,path,pin['stamp_json'],pin['sha256']).verify(base)
+    old=records['inputs'];prior=old['template']['scope_template'];manifest=records['manifest'];runtime=old['runtime']
+    ordinary=C.decode(C.canonical(d['retry']));ordinary.pop('recovery');ordinary.pop('current_code')
+    prior_retry=C.decode(C.canonical(prior['retry']));replacement=prior_retry.pop('replacement');prior_retry.pop('current_code')
+    if (ordinary!=prior_retry or any(prior[k]!=d[k] for k in ('namespace','predecessor_bootstrap','predecessor_sha256','artifacts','request','counter','semantic_sha256','price_sha256'))
+        or len(runtime['source_manifest'])!=292 or runtime['source_count']!=292
+        or runtime['source_manifest']['backend/scripts/cf026_successor.py']!='eeb82a55297ef12e62f10f3f6ccfcf951880d0794347fcc03c927b3b4d1bda8d'
+        or manifest['private_active']!=old['private_code_sha256']):raise Closed('CODE_DRIFT')
+    oldroot=base/'verith-supervisor-post-alignment-recovery'
+    for name,want in runtime['source_manifest'].items():
+        path=C.no_links(oldroot/name)
+        if Path(name).is_absolute() or '..' in Path(name).parts or not path.is_relative_to(oldroot):raise Closed('CODE_DRIFT')
+        if hashlib.sha256(C.read_fixed(path,0o644,limit=1048576)[0]).hexdigest()!=want:raise Closed('CODE_DRIFT')
+    if set(r['historical_code'])!={'entry','runtime','assembly'}:raise Closed('CODE_DRIFT')
+    for name in ('entry','runtime','assembly'):
+        pin=r['historical_code'][name];path=home/('private_'+name+'.py')
+        if pin['path']!=str(path):raise Closed('CODE_DRIFT')
+        raw,_=C.read_fixed(path,0o600,C.decode(pin['stamp_json']),limit=131072)
+        if hashlib.sha256(raw).hexdigest()!=pin['sha256'] or pin['sha256']!=manifest['private_inactive'][path.name]:raise Closed('CODE_DRIFT')
+        if name=='entry' and (raw.count(b'RELEASED = False\n')!=1 or b'RELEASED = True\n' in raw):raise Closed('CODE_DRIFT')
+    validate_closed_provider0_state(records)
+    state=records['state'];phases=records['phases']
+    native=records['readback'];matches=[]
+    for turn in native.get('turns',[]):
+        for item in turn.get('items',[]):
+            if item.get('type')!='functionCallOutput' or item.get('namespace')!='cloud_threads' or item.get('name')!='send_message' or item.get('output',{}).get('truncated') is not False:continue
+            text=item['output'].get('text');match=C.re.fullmatch(r'<codex_delegation><source_thread_id>01a19f5f-a7ef-73f6-b533-fd4640d510f9</source_thread_id><input>([\s\S]*)</input></codex_delegation>',text or '')
+            if match and match[1].startswith('CF037_ORDINAL4_SUPERSESSION_ONCE\n'):matches.append((item['id'],turn['id'],C.decode(match[1].split('\n',1)[1])))
+    if (native['thread']['id']!='01a1af2c-7b0b-70fb-9601-d74715886038' or len(matches)!=1
+        or matches[0][:2]!=('fco_01a1cda0-5a0d-7646-ae26-e34fc56bb6f3','01a1cd9b-9718-75d7-8b2a-f4ce60a6b49d')):raise Closed('RETRY_EVIDENCE')
+    record=matches[0][2]
+    if (record['process_id']!=8553 or record['scope_sha256']!=state['scope_sha256'] or record['successor_once']!=once_identity(Scope(C.canonical(d),()))
+        or record['authority_sha256']!=old['authority_sha256'] or record['allocation_reference_sha256']!=replacement['record_body_sha256']
+        or r['allocation_reference_sha256']!=record['allocation_reference_sha256'] or phases['binding']!={k:v for k,v in record.items() if k not in {'schema','synthetic_only','process_id','authority_sha256','delegation','issued_at'}}
+        or phases['ack']['sequence']!=4 or phases['ack']['phase']!='accounting' or phases['ack']['consumed'] is not True):raise Closed('RETRY_EVIDENCE')
+    try:os.kill(record['process_id'],0)
+    except ProcessLookupError:pass
+    else:raise Closed('ALREADY_USED')
+    pin=r['consumer_source'];path=base/'.cf037-closed-provider0-recovery-20261112'/'runtime-source-manifest.json'
+    if pin['path']!=str(path):raise Closed('CODE_DRIFT')
+    current=Artifact('consumer_source',path,pin['stamp_json'],pin['sha256']).verify(base)['runtime_source_hashes']
+    if C.digest(current)!=r['consumer_source_sha256'] or current.get('backend/scripts/cf026_successor.py')!=d['module_sha256']:raise Closed('CODE_DRIFT')
+    root=Path(d['retry']['current_code']['path'])
+    for name,want in current.items():
+        if Path(name).is_absolute() or '..' in Path(name).parts:raise Closed('CODE_DRIFT')
+        if hashlib.sha256(C.read_fixed(root/name,0o644,limit=1048576)[0]).hexdigest()!=want:raise Closed('CODE_DRIFT')
+    header=next(a for a in d['artifacts'] if a=='header')
+    lock=Path(r['canonical_lock']['path'])
+    if (lock.name!='execution.lock' or lock.parent.parent!=base/'.cf026-openai-test-budget'
+        or C.digest(lock.parent.name)!=d['namespace'] or C.regular(lock,0o600)!=r['canonical_lock']['identity']):raise Closed('RETRY_EVIDENCE')
+    check_recovery_claim(Scope(C.canonical(d),tuple(Artifact(a,Path(r['canonical_lock']['path']).parent/'header.json','','') for a in [header])))
 
 
 def retry4_prior(data, base):

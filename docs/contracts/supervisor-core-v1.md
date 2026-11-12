@@ -580,6 +580,14 @@ runtime 참조를 해제하며 startup 자체는 HTTP·DB·provider·계정 발�
 
 선택한 실제 lifespan/설치 함수와 실제 core ASGI→Gateway→합성 phase/provider transport 검증은
 전체 AI main의 다른 서비스 import·실제 uvicorn startup·배포 설정/키·실공급자 검증과 구분한다.
+# CF037 · 고정 폐쇄 provider 미진입 복구 경계
+
+소비된 ordinal4/B6R replacement1의 정확 closed journal/phases와 원 source292·입력·원문 readback·terminal·독립 postflight가 일치하고 count/generation/공급이 모두 0임이 입증된 한 건에만 `poststart-provider0-recovery1`을 허용한다. 원 closed/ALREADY_USED, 원 once/배정과 누적400m은 불변이다. 현 source297과 UUID 계열 정규화는 역사 source와 별도로 pin하며 기존 일반 retry 검증은 바꾸지 않는다.
+
+같은 canonical namespace/bootstrap/ordinal4의 고정 recovery identity와 sibling claim 하나를 사용한다. source preload와 같은 canonical flock 뒤 O_EXCL/NOFOLLOW·0600·file/directory fsync로 claim을 먼저 소비하며, 검토 입력의 parent before stamp(mtime/ctime 포함)와 claim 이후 stamp를 검증한다. 삭제·소실을 available로 보거나 새 폴더/nonce/source/ID로 슬롯을 늘리지 않는다. 지원된 독립 durable 이력에서 미발급 확인과 정확한 단일 회복 record/readback은 부모 조율 책임이며 로컬 claim은 그 권위를 대체하지 않는다. authenticated readback/local claim ACK 전 새 journal state·자원·키·송신은 없다.
+
+초기 reserve 및 모든 phase/journal은 nominal allocation50m, 새 외부 예약0, carried/total400m을 구분한다. 새 consumer의 실제 issued_at 기준120초 시작/입력과600초 이하 lease·2026-11-12 08UTC 종료 상한, count1/gen1/HTTP2/retry0 및 기존55/60·정산/cleanup 한계를 유지한다. 확인 불명·취소·실패면 소비/hold를 보존하고 자동 recovery2/ordinal5나 추가 송신을 하지 않는다. 이 private 실행 보완은 production gateway/Flow 전체 인수나 새로운 운영 정책 발급이 아니다.
+
 
 ### 모델 후보의 종목과 수급 주체 구분
 

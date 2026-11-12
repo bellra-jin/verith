@@ -872,6 +872,15 @@ class CF024Boundary(unittest.TestCase):
         self.assertTrue(valid_flow_origins(Path(__file__).resolve().parents[2],sys.modules))
 
 class CF026Boundary(unittest.TestCase):
+    def test_closed_provider0_recovery_is_fixed_and_keeps_original_controller(self):
+        source=(Path(__file__).resolve().parents[2]/'scripts/cf026_successor.py').read_text()
+        for value in ('CF037_ORDINAL4_CLOSED_PROVIDER0_RECOVERY_ONCE',
+                      'poststart-provider0-recovery1.json','def check_closed_provider0_recovery(',
+                      'def create_recovery_claim(','st_mtime_ns,info.st_ctime_ns',
+                      'UUID(str(fresh.id))','not isinstance(fresh.id, UUID)'):
+            self.assertIn(value,source)
+        self.assertIn('if self.state["status"] != "offered":\n                raise Closed("ALREADY_USED")',source)
+
     def test_fixed_post_alignment_selection_preserves_controller(self):
         import hashlib
         from scripts import check_safe as c

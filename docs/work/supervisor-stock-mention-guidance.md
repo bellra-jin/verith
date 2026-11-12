@@ -41,3 +41,7 @@ semantic spec 복원 hash로 prompt 이외 변경0을 대조했다.
 새 실제 provider·key/env·DB·예약·서비스 활성화는0이다. 이 합성 검사는 모델이 새 안내를
 따른다는 실제 품질 검증이 아니다. 독립 검토·Ready PR/정확 head CI와 정상 merge 결과는
 로컬 검사 및 실제 의미 실패와 구분해 인계한다.
+
+PR57의 develop `dafed8360a6f7a4b7e01fb22422051b407ded51b`를 정상 merge로 통합했다.
+문서 끝의 추가 section 충돌은 양쪽 원문을 모두 보존해 해결했으며, upstream 복구 코드와
+이 prompt 변경을 서로 덮지 않았다. 통합 후 직접 영향 보호 검사를 다시 확인한다.

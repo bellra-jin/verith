@@ -19,3 +19,16 @@ Backend의 Flow client는 서비스 주소/포트/token 설정 오류와 내부4
 ## CF-018 새 실행의 한도·관측 비용
 
 새 Flow admission은 [사용 한도 v1](flow-usage-v1.md)의 필수 control을 거친다. 미설정은 새 실행만 닫고 기존 key·GET·snapshot-only 복구와 legacy NULL은 보존한다. 동일키 게시 복구는 추가 예약/dispatch가 없다. 새 usage metadata는 additive SPEC에만 요구하며 과거 row.spec_json에 새 정책을 소급하지 않는다. 수신 usage의 회계 transaction은 결과 공개/auth·deadline·게시 transaction과 별개다. 새 고정 오류 `USAGE_LIMIT_EXCEEDED`는429이며 v1 payload/기존 enum과 오류 의미는 보존한다.
+
+
+## KIS 실전 origin의 요청 전 검증
+
+실전 전용 조회의 자격 로더는 HTTPS `openapi.koreainvestment.com:9443`의 빈 경로 또는
+루트 `/`만 허용한다. 모의·다른 host/port·userinfo·추가 path/query/fragment·비문자열과
+공백/control 문자는 HTTP client·token cache·인증/자료 요청 전에 닫는다. 정상 주소의
+기존 trailing slash 정리와 `load_dotenv(..., override=False)` 계약은 보존한다.
+
+실패는 `KisError`의 고정 하위 타입 `KisConfigurationError`, 고정 code
+`KIS_CONFIGURATION_INVALID`로 구분하며 값·키·URL을 예외에 넣지 않는다. 기존 공개 HTTP
+오류 envelope와 보수 회계는 바꾸지 않으며 미송신 환급이나 자동 재시도 근거로 사용하지
+않는다. [집중 검증·한계](../work/flow-kis-origin-validation.md)를 따른다.

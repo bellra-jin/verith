@@ -694,8 +694,8 @@ async def test_cf042_public_preparation_survives_old15_and_replay_get_add_no_AI(
     response = await h.request(body_delay=2)
     assert response.status_code == 200
     state = h.scopes[0]['state']
-    assert state['core_deadline'] - state['core_preparation_started_at'] == 75
-    assert state['core_admission_deadline'] - state['core_preparation_started_at'] == 15
+    assert state['core_deadline'] == state['core_preparation_started_at'] + 75
+    assert state['core_admission_deadline'] == state['core_preparation_started_at'] + 15
     assert h.deadlines == [state['core_deadline']] and h.clock.time() > state['core_admission_deadline']
     assert h.admissions == h.ai == h.closed == 1
     assert h.session.commit.await_count >= 2 and h.session.rollback.await_count >= 2
@@ -1527,3 +1527,18 @@ def test_cf045_bad_paid_enable_configuration_does_not_break_settings_startup():
     assert value.SUPERVISOR_MEANING_ENABLED=='invalid'
     assert 'synthetic-hidden-' not in repr(value)
     assert A45.RuntimePolicy('true','{}','{}').active()
+
+
+def test_cf042_deadline_precision_at_observed_CI_fraction_never_extends_shorter_bound():
+    from starlette.requests import Request
+    from src.modules.supervisor.api.router import preparation_deadlines
+    started=183.325537915998
+    # The previous subtraction is not bit-exact at this real CI baseline.
+    assert (started+75)-started != 75
+    state=dict(core_preparation_started_at=started,core_deadline=started+75,core_admission_deadline=started+15)
+    request=Request(dict(type='http',method='POST',path='/api/supervisor/core/preparations',headers=[],state=state))
+    assert preparation_deadlines(request,started+4)==started+75
+    assert state['core_admission_deadline']==started+15
+    state['core_deadline']=state['core_admission_deadline']=started+10
+    assert preparation_deadlines(request,started+4)==started+10
+    assert state['core_admission_deadline']==started+10

@@ -27,7 +27,7 @@
 | 검사 | 결과 |
 |---|---|
 | meaning-self | 6 통과 |
-| meaning-unit, 단일 기존 collection | 275 통과, guard 위반 0 |
+| meaning-unit, 단일 기존 collection | 276 통과, guard 위반 0 |
 | 직접 영향 meaning-assembly-unit | 103 통과, guard 위반 0 |
 | 고정 `--verify-supervisor-meaning-runtime-db` | 소유 PG 12그룹 통과 |
 | source/dependency/origin 사후 대조 | 통과 |
@@ -58,3 +58,12 @@ PG에서 SQL UUID subtype을 strict Binding에 넘기는 실제 경계 오류는
 Technical 설치·다른 WIP·다른 프로젝트 DB/컨테이너와 서비스별 환경 파일은 변경하지 않았다.
 
 Ready PR의 정확 head CI와 develop 정상 병합 결과는 최종 게시 인계에서 구분한다.
+
+## 게시 CI의 시간 정밀도 회귀
+
+첫 PR CI에서 기존 CF042 단언의 `(258.325537915998 - 183.325537915998) == 75`가
+부동소수점 상쇄로 실패했다(274 통과/1 실패, guard0). 제품 timeout은 바꾸지 않고
+`deadline == started + 75`, `admission == started + 15`를 정확 비교하도록 수정했다.
+실제 실패 기준값의 결정적 회귀와 더 짧은10초 기한의 미연장을 추가했으며,
+보호 meaning-unit 276개 통과·guard0과 별도 읽기 리뷰를 확인했다. 제품 코드/PG 경로는
+변경되지 않아 기존 self6/assembly103/소유PG12의 직접 증거를 보존했다.

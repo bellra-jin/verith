@@ -80,11 +80,12 @@ class PreparationClosed(Exception):
 
 
 class PreparationService:
-    def __init__(self, session, *, principal, client, resolver_factory=StockResolverService, epoch_id=None):
+    def __init__(self, session, *, principal, client, resolver_factory=StockResolverService, epoch_id=None, meaning_policy=None):
         self.session = session
         self.principal = principal
         self.client = client
         self.resolver_factory = resolver_factory
+        self.meaning_policy = meaning_policy
         self.epoch_id = epoch_id  # Private verifier injection only; no HTTP field chooses an epoch.
 
     async def auth(self):
@@ -139,7 +140,19 @@ class PreparationService:
             raise TimeoutError()
         if now >= ttl_deadline:
             raise PreparationClosed()
-        value = await self.client.plan_supervisor_core(dict(schema_version=VERSION, request_id=str(request_id), trace_id=str(trace), data=payload, error=None))
+        grant = None
+        if payload['phase']=='start' and not dispatch.ancestors and self.meaning_policy is not None:
+            from src.modules.supervisor.application.meaning_accounting_service import MeaningRuntimeService
+            grant = await MeaningRuntimeService(self.session,runtime_policy=self.meaning_policy).issue(dispatch.principal,identity['id'],deadline=min(dispatch.deadline,ttl_deadline))
+            # Metadata ACK and a new auth/TTL observation precede actual AI I/O.
+            ttl_deadline = min(ttl_deadline,await self.dispatch_guard(dispatch))
+        now=asyncio.get_running_loop().time()
+        if now>=dispatch.deadline:
+            raise TimeoutError()
+        if now>=ttl_deadline:
+            raise PreparationClosed()
+        envelope=dict(schema_version=VERSION, request_id=str(request_id), trace_id=str(trace), data=payload, error=None)
+        value = await self.client.plan_supervisor_core(envelope,meaning_grant=grant) if grant is not None else await self.client.plan_supervisor_core(envelope)
         if type(value) is not dict or set(value) != {'schema_version', 'request_id', 'trace_id', 'data', 'error'} or value['schema_version'] != VERSION or value['request_id'] != str(request_id) or value['trace_id'] != str(trace) or value['error'] is not None:
             raise CoreInvalid()
         result = MeaningRunOutput.model_validate(value['data'])

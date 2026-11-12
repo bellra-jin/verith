@@ -765,6 +765,20 @@ class CF023Boundary(unittest.TestCase):
             self.assertIn(path,c.CF023_SOURCES)
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
 
+    def test_runtime_exact_sources_and_closed_inputs(self):
+        from scripts import check_safe as c
+        import hashlib
+        root=Path(__file__).resolve().parents[3]
+        self.assertEqual(set(c.CF045_INPUTS),{'ai/src/supervisor/application/meaning_gateway_factory.py','ai/src/supervisor/infrastructure/backend/meaning_budget_client.py','ai/src/main.py'})
+        self.assertEqual(len(c.CF023_INPUTS),32)
+        for path,digest in c.CF045_INPUTS.items():
+            self.assertTrue(c.source_allowed(path));self.assertFalse(c.source_allowed(path+'.adjacent'))
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,path)).hexdigest(),digest)
+        self.assertEqual(len(c.CF045_SOURCES),2)
+        source=(root/'backend/scripts/cf002_interactive_login.py').read_text()
+        self.assertIn('\"--verify-supervisor-meaning-runtime-db\", action=\"store_true\"',source)
+        self.assertIn('verify_meaning_runtime(proof)',source)
+
     def test_accounting_exact_sources_and_owned_flag(self):
         from scripts import check_safe as c
         self.assertEqual(len(c.CF044_SOURCES),5)
@@ -788,7 +802,7 @@ class CF023Boundary(unittest.TestCase):
         indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
         raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
         with patch.object(c.subprocess,'check_output',return_value=raw):copied=c.selected_sources(root,meaning_only=True)
-        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF023_INPUTS))
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF023_INPUTS)|set(c.CF045_INPUTS))
         self.assertIn(c.CF023_FIXTURE,copied)
     def test_independent_modes(self):
         from scripts import check_safe as c
@@ -823,7 +837,7 @@ class CF024Boundary(unittest.TestCase):
         indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
         raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
         with patch.object(c.subprocess,'check_output',return_value=raw):copied=c.selected_sources(root,assembly_only=True)
-        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF023_INPUTS))
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF023_INPUTS)|set(c.CF045_INPUTS))
     def test_fixed_modes(self):
         from scripts import check_safe as c
         from unittest.mock import patch
@@ -866,7 +880,7 @@ class CF026Boundary(unittest.TestCase):
             copied = c.selected_sources(root, controller_only=True)
             assembly_copied = c.selected_sources(root, assembly_only=True)
         self.assertNotIn("backend/scripts/cf026_successor.py", assembly_copied)
-        self.assertEqual({p for p in copied if p.startswith('ai/')}, set(c.CF023_INPUTS))
+        self.assertEqual({p for p in copied if p.startswith('ai/')}, set(c.CF023_INPUTS)|set(c.CF045_INPUTS))
         self.assertIn('backend/scripts/cf026_supervisor_live_controller.py', copied)
         self.assertIn('backend/scripts/cf026_successor.py', copied)
         self.assertNotIn('backend/scripts/cf026_successor_other.py', copied)

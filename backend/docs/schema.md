@@ -353,3 +353,18 @@ root/snapshot/index가 있으면 거절하며 기존 데이터나 소유자를 �
 `supervisor_meaning_accounts`: UUID PK, auth owner FK; operation/owner/canonical scope SHA UNIQUE. 정책·기간·model/spec/price/caps canonical TEXT/hash와 필수 총액/시도액/횟수, 누적예약·관측추정액·blocked. 예약 자동환급 없음.
 `supervisor_meaning_reservations`: account+owner/preparation+owner 복합 FK, 저장 session FK, preparation/attempt UNIQUE. 고정 binding TEXT/SHA·예약액·TTL·held/observed/unknown/anomalous와 정제 receipt TEXT/hash.
 새 revision c44001a7e0001은 c35001a7e0001 뒤 additive이며 기존 표를 변경하지 않는다. 두 새 표 ACCESS EXCLUSIVE 잠금 후 비어 있을 때만 downgrade한다. 운영 정책 발급·Gateway/송신 권위는 연결하지 않는다.
+
+### CF045 준비별 의미 보완 grant
+
+`c45001a7e0001`은 기존 CF044 계정·예약을 유지하고 `supervisor_meaning_grants`를 추가한다.
+준비/attempt/nonce digest는 각각 UNIQUE이며 account·preparation·reservation의 동일 owner와
+예약의 account/preparation/attempt를 composite FK로 결합한다. 원 Principal fingerprint와
+준비 Binding, 정책/scope/counter hash, 요청 만료 시각을 저장한다. 준비 TTL은 기존 Binding에 남는다.
+nonce 평문·질문·prompt·provider payload·키는 이 표에 저장하지 않는다.
+
+count 소비와 CF044 예약·grant 연결, generation 소비, 정산과 terminal ACK는 각각 같은 SQL
+transaction으로 commit한다. count/generation receipt는 최초 승자만 송신권을 반환하며 replay와
+SELECT-only reconcile은 `newly_authorized=False`다. observed도 자동 환급하지 않고,
+unknown/anomalous는 기존 예약을 유지하며 계정을 막는다. terminal ACK가 없는 held는 정산 미확인이다.
+다운그레이드는 새 grant 표를 잠근 뒤 비어 있을 때만 허용한다. 이 migration은 기존 정책/행을
+발급·갱신하거나 실제 운영 DB에 자동 적용하지 않는다.

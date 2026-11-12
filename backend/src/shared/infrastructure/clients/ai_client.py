@@ -60,13 +60,18 @@ class AIClient:
         self._flow_token = service_token
         self._fundamental_token = service_token
 
-    async def plan_supervisor_core(self,payload:dict)->dict:
+    async def plan_supervisor_core(self,payload:dict,*,meaning_grant=None)->dict:
         # Policy2/attempt fields travel only inside the authenticated typed core envelope.
         from urllib.parse import urlsplit
         from src.modules.supervisor.domain.contracts import canonical,decode
         try:
             target=urlsplit(self._base_url);httpx.URL(self._base_url);token=self._flow_token.encode('ascii')
             if target.scheme not in {'http','https'} or not target.hostname or target.port==0 or target.username or target.password or target.path not in {'','/'} or target.query or target.fragment or len(token)<32 or any(c<32 or c>126 for c in token):raise ValueError()
+            extra={}
+            if meaning_grant is not None:
+                import re
+                if type(meaning_grant) is not str or re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.[0-9a-f]{64}',meaning_grant) is None:raise ValueError()
+                extra['X-Supervisor-Meaning-Grant']=meaning_grant
             body=canonical(payload).encode('utf8')
             if len(body)>16384:raise ValueError()
         except (ValueError,TypeError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Supervisor request unavailable') from None
@@ -75,7 +80,7 @@ class AIClient:
         try:
             async with asyncio.timeout(timeout):
                 async with httpx.AsyncClient(timeout=timeout,transport=self._transport,trust_env=False,follow_redirects=False) as client:
-                    async with client.stream('POST',self._base_url+'/internal/supervisor/core/plan',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Flow-Service-Token':token.decode('ascii')}) as response:
+                    async with client.stream('POST',self._base_url+'/internal/supervisor/core/plan',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Flow-Service-Token':token.decode('ascii'),**extra}) as response:
                         if response.status_code==504:raise AITimeoutError('Supervisor request unavailable')
                         if response.status_code!=200:raise AIUnavailableError('Supervisor request unavailable')
                         if response.headers.get('content-encoding','identity').lower()!='identity':raise AIContractError('Supervisor request unavailable')

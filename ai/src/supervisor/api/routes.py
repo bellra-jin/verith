@@ -10,7 +10,7 @@ PRIVATE={'Cache-Control':'private, no-store'}
 def error(status,code):
     return JSONResponse({'error':{'code':code,'message':'Supervisor plan unavailable'}},status_code=status,headers=PRIVATE)
 
-def make_router(*,gateway=None):
+def make_router(*,gateway=None,runtime=None):
     router=APIRouter(prefix='/internal/supervisor',tags=['supervisor-internal'])
     @router.post('/analyze')
     async def legacy():return error(403,'FEATURE_UNAVAILABLE')
@@ -44,10 +44,10 @@ def make_router(*,gateway=None):
             if len(canonical(result).encode('utf8'))>32768:raise ValueError()
             return JSONResponse(result,headers=PRIVATE)
         except Exception:return error(502,'RESULT_CONTRACT_INVALID')
-    router.include_router(make_core_router(gateway=gateway))
+    router.include_router(make_core_router(gateway=gateway,runtime=runtime))
     return router
 
-def make_core_router(*,gateway=None,token=None,enabled=None):
+def make_core_router(*,gateway=None,token=None,enabled=None,runtime=None):
     from uuid import uuid4
     core=APIRouter()
     def fail(status,code,ids=None):
@@ -85,7 +85,19 @@ def make_core_router(*,gateway=None,token=None,enabled=None):
             policy2=isinstance(data,dict) and data.get('policy_version')=='supervisor.flow-core.2'
             async with asyncio.timeout_at(started+(65 if policy2 else 15)):
                 from src.supervisor.application.runtime import run_core
-                result=await run_core(body.data,gateway=gateway)
+                selected=gateway
+                if selected is None and policy2 and body.data.phase=='start' and runtime is not None:
+                    from src.supervisor.application.meaning_policy import assess
+                    from src.supervisor.infrastructure.meaning_gateway import CounterUnavailable
+                    if assess(body.data.draft).needs_supplement:
+                        installed=runtime() if callable(runtime) else runtime
+                        values=[v for k,v in request.scope['headers'] if k.lower()==b'x-supervisor-meaning-grant']
+                        try:
+                            if installed is not None and len(values)==1:
+                                selected=installed.gateway(body.data.draft,values[0].decode('ascii'),deadline=min(started+60,asyncio.get_running_loop().time()+60))
+                        except (CounterUnavailable,ValueError,TypeError,UnicodeError):
+                            selected=None
+                result=await run_core(body.data,gateway=selected)
                 value=dict(schema_version='supervisor.core.v1',request_id=body.request_id,trace_id=body.trace_id,data=result.model_dump(mode='json'),error=None)
                 if len(canonical(value).encode('utf8'))>65536:return fail(502,'RESULT_CONTRACT_INVALID',(body.request_id,body.trace_id))
                 return JSONResponse(value,headers=PRIVATE)

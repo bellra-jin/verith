@@ -694,8 +694,8 @@ async def test_cf042_public_preparation_survives_old15_and_replay_get_add_no_AI(
     response = await h.request(body_delay=2)
     assert response.status_code == 200
     state = h.scopes[0]['state']
-    assert state['core_deadline'] - state['core_preparation_started_at'] == 75
-    assert state['core_admission_deadline'] - state['core_preparation_started_at'] == 15
+    assert state['core_deadline'] == state['core_preparation_started_at'] + 75
+    assert state['core_admission_deadline'] == state['core_preparation_started_at'] + 15
     assert h.deadlines == [state['core_deadline']] and h.clock.time() > state['core_admission_deadline']
     assert h.admissions == h.ai == h.closed == 1
     assert h.session.commit.await_count >= 2 and h.session.rollback.await_count >= 2
@@ -876,7 +876,10 @@ def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
     tree = ast.parse(Path(sys.modules[AccessBoundary.__module__].__file__).read_text())
     klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AccessBoundary')
     fn = next(n for n in klass.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '__call__')
-    fn.body = [n for n in fn.body if not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
+    # CF045 adds only these two internal endpoints; keep the old public digest.
+    additions=[n for n in fn.body if isinstance(n,ast.If) and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Name) and n.test.left.id=='path' and len(n.test.ops)==1 and isinstance(n.test.ops[0],ast.In) and isinstance(n.test.comparators[0],ast.Set) and {v.value for v in n.test.comparators[0].elts}=={'/internal/supervisor/meaning/authorize','/internal/supervisor/meaning/settle'}]
+    assert len(additions)==1
+    fn.body = [n for n in fn.body if n is not additions[0] and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'
 
 
@@ -1319,3 +1322,223 @@ async def test_cf044_commit_cancellation_survives_rollback_failure():
 async def test_cf044_new_cancellation_during_rollback_is_not_swallowed():
     session=NS(commit=AsyncMock(side_effect=RuntimeError()),rollback=AsyncMock(side_effect=asyncio.CancelledError()))
     with pytest.raises(asyncio.CancelledError):await Accounting44(session).mutation(AsyncMock(return_value='not-acknowledged'))
+
+# CF045 request-scoped production assembly, entirely synthetic transports.
+from src.modules.supervisor.domain import meaning_accounting as A45
+
+def runtime45(*,backend=None,provider_transport=None,supplier=None):
+    F=sys.modules['src.supervisor.application.meaning_gateway_factory']
+    return F.MeaningRuntime(F.MeaningRuntimeOptions(backend_origin='http://127.0.0.1:8200',service_token='meaning-'+('s'*40),counter_agreement=agreement(),key_supplier=supplier or AsyncMock(return_value='synthetic-only'),backend_transport=backend,provider_transport=provider_transport,allow_loopback=True))
+
+@pytest.mark.parametrize('change',['none','offset','draft','model','schema','instructions','bool','extra'])
+def test_cf045_provider_hash_space_is_verified_not_substituted(change):
+    d=draft('현대건설 외국인 말고 3주 수급');r=O.rendered_request(d)
+    raw=M.canonical(d.model_dump(mode='json'));spec=A45.canonical(B.MEANING_SPEC)
+    if change=='draft':r['input'][0]['content'][0]['text']+=' '
+    elif change=='model':r['model']='other'
+    elif change=='schema':r['text']['format']['schema']={}
+    elif change=='instructions':r['instructions']+=' '
+    elif change=='bool':r['store']=0
+    elif change=='extra':r['metadata']={}
+    elif change=='offset':r['max_output_tokens']=True
+    if change=='none':
+        request,projection=A45.provider_identity(r,raw,spec)
+        assert (request,projection)==(M.sha(r),M.sha({k:r[k] for k in O.INPUT_FIELDS}))
+        assert request!=B.sha({'preparation':'separate'})
+    else:
+        with pytest.raises(A45.AccountingConflict):A45.provider_identity(r,raw,spec)
+
+@pytest.mark.parametrize('change',['default','scheme','token','userinfo','query','slash','supplier'])
+def test_cf045_runtime_install_is_inert_and_strict(change):
+    F=sys.modules['src.supervisor.application.meaning_gateway_factory'];supplier=AsyncMock()
+    values=dict(backend_origin='https://backend.example',service_token='s'*40,counter_agreement=agreement(),key_supplier=supplier)
+    if change=='scheme':values['backend_origin']='http://backend.example'
+    elif change=='token':values['service_token']='short'
+    elif change=='userinfo':values['backend_origin']='https://user:secret@backend.example'
+    elif change=='query':values['backend_origin']='https://backend.example?x=1'
+    elif change=='slash':values['backend_origin']+='/'
+    elif change=='supplier':values['key_supplier']=None
+    if change=='default':F.MeaningRuntime(F.MeaningRuntimeOptions(**values))
+    else:
+        with pytest.raises(sys.modules['src.supervisor.infrastructure.meaning_gateway'].CounterUnavailable):F.MeaningRuntime(F.MeaningRuntimeOptions(**values))
+    supplier.assert_not_called()
+
+async def test_cf045_actual_core_factory_gateway_client_authorize_settle_mock_http():
+    from fastapi import FastAPI,Request
+    phases=[];outbound=[];keys=AsyncMock(return_value='synthetic-only');handle=str(uuid4())+'.'+'a'*64
+    server=FastAPI()
+    @server.post('/internal/supervisor/meaning/{phase}')
+    async def phase(phase:str,request:Request):
+        value=await request.json();phases.append((phase,value))
+        assert request.headers['x-supervisor-meaning-grant']==handle
+        if phase=='settle':
+            assert value['observation']['state']=='observed' and value['observation']['total_tokens']==110
+            return {'settlement':{'state':'observed'}}
+        assert A45.provider_identity(value['rendered_request'],M.canonical(d.model_dump(mode='json')),A45.canonical(B.MEANING_SPEC))==(value['request_sha256'],value['projection_sha256']) if value['phase']=='count' else value['evidence']['input_tokens']==100
+        receipt=dict(phase=value['phase'],reservation_id=str(uuid4()),binding_sha256='a'*64,request_sha256=value['request_sha256'],projection_sha256=value['projection_sha256'],evidence_sha256='b'*64)
+        return dict(newly_authorized=True,remaining_ms=50000,receipt=receipt)
+    def send(request):
+        outbound.append(request.url.path)
+        return httpx.Response(200,json=dict(object='response.input_tokens',input_tokens=100) if request.url.path==O.COUNT_PATH else provider(proposal(mentions=[dict(evidence=ev(d.original_query,'현대건설'),negation=None)])))
+    d=draft('현대건설 수급')
+    rt=runtime45(backend=httpx.ASGITransport(app=server),provider_transport=httpx.MockTransport(send),supplier=keys)
+    app=load_meaning(runtime=rt)
+    payload=dict(schema_version=B.VERSION,request_id=str(uuid4()),trace_id=str(uuid4()),data=dict(phase='start',policy_version='supervisor.flow-core.2',draft=d.model_dump(mode='json'),attempt_id=str(uuid4())),error=None)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://ai') as c:
+        result=await c.post('/internal/supervisor/core/plan',json=payload,headers={'X-Flow-Service-Token':TOKEN,'X-Supervisor-Meaning-Grant':handle})
+    assert result.status_code==200 and result.json()['data']['meaning_status']=='supplemented'
+    assert [p[0] for p in phases]==['authorize','authorize','settle'] and outbound==[O.COUNT_PATH,O.GENERATE_PATH]
+    keys.assert_awaited_once()
+
+async def test_cf045_deterministic_and_continue_do_not_create_gateway():
+    rt=NS(gateway=lambda *a,**kw:(_ for _ in ()).throw(AssertionError('deterministic gateway forbidden')))
+    app=load_meaning(runtime=rt)
+    d=draft('삼성전자 수급');first=await P.start_v2(d)
+    base=dict(schema_version=B.VERSION,request_id=str(uuid4()),trace_id=str(uuid4()),error=None)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://ai') as c:
+        for value in (dict(phase='start',draft=d.model_dump(mode='json')),dict(phase='continue',draft=d.model_dump(mode='json'),frame=first.frame.model_dump(mode='json'),resolution=resolution().model_dump(mode='json'))):
+            value.update(policy_version='supervisor.flow-core.2',attempt_id=str(uuid4()))
+            response=await c.post('/internal/supervisor/core/plan',json=base|{'data':value},headers={'X-Flow-Service-Token':TOKEN})
+            assert response.status_code==200
+
+@pytest.mark.parametrize('case',['same','no-owner','extra','noncanonical','counter','fee','tiny'])
+def test_cf045_explicit_existing_account_selection_and_worst_case(case):
+    from dataclasses import replace,asdict
+    owner=uuid4();identity=uuid4();v={str(owner):dict(account_id=str(identity),scope_sha256='a'*64,policy_sha256='b'*64)}
+    counter=asdict(agreement());counter['input_fields']=list(counter['input_fields'])
+    if case=='no-owner':v={}
+    elif case=='extra':v[str(owner)]['other']=1
+    elif case=='noncanonical':v[str(owner)]['account_id']=str(identity).upper()
+    elif case=='counter':counter['input_fields']=['model']
+    elif case=='fee':counter['counting_fee_bound_nano']=True
+    policy=A45.RuntimePolicy(True,json.dumps(v),json.dumps(counter))
+    if case in {'same','tiny'}:
+        account,scope,expected,raw=policy.select(owner)
+        assert account==identity
+        p=replace(accounting_policy44(),attempt_nano=50000000,limit_nano=100000000)
+        if case=='tiny':
+            with pytest.raises(A45.AccountingConflict):A45.maximum_reserve(accounting_policy44(),raw)
+        else:assert A45.maximum_reserve(p,raw)==23654401
+    else:
+        with pytest.raises((A45.AccountingConflict,ValueError)):policy.select(owner)
+
+@pytest.mark.parametrize('bad',['token','flow-token','grant','duplicate','origin','cookie','authorization','query','method','unknown','encoding','contenttype'])
+async def test_cf045_internal_auth_rejects_before_body_or_database(monkeypatch,bad):
+    from fastapi import FastAPI
+    from src.modules.supervisor.api import meaning_phase_router as R
+    from src.shared.http.access_boundary import AccessBoundary
+    monkeypatch.setattr(R.settings,'SUPERVISOR_MEANING_SERVICE_TOKEN','s'*40)
+    headers=[(b'host',b'backend'),(b'content-type',b'application/json'),(b'x-supervisor-meaning-service-token',b's'*40),(b'x-supervisor-meaning-grant',(str(uuid4())+'.'+'a'*64).encode())]
+    scope={'type':'http','asgi':{'version':'3.0'},'method':'POST','path':'/internal/supervisor/meaning/authorize','query_string':b'','headers':headers}
+    if bad=='token':headers[2]=(headers[2][0],b'bad')
+    elif bad=='flow-token':headers[2]=(b'x-flow-service-token',b's'*40)
+    elif bad=='grant':headers[3]=(headers[3][0],b'malformed')
+    elif bad=='duplicate':headers.append(headers[2])
+    elif bad in {'origin','cookie','authorization','unknown','encoding'}:headers.append(({'unknown':b'x-other','encoding':b'content-encoding'}.get(bad,bad.encode()),b'value'))
+    elif bad=='query':scope['query_string']=b'x=1'
+    elif bad=='method':scope['method']='GET'
+    elif bad=='contenttype':headers[1]=(b'content-type',b'text/plain')
+    touched=[];messages=[]
+    async def app(scope,receive,send):touched.append('app')
+    async def receive():touched.append('body');raise AssertionError('auth before body')
+    await AccessBoundary(app)(scope,receive,lambda msg: capture45(messages,msg))
+    assert touched==[] and messages[0]['status']==403
+
+async def capture45(messages,value):messages.append(value)
+
+async def test_cf045_readonly_handle_reconcile_never_flushes_locks_or_commits(monkeypatch):
+    from contextlib import nullcontext
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningRuntimeService
+    from src.modules.supervisor.infrastructure import meaning_accounting_repository as repo
+    identity=uuid4();attempt=uuid4();rid=uuid4();owner=uuid4();nonce='a'*64
+    row=NS(id=identity,owner_user_id=owner,owner_session_id=uuid4(),preparation_id=uuid4(),attempt_id=attempt,account_id=uuid4(),nonce_sha256=A45.sha(nonce),principal_sha256='a'*64,binding_json='{}',binding_sha256='b'*64,counter_json='{}',counter_sha256='c'*64,policy_sha256='d'*64,scope_sha256='e'*64,deadline_at=None,reservation_id=rid,provider_request_sha256='f'*64,provider_projection_sha256='a'*64,count_receipt='{"phase":"count"}',generation_receipt=None,terminal_sha256=None)
+    reserved=NS(id=rid,account_id=row.account_id,binding_sha256='b'*64,state='held',reserved_nano=50000000,estimated_nano=None,receipt_sha256=None)
+    session=NS(no_autoflush=nullcontext(),commit=AsyncMock(),flush=AsyncMock(),rollback=AsyncMock(),new=['unrelated-dirty-object'])
+    reads=[]
+    async def grant(s,identity,*,lock=False):reads.append(lock);return row
+    async def reservation(s,who,identity,*,lock=True):reads.append(lock);return reserved
+    monkeypatch.setattr(repo,'grant',grant);monkeypatch.setattr(repo,'reservation',reservation)
+    value=await MeaningRuntimeService(session).reconcile_phase(str(identity)+'.'+nonce,dict(action='reconcile',phase='count',attempt_id=str(attempt),request_sha256='f'*64,projection_sha256='a'*64))
+    assert value['newly_authorized'] is False and value['terminal_ACK'] is False and value['settlement']['state']=='held'
+    assert reads and not any(reads) and session.new==['unrelated-dirty-object']
+    session.commit.assert_not_called();session.flush.assert_not_called();session.rollback.assert_not_called()
+
+@pytest.mark.parametrize('observation',[{'state':'unknown','reason':'UNOBSERVED','estimated_nano':None,'secret':'do-not-store'},{'state':'unknown','reason':'free-text-secret','estimated_nano':None},{'state':'other','reason':'UNOBSERVED','estimated_nano':None},{'state':'anomalous','reason':'MODEL_MISMATCH','estimated_nano':1}])
+async def test_cf045_unknown_observation_closed_shape_precedes_SQL(monkeypatch,observation):
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningRuntimeService
+    service=MeaningRuntimeService(NS());service.lookup=AsyncMock(side_effect=AssertionError('bad shape before SQL'))
+    with pytest.raises(A45.AccountingConflict):await service.finish(str(uuid4())+'.'+'a'*64,dict(attempt_id=str(uuid4()),request_sha256='b'*64,projection_sha256='c'*64,observation=observation,blocked=True))
+    service.lookup.assert_not_called()
+
+async def test_cf045_phase_callback_RTT_narrows_from_send_start_not_receipt(monkeypatch):
+    C=sys.modules['src.supervisor.infrastructure.backend.meaning_budget_client'];d=draft('현대건설 수급');calls=[]
+    request=O.rendered_request(d);rh=M.sha(request);ph=M.sha({k:request[k] for k in O.INPUT_FIELDS})
+    async def send(req):
+        calls.append(asyncio.get_running_loop().time());await asyncio.sleep(.04)
+        return httpx.Response(200,json=dict(newly_authorized=True,remaining_ms=20,receipt=dict(phase='count',reservation_id=str(uuid4()),binding_sha256='a'*64,request_sha256=rh,projection_sha256=ph,evidence_sha256='b'*64)))
+    started=asyncio.get_running_loop().time();budget=C.BackendMeaningBudget(origin='https://backend.example',service_token='s'*40,grant=str(uuid4())+'.'+'a'*64,draft=d,agreement=agreement(),transport=httpx.MockTransport(send),deadline=started+60)
+    assert await budget.authorize(str(uuid4()),'count',rh,ph,None) is False
+    assert budget.deadline<=calls[0]+.02 and len(calls)==1
+
+def test_cf045_main_installer_is_explicit_and_existing_core_route_uses_it_source_only():
+    import ast
+    source=(ROOT/'ai/src/main.py').read_text();tree=ast.parse(source)
+    defaults=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='supervisor_meaning_runtime' for t in n.targets)]
+    assert len(defaults)==1 and isinstance(defaults[0].value,ast.Constant) and defaults[0].value.value is None
+    installer=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='install_supervisor_meaning_runtime')
+    assert 'MeaningRuntime(options)' in ast.unparse(installer)
+    assert 'make_supervisor_router(runtime=lambda: supervisor_meaning_runtime)' in source
+    assert 'app.include_router(supervisor_router)' in source
+
+@pytest.mark.parametrize('account',[1,True,None,[],{},1.5])
+async def test_cf045_malformed_paid_mapping_disables_only_paid_boundary(account):
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningRuntimeService
+    owner=uuid4();mapping=json.dumps({str(owner):dict(account_id=account,scope_sha256='a'*64,policy_sha256='b'*64)})
+    service=MeaningRuntimeService(NS(),runtime_policy=A45.RuntimePolicy(True,mapping,'{}'))
+    assert await service.issue(NS(user_id=owner),uuid4(),deadline=asyncio.get_running_loop().time()+1) is None
+
+@pytest.mark.parametrize('raw',[b'{"phase":"count","phase":"generation"}',b'{}',b'{"phase":"other"}',b'{"phase":"count","extra":1}',b'x'*98305,b'{"phase":"generation","extra":"'+b'x'*8192+b'"}'])
+async def test_cf045_internal_body_closed_before_grant_SQL(monkeypatch,raw):
+    from fastapi import FastAPI
+    from src.modules.supervisor.api import meaning_phase_router as R
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningRuntimeService
+    from src.shared.http.access_boundary import AccessBoundary
+    app=FastAPI();app.include_router(R.router);sessions=[]
+    async def db():sessions.append('open');yield NS()
+    app.dependency_overrides[R.get_session]=db
+    monkeypatch.setattr(R.settings,'SUPERVISOR_MEANING_SERVICE_TOKEN','s'*40)
+    lookup=AsyncMock(side_effect=AssertionError('invalid body before grant SQL'))
+    monkeypatch.setattr(MeaningRuntimeService,'lookup',lookup)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=AccessBoundary(app)),base_url='http://backend') as c:
+        response=await c.post('/internal/supervisor/meaning/authorize',content=raw,headers={'Content-Type':'application/json','X-Supervisor-Meaning-Service-Token':'s'*40,'X-Supervisor-Meaning-Grant':str(uuid4())+'.'+'a'*64})
+    assert response.status_code==403
+    lookup.assert_not_called()
+
+@pytest.mark.parametrize('flag',[False,'false','TRUE','yes',1,None,[]])
+async def test_cf045_raw_invalid_enable_flag_keeps_paid_config_inert(flag):
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningRuntimeService
+    policy=A45.RuntimePolicy(flag,'not-json','not-json')
+    assert not policy.active()
+    assert await MeaningRuntimeService(NS(),runtime_policy=policy).issue(NS(),uuid4(),deadline=asyncio.get_running_loop().time()+1) is None
+
+def test_cf045_bad_paid_enable_configuration_does_not_break_settings_startup():
+    from src.shared.config import Settings
+    value=Settings(_env_file=None,SUPERVISOR_MEANING_ENABLED='invalid',SUPERVISOR_MEANING_SERVICE_TOKEN='synthetic-hidden-'+('s'*40))
+    assert value.SUPERVISOR_MEANING_ENABLED=='invalid'
+    assert 'synthetic-hidden-' not in repr(value)
+    assert A45.RuntimePolicy('true','{}','{}').active()
+
+
+def test_cf042_deadline_precision_at_observed_CI_fraction_never_extends_shorter_bound():
+    from starlette.requests import Request
+    from src.modules.supervisor.api.router import preparation_deadlines
+    started=183.325537915998
+    # The previous subtraction is not bit-exact at this real CI baseline.
+    assert (started+75)-started != 75
+    state=dict(core_preparation_started_at=started,core_deadline=started+75,core_admission_deadline=started+15)
+    request=Request(dict(type='http',method='POST',path='/api/supervisor/core/preparations',headers=[],state=state))
+    assert preparation_deadlines(request,started+4)==started+75
+    assert state['core_admission_deadline']==started+15
+    state['core_deadline']=state['core_admission_deadline']=started+10
+    assert preparation_deadlines(request,started+4)==started+10
+    assert state['core_admission_deadline']==started+10

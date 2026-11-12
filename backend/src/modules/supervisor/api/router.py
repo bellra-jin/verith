@@ -138,7 +138,10 @@ async def get(request: Request, supervisor_id: UUID, value=Depends(service)):
 
 
 def preparations(value):
-    return PreparationService(value.session, principal=value.principal, client=value.client, resolver_factory=value.resolver_factory)
+    from src.modules.supervisor.domain.meaning_accounting import RuntimePolicy
+    # Parse only on new root supplementation metadata, never startup or GET.
+    policy=RuntimePolicy(getattr(settings,'SUPERVISOR_MEANING_ENABLED',False),getattr(settings,'SUPERVISOR_MEANING_ACCOUNT_BINDINGS',''),getattr(settings,'SUPERVISOR_MEANING_COUNTER_AGREEMENT',''))
+    return PreparationService(value.session, principal=value.principal, client=value.client, resolver_factory=value.resolver_factory, meaning_policy=policy)
 
 
 @router.post('/preparations', response_model=PreparationResponse)

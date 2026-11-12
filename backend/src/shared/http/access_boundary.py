@@ -32,6 +32,22 @@ class AccessBoundary:
                 await send({"type": "websocket.close", "code": 1008})
             return
         method, path = scope["method"], scope["path"]
+        if path in {'/internal/supervisor/meaning/authorize','/internal/supervisor/meaning/settle'}:
+            import asyncio
+            from src.shared.config import settings
+            from src.modules.supervisor.api.meaning_phase_router import authenticate_headers,failure
+            started=asyncio.get_running_loop().time()
+            try:
+                authenticate_headers(scope,settings.SUPERVISOR_MEANING_SERVICE_TOKEN)
+            except Exception:
+                await failure()(scope,receive,send);return
+            scope.setdefault('state',{})['meaning_callback_deadline']=started+5
+            try:
+                async with asyncio.timeout_at(started+5):
+                    await self.app(scope,receive,send)
+            except TimeoutError:
+                await failure(504)(scope,receive,send)
+            return
         if path == '/api/technical/owned-reports' or path.startswith('/api/technical/owned-reports/'):
             from src.modules.technical.api import owned_report_schemas as technical_read
             from src.modules.auth.api.router import configured

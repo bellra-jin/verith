@@ -126,3 +126,7 @@ def health():
 
 from src.modules.supervisor.api.router import router as supervisor_core_router
 app.include_router(supervisor_core_router)
+
+# Authenticated server-only meaning phases; excluded from the public schema.
+from src.modules.supervisor.api.meaning_phase_router import router as meaning_phase_router
+app.include_router(meaning_phase_router)

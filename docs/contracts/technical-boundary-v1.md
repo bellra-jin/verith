@@ -195,3 +195,17 @@ strict는 최종 model/input projection과 원 prompt·request identity에 결�
 최대4개의 불변 snapshot은 원 identity/hash·fixed model/tier/caps·보수 hold·entered/response_received·각 usage/추정액 또는 unknown·텍스트 수용/고정 이유/경과를 구분한다. missing/invalid usage는 0으로 채우지 않고 completed 아닌 status/refusal/빈 text·cap/count 불일치/예외/취소는 sticky closed다. 원문 prompt/응답·provider 자유 metadata·키/자유 exception은 저장하지 않는다. output byte cap은 추출 텍스트 수용 한도이며 SDK 전체 decoded body의 메모리/transport read cap은 아니다.
 
 entered는 로컬 진입 권위이며 wire/처리/청구 관측이 아니다. SDK 객체의 retry 설정 검사와 adapter dispatch 횟수는 임의 callable의 내부 HTTP/재시도를 입증하지 않는다. 프로세스 재시작/동일 run의 새 budget 차단은 CF048 claim과 후속 단일 coordinator 조립의 책임이다. 실제 SDK/endpoint/proxy/계수 provenance·Backend→엔진→저장·durable 승인/정산·Supervisor dispatch·운영 활성화는 미완료다. [직접 검사와 한계](../work/CF-049-technical-request-llm-budget.md)를 따른다.
+
+## CF050 같은 Technical run의 결과 수신과 저장 복구
+
+`TechnicalCompletionProfile`은 이미 CF048에서 접수·claim ACK가 끝난 run의 결과만 받는다. 기존 `AnalysisCoordinator.receive(expected, token, response)`와 명시 `publish(id)`가 snapshot/게시 commit을 소유하며 post 재접수·재claim·엔진 dispatch는 없다. 원 CF048 SPEC·provider_authority=False/settlement=False·ID/시각/period/policy·예약/hold를 보존한다. 실제 public HTTP route/launch와 기존 synthetic wire는 변경하지 않는다.
+
+첫 await 전 expected UUID/응답을 고정하고, fresh Principal·owner·원 A1 세션/claim digest·소비 시각과 SQL 기대값을 대조한다. 새 수신만 명시 현재 정책·저장 policy/Stock 일치를 요구한다. E에서 원 질문/조건·Stock·고정 ID/as_of/deadline을 사용해 B를 만들고 S wrapper와 별도 hash를 검증한다. response.request_snapshot이나 현재 종목명·새 now/ID를 기대값으로 쓰지 않는다. 원 token/expected 불일치는 정당한 run을 failed로 만들지 못한다.
+
+claimed가 원 기한 안일 때만 canonical input/result TEXT·hash·accepted_at를 한 commit으로 result_ready에 고정한다. 그 ACK 뒤 같은 coordinator가 CF031/CF035 actual writer로 root/child/snapshot/정확 한 index와 stored/원문 소비를 한 transaction으로 게시한다. writer/hook은 별도 commit하지 않는다. 이미 ready인 결과는 기한 뒤에도 같은 snapshot만 게시할 수 있고 A2 복구에는 실제 A2 Principal을 전달한다. admission A1과 최초 stage session은 구분하고 기존 stage session을 덮지 않는다.
+
+ready/stored의 incoming replay도 원 hash/정본과 비교한다. 게시 오류는 rollback 뒤 CF035 전체 저장본 대조로 같은 완전한 저장본·확정 충돌·조회/검증 불명을 구분한다. 동일 저장본이나 일시 오류는 ready/hold를 보존하고 명시 재게시로 복구하며, 검증된 다른 결과/owner/ID 충돌만 failed다. 보고서 존재만으로 실패를 확정하지 않는다. Flow/Fundamental의 기존 running/post/분류는 보존한다.
+
+GET은 admitted/claimed 만료를 정리할 수 있지만 AI/자동 게시를 하지 않는다. ACK 전용 `reconcile_completion`은 clean 세션의 no-autoflush SELECT이며 expiry·DML·commit·발행 권위가 없다. pending new/dirty/deleted가 있으면 CF035 ORM refresh 전에 거절하므로 fresh clean 세션으로 복구한다. 수신/게시 취소는 pending transaction을 rollback하고 재전파하며 이미 durable한 ready·hold는 보존한다. ready 취소는 pending 원문만 지우고 늦은 accept/게시를 차단한다. stored/failed는 close_unknown이나 새 claim으로 되돌리지 않는다.
+
+실제 수신/저장 복구 SQL은 [검증 기록](../work/CF-050-technical-result-completion.md)을 따른다. provider 송신 권위·usage 정산/환급·실제 graph scheduling·3초 wire 밖 실제 엔진→저장·Supervisor 확정 dispatch·운영 활성화는 여전히 미완료다.

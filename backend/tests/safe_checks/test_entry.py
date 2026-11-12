@@ -843,6 +843,22 @@ class CF023Boundary(unittest.TestCase):
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 class CF048Boundary(unittest.TestCase):
+    def test_CF050_receive_only_sources_and_exact_owned_completion_flag(self):
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        required={'backend/db/migrations/versions/20261112_c50001a7e0001_technical_result_completion.py',
+                  'backend/src/modules/technical/infrastructure/execution_completion_repository.py',
+                  'backend/src/modules/technical/application/execution_completion.py'}
+        self.assertTrue(required<=c.CF048_SOURCES)
+        self.assertEqual(c.CF048_INPUTS['frontend/tests/fixtures/cf031-technical-boundary-read.json'],
+                         '46380ea4c998e3130cf1c447c278b93ed32288c42af9d62f84b90b7acabce5e0')
+        source=(root/'backend/scripts/cf002_interactive_login.py').read_text()
+        self.assertIn('--verify-technical-completion-db',source)
+        self.assertIn('verify_technical_completion(proof)',source)
+        self.assertNotIn('technical-completion-unit',c.MODES)
+        from tests.unit.test_cf048_technical_admission import test_completion_bad_CLI_options_stop_before_Docker
+        test_completion_bad_CLI_options_stop_before_Docker(['--google-input','approved-file'])
+
     def test_exact_Technical_collection_readonly_pins_and_existing_guard(self):
         import hashlib
         from unittest.mock import patch
@@ -850,7 +866,7 @@ class CF048Boundary(unittest.TestCase):
         root=Path(__file__).resolve().parents[3]
         self.assertEqual(c.CF048_TESTS,('tests/unit/test_cf048_technical_admission.py',))
         self.assertEqual(c.CF048_COMPAT,c.CF035_COMPAT)
-        self.assertEqual(len(c.CF048_INPUTS),3)
+        self.assertEqual(len(c.CF048_INPUTS),4)
         for path,digest in (c.CF048_INPUTS|c.CF048_COMPAT).items():
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,path)).hexdigest(),digest)
         for path in c.CF048_SOURCES:
@@ -859,7 +875,7 @@ class CF048Boundary(unittest.TestCase):
         raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
         with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_admission_only=True)
         self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF048_COMPAT))
-        self.assertFalse(any(p.startswith('frontend/') for p in selected))
+        self.assertEqual({p for p in selected if p.startswith('frontend/')},{'frontend/tests/fixtures/cf031-technical-boundary-read.json'})
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
 
     def test_fixed_modes_and_two_CI_calls_use_existing_clean_launch(self):

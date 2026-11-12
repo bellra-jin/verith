@@ -12,6 +12,7 @@ from src.modules.auth.application.session_service import Principal, validate_pri
 from src.modules.technical.domain.execution_admission import (
     AdmissionReceipt, ClaimReceipt, Intent, Policy, RunReceipt, TechnicalAdmissionError,
     OPERATION, REASONS, SPEC_JSON, SPEC_SHA256, canonical, decode, integer, sha, uid,
+    COMPLETION_FIELDS, CompletionReceipt,
 )
 from src.modules.technical.infrastructure import execution_admission_repository as repo
 
@@ -115,15 +116,17 @@ class TechnicalAdmissionService:
             intent = Intent(row.intent_json)
             if intent.fingerprint != row.intent_sha256 or intent.data()['ticker'] != row.ticker:
                 raise TechnicalAdmissionError('STORED_INVALID')
-        elif row.state != 'unknown':
+        elif row.state not in {'unknown','stored','failed'}:
             raise TechnicalAdmissionError('STORED_INVALID')
-        return RunReceipt(analysis_id=repo.database_uuid(row.id),admission_request_id=repo.database_uuid(row.admission_request_id),
+        result=RunReceipt(analysis_id=repo.database_uuid(row.id),admission_request_id=repo.database_uuid(row.admission_request_id),
             attempt_id=repo.database_uuid(row.attempt_id),report_id=repo.database_uuid(row.planned_report_id),
             boundary_request_id=repo.database_uuid(row.boundary_request_id),trace_id=repo.database_uuid(row.trace_id),
             admission_session_id=repo.database_uuid(row.admission_session_id),period_id=repo.database_uuid(row.period_id),
             intent_sha256=row.intent_sha256,policy_sha256=row.policy_sha256,spec_sha256=row.spec_sha256,
             as_of=row.as_of,deadline_at=row.deadline_at,state=row.state,reserved_nano=row.reserved_nano,held_nano=row.held_nano,
             claim_consumed_at=row.claim_consumed_at,redacted_at=row.redacted_at,unknown_reason=row.unknown_reason)
+        CompletionReceipt(result,**{key:getattr(row,key,None) for key in COMPLETION_FIELDS})
+        return result
 
     async def _locked(self, principal, analysis_id):
         hint = await repo.owned(self.session,principal.user_id,analysis_id)
@@ -138,7 +141,7 @@ class TechnicalAdmissionService:
 
     @staticmethod
     def _expire(row, stamp):
-        if row.state != 'unknown' and stamp >= row.deadline_at:
+        if row.state in {'admitted','claimed'} and stamp >= row.deadline_at:
             row.state='unknown';row.intent_json=None;row.redacted_at=stamp;row.unknown_reason='EXPIRED'
             return True
         return False
@@ -255,6 +258,8 @@ class TechnicalAdmissionService:
             base=time.monotonic();stamp=await repo.clock(self.session)
             if self._expire(row,stamp) or row.state=='unknown':
                 return ClaimReceipt(self._receipt(row,period),False),None
+            if row.state in {'result_ready','stored','failed'}:
+                return ClaimReceipt(current,False),None
             if row.admission_session_id!=principal.session_id or not hmac.compare_digest(row.claim_digest,hashlib.sha256(token).digest()):
                 raise TechnicalAdmissionError('CLAIM_DENIED')
             if row.state=='claimed':
@@ -283,11 +288,14 @@ class TechnicalAdmissionService:
         async def action():
             await validate_principal(self.session,principal,lock=True)
             row,period=await self._locked(principal,analysis_id)
+            if row.state in {'stored','failed'}:
+                return self._receipt(row,period),None
             stamp=await repo.clock(self.session)
             if not self._expire(row,stamp):
                 if row.state=='unknown' and row.unknown_reason!=reason:
                     raise TechnicalAdmissionError('IDEMPOTENCY_CONFLICT')
                 if row.state!='unknown':
                     row.state='unknown';row.intent_json=None;row.redacted_at=stamp;row.unknown_reason=reason
+                    row.input_json=None;row.result_json=None
             return self._receipt(row,period),None
         return await self._mutation(action)

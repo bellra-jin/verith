@@ -379,3 +379,11 @@ unknown/anomalous는 기존 예약을 유지하며 계정을 막는다. terminal
 INSERT/UPDATE guard는 identity·정책/기간·실행당 예약과 정책의 deadline 상한을 결합한다. claim은 한 번만 소비하고 intent는 NULL로만 삭제할 수 있다. DELETE/TRUNCATE와 hold 환급은 금지다. deferred trigger는 commit 최종 상태에서 run COUNT/예약 합과 period 누적값·사용자 한도를 대조한다. downgrade는 새 두 표의 ACCESS EXCLUSIVE 잠금 아래 비어 있을 때만 허용한다.
 
 이 표는 내부 SQL 접수/로컬 claim이며 provider 송신권·정산이나 운영 활성화가 아니다. [서비스 계약](../../docs/contracts/technical-boundary-v1.md#cf048-technical-전용-접수와-로컬-claim)과 [직접 검증](../../docs/work/CF-048-technical-admission.md)을 따른다.
+
+### CF050 · 같은 run의 완료 snapshot
+
+`c50001a7e0001`은 c480 뒤 기존 `technical_analysis_runs`에 nullable completion_format·input/result TEXT/SHA·binding SHA·accepted_at·error_code 8컬럼을 추가한다. 새 표/예약·기존 revision 변경은 없고, 이전 3상태·NULL 완료 필드는 그대로 유효하다.
+
+claimed→result_ready→stored와 필요한 failed/unknown 전이만 추가한다. 첫 accept의 실제 SQL fence는 원 claim/세션·owner·Stock·기간·원 deadline 및 B/S binding을 대조한다. accepted hash/시각은 이후 불변이며 ready만 pending TEXT를 보유한다. stored/failed/unknown은 원 intent와 pending input/result TEXT를 NULL로 소비하되 ID/key/hash·claim·전체 hold는 유지한다. 미채택 실패에는 완료 metadata가 없다.
+
+같은 commit의 root/snapshot/전체 Technical index 정확1개·owner/hash·실제 stage session을 deferred guard로 결합한다. 연결된 stored 정본의 root/snapshot/index 변경·삭제·TRUNCATE를 거절하며 미연결 기존 보고서는 이 새 결합에 포함하지 않는다. 전체 child projection의 의미 검증은 기존 CF035 writer/read를 재사용한다. downgrade는 원 period/run을 잠그고 새 상태/완료 값이 전부 없는 경우에만 이전 CHECK/guard를 복원한다. 이는 전용 테스트 PG에 적용한 검증이며 운영 DB 적용은 아니다. [완료 계약](../../docs/contracts/technical-boundary-v1.md#cf050-같은-technical-run의-결과-수신과-저장-복구)을 따른다.

@@ -31,6 +31,24 @@ RUN_CHECKS['distinct_ids'] = ' AND '.join(a+'<>'+b for i,a in enumerate(_IDS) fo
 RUN_CHECKS['state'] = '('+RUN_CHECKS['state']+') IS TRUE'
 RUN_CHECKS['nonzero_ids'] = ' AND '.join(key+"<>'00000000-0000-0000-0000-000000000000'::uuid" for key in _IDS)
 
+COMPLETION_FORMAT = 'technical.result-completion.v1'
+RUN_CHECKS['state'] = """((state IN ('admitted','claimed','result_ready') AND intent_json IS NOT NULL AND redacted_at IS NULL AND unknown_reason IS NULL)
+ OR (state IN ('stored','failed') AND intent_json IS NULL AND redacted_at IS NOT NULL AND unknown_reason IS NULL)
+ OR (state='unknown' AND intent_json IS NULL AND redacted_at IS NOT NULL AND unknown_reason IN ('EXPIRED','CANCELLED','TIMEOUT','REDACTED','DISPATCH_UNCERTAIN','STOCK_CHANGED')))
+ AND ((state='admitted' AND claim_consumed_at IS NULL) OR (state IN ('claimed','result_ready','stored','failed') AND claim_consumed_at IS NOT NULL) OR state='unknown') IS TRUE"""
+RUN_CHECKS['state'] = '('+RUN_CHECKS['state']+') IS TRUE'
+COMPLETION_CHECKS = {
+    'metadata': """((accepted_at IS NULL AND completion_format IS NULL AND input_sha256 IS NULL AND result_sha256 IS NULL AND binding_sha256 IS NULL AND state IN ('admitted','claimed','unknown','failed'))
+ OR (isfinite(accepted_at) AND accepted_at>=claim_consumed_at AND accepted_at<deadline_at AND completion_format='technical.result-completion.v1'
+ AND input_sha256 ~ '^[0-9a-f]{64}$' AND result_sha256 ~ '^[0-9a-f]{64}$' AND binding_sha256 ~ '^[0-9a-f]{64}$' AND state IN ('result_ready','stored','failed','unknown')
+ AND (redacted_at IS NULL OR redacted_at>=accepted_at))) IS TRUE""",
+    'text': """((state='result_ready' AND input_json IS NOT NULL AND result_json IS NOT NULL)
+ OR (state<>'result_ready' AND input_json IS NULL AND result_json IS NULL)) IS TRUE
+ AND (input_json IS NULL OR (octet_length(input_json) BETWEEN 2 AND 16384 AND jsonb_typeof(input_json::jsonb)='object' AND input_sha256=encode(digest(convert_to(input_json,'UTF8'),'sha256'),'hex'))) IS TRUE
+ AND (result_json IS NULL OR (octet_length(result_json) BETWEEN 2 AND 2097152 AND jsonb_typeof(result_json::jsonb)='object' AND result_sha256=encode(digest(convert_to(result_json,'UTF8'),'sha256'),'hex'))) IS TRUE""",
+    'error': "((state='failed' AND error_code IN ('RESULT_CONTRACT_INVALID','RESULT_CONFLICT')) OR (state<>'failed' AND error_code IS NULL)) IS TRUE",
+}
+
 
 class TechnicalUsagePeriod(Base):
     __tablename__ = 'technical_usage_periods'
@@ -87,9 +105,18 @@ class TechnicalAnalysisRun(Base):
     state: Mapped[str] = mapped_column(Text,nullable=False)
     unknown_reason: Mapped[str | None] = mapped_column(Text)
     redacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completion_format: Mapped[str | None] = mapped_column(Text)
+    input_json: Mapped[str | None] = mapped_column(Text)
+    input_sha256: Mapped[str | None] = mapped_column(Text)
+    result_json: Mapped[str | None] = mapped_column(Text)
+    result_sha256: Mapped[str | None] = mapped_column(Text)
+    binding_sha256: Mapped[str | None] = mapped_column(Text)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(Text)
     __table_args__ = (
         UniqueConstraint('owner_user_id','operation','key_digest',name='uq_technical_analysis_key'),
         ForeignKeyConstraint(['period_id','policy_sha256'],['technical_usage_periods.id','technical_usage_periods.policy_sha256'],ondelete='RESTRICT',name='fk_technical_run_period_policy'),
         Index('ix_technical_run_period_owner','period_id','owner_user_id'),
         *(CheckConstraint(value,name='cf048_run_'+key) for key,value in RUN_CHECKS.items()),
+        *(CheckConstraint(value,name='cf050_completion_'+key) for key,value in COMPLETION_CHECKS.items()),
     )

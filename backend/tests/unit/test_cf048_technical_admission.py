@@ -359,7 +359,12 @@ def test_migration_and_model_share_exact_constraints_and_retained_identity_links
             if isinstance(target.value,ast.Name) and target.value.id=='PERIOD_CHECKS':
                 values['PERIOD_CHECKS'][ast.literal_eval(target.slice)]=ast.literal_eval(node.value)
     assert values['PERIOD_CHECKS']==model.PERIOD_CHECKS
-    assert values['RUN_CHECKS']==model.RUN_CHECKS
+    assert {k:v for k,v in values['RUN_CHECKS'].items() if k!='state'}=={k:v for k,v in model.RUN_CHECKS.items() if k!='state'}
+    newer=ast.parse((ROOT/'backend/db/migrations/versions/20261112_c50001a7e0001_technical_result_completion.py').read_text())
+    additions={n.targets[0].id:ast.literal_eval(n.value) for n in newer.body
+        if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id in {'OLD_STATE_CHECK','STATE_CHECK','COMPLETION_CHECKS'}}
+    assert additions['OLD_STATE_CHECK']==values['RUN_CHECKS']['state']
+    assert additions['STATE_CHECK']==model.RUN_CHECKS['state'] and additions['COMPLETION_CHECKS']==model.COMPLETION_CHECKS
     assert (values['revision'],values['down_revision'])==('c48001a7e0001','c45001a7e0001')
     run=model.TechnicalAnalysisRun.__table__
     assert not run.c.admission_session_id.foreign_keys and not run.c.planned_report_id.foreign_keys
@@ -371,3 +376,285 @@ async def test_owned_SQL_entry_rejects_non_original_proof_before_resource_or_app
     from scripts.cf035_technical_owned_check import verify_technical_admission
     with pytest.raises(RuntimeError,match='^Technical admission requires original owned proof$'):
         await verify_technical_admission(NS(verify_ownership=lambda:pytest.fail('untrusted proof used')))
+
+
+def completion_response(binding):
+    path=ROOT/'frontend/tests/fixtures/cf031-technical-boundary-read.json'
+    assert hashlib.sha256(path.read_bytes()).hexdigest()=='46380ea4c998e3130cf1c447c278b93ed32288c42af9d62f84b90b7acabce5e0'
+    response=copy.deepcopy(json.loads(path.read_text())['response'])
+    request=json.loads(binding.boundary.input_json);data=request['data']
+    response.update(request_id=request['request_id'],trace_id=request['trace_id'])
+    response['data'].update(request_snapshot=copy.deepcopy(data),request_sha256=hashlib.sha256(binding.boundary.input_json.encode()).hexdigest())
+    response['data']['result'].update(request_id=request['request_id'],trace_id=request['trace_id'],
+        ticker=data['stock']['stock_code'],as_of=data['requested_as_of'],resolved_stock_name=data['stock']['stock_name'])
+    return response
+
+
+async def completion_setup(monkeypatch):
+    """Actual coordinator/profile/CF031/CF035; persistence/auth I/O is explicit DI."""
+    from src.modules.technical.application import execution_completion as E,owned_report_service as W
+    from src.modules.technical.infrastructure import execution_completion_repository as CR,report_repository as WR
+    from src.modules.analysis.application import coordinator as C
+    from db.models.technical.report_snapshot import TechnicalReportSnapshot
+    from db.models.common.agent_report import AgentReport
+    session,p,policy,intent,store,first=await admitted(monkeypatch)
+    claimed=await S.TechnicalAdmissionService(session,principal=p,policy=policy).dispatch_claim(first.run,first.claim_token)
+    assert claimed.newly_claimed
+    store.row._completion_period=store.period
+    binding=E.binding_from_sql(store.row);response=completion_response(binding)
+    ledger=NS(root=None,snapshot=None,indexes=[],groups=[],commits=[],stage_auth=[])
+    async def auth(s,actual,**kw):
+        assert s is session;ledger.stage_auth.append(actual)
+    monkeypatch.setattr(C,'validate_principal',AsyncMock(side_effect=auth))
+    monkeypatch.setattr(W,'validate_principal',AsyncMock(side_effect=auth))
+    async def commit():
+        ledger.commits.append((store.row.state,store.row.intent_json,getattr(store.row,'input_json',None)))
+        session.new.clear();session.dirty.clear();session.deleted.clear()
+    session.commit=AsyncMock(side_effect=commit)
+    session.scalar=AsyncMock(side_effect=lambda statement:store.stamp)
+    def add(value):
+        session.new.add(value)
+        if isinstance(value,TechnicalReportSnapshot):ledger.snapshot=value
+        elif isinstance(value,AgentReport):ledger.indexes.append(value)
+    session.add=add
+    async def add_report(s,**rows):
+        ledger.root=rows['report']
+        ledger.groups=[rows['signals'],rows['charts'],rows['risk_notes'],[rows['interpretation']],[rows['verification']]]
+    monkeypatch.setattr(WR,'storage_root_for_update',AsyncMock(side_effect=lambda s,id:ledger.root))
+    monkeypatch.setattr(WR,'technical_indexes',AsyncMock(side_effect=lambda s,id:list(ledger.indexes)))
+    monkeypatch.setattr(WR,'get_stock',AsyncMock(side_effect=lambda s,ticker:store.stock))
+    monkeypatch.setattr(WR,'add_report',AsyncMock(side_effect=add_report))
+    async def stored(s,id,owner):
+        if ledger.root and ledger.snapshot and ledger.root.owner_user_id==owner and any(i.owner_user_id==owner for i in ledger.indexes):
+            return ledger.root,ledger.snapshot
+    monkeypatch.setattr(WR,'get_owned_storage',AsyncMock(side_effect=stored))
+    monkeypatch.setattr(WR,'storage_children',AsyncMock(side_effect=lambda s,id:ledger.groups))
+    async def accept(s,row,claim,frozen):
+        assert row.state=='claimed' and claim==row.claim_digest
+        row.state='result_ready';row.completion_format=D.COMPLETION_FORMAT;row.accepted_at=store.stamp
+        for key in ('input_json','input_sha256','result_json','result_sha256','binding_sha256'):setattr(row,key,getattr(frozen,key))
+        row.error_code=None;return row
+    monkeypatch.setattr(CR,'accept',AsyncMock(side_effect=accept))
+    async def readonly(s,owner,id):
+        assert s.in_no_autoflush
+        return NS(**vars(store.row)) if owner==p.user_id and id==store.row.id else None
+    monkeypatch.setattr(CR,'read_owned',AsyncMock(side_effect=readonly))
+    def coordinator(actual=p,current_policy=policy):
+        return C.AnalysisCoordinator(session,principal=actual,client=None,profile=E.TechnicalCompletionProfile(policy=current_policy))
+    return NS(session=session,p=p,policy=policy,intent=intent,store=store,first=first,claimed=claimed,
+        binding=binding,response=response,ledger=ledger,E=E,W=W,CR=CR,C=C,WR=WR,coordinator=coordinator)
+
+
+async def test_completion_real_coordinator_and_writer_preserve_E_B_S_and_consume_text(monkeypatch):
+    h=await completion_setup(monkeypatch)
+    result=await h.coordinator().receive(h.claimed.run,h.first.claim_token,h.response)
+    assert result.run.state=='stored' and len(h.ledger.indexes)==1 and h.ledger.root is not None
+    assert [v[0] for v in h.ledger.commits]==['result_ready','stored']
+    assert h.store.row.intent_json is h.store.row.input_json is h.store.row.result_json is None
+    assert h.ledger.snapshot.input_json==h.binding.boundary.input_json
+    assert h.ledger.snapshot.result_json==h.E.canonical_json(h.response)
+    assert h.intent.fingerprint!=result.input_sha256!=h.binding.caller_context.input_fingerprint
+    assert h.store.period.request_count==1 and h.store.period.reserved_nano==10000 and result.run.held_nano==10000
+    assert not (await S.TechnicalAdmissionService(h.session,principal=h.p,policy=None).dispatch_claim(h.claimed.run,h.first.claim_token)).newly_claimed
+    before=h.session.commit.await_count
+    assert (await h.coordinator(current_policy=None).get(h.claimed.run.analysis_id)).run.state=='stored'
+    assert h.session.commit.await_count==before+1 and len(h.ledger.indexes)==1
+
+
+@pytest.mark.parametrize('drift',['owner','A2','token','attempt','policy','Stock'])
+async def test_completion_wrong_identity_cannot_accept_or_fail_legitimate_run(drift,monkeypatch):
+    h=await completion_setup(monkeypatch);actual=h.p;expected=h.claimed.run;token=h.first.claim_token;policy=h.policy
+    if drift=='owner':actual=principal()
+    if drift=='A2':actual=principal(h.p.user_id)
+    if drift=='token':token=b'z'*32
+    if drift=='attempt':expected=replace(expected,attempt_id=uuid4())
+    if drift=='policy':policy=D.Policy.parse(policy_values(deadline_seconds=59))
+    if drift=='Stock':h.store.stock.stock_name='changed master'
+    with pytest.raises((D.TechnicalAdmissionError,D.TechnicalCompletionError)):
+        await h.coordinator(actual,policy).receive(expected,token,h.response)
+    assert h.store.row.state=='claimed' and h.ledger.root is None and not h.ledger.commits
+    assert h.store.period.request_count==1 and h.store.period.reserved_nano==10000
+
+
+async def ready_completion(h,monkeypatch):
+    async def unavailable(*args):raise OSError('synthetic transient writer')
+    original=h.E.TechnicalCompletionAdapter.stage
+    monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',unavailable)
+    with pytest.raises(D.TechnicalCompletionError,match='SERVICE_UNAVAILABLE'):
+        await h.coordinator().receive(h.claimed.run,h.first.claim_token,h.response)
+    assert h.store.row.state=='result_ready' and h.store.row.input_json is not None
+    monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',original)
+
+
+async def test_completion_A2_publishes_after_original_deadline_without_reclaim_or_policy(monkeypatch):
+    h=await completion_setup(monkeypatch);await ready_completion(h,monkeypatch)
+    original_times=(h.store.row.as_of,h.store.row.deadline_at,h.store.row.claim_consumed_at,h.store.row.accepted_at)
+    h.store.stamp+=timedelta(seconds=120);a2=principal(h.p.user_id)
+    assert (await h.coordinator(a2,None).get(h.claimed.run.analysis_id)).run.state=='result_ready'
+    assert h.ledger.root is None # GET never auto-publishes.
+    result=await h.coordinator(a2,None).publish(h.claimed.run.analysis_id)
+    assert result.run.state=='stored' and h.ledger.snapshot.owner_session_id==a2.session_id
+    assert h.ledger.indexes[0].owner_session_id==a2.session_id!=h.store.row.admission_session_id
+    assert original_times==(h.store.row.as_of,h.store.row.deadline_at,h.store.row.claim_consumed_at,h.store.row.accepted_at)
+    assert h.ledger.stage_auth[-1].session_id==a2.session_id
+    assert result.run.held_nano==10000 and h.store.period.request_count==1
+
+
+async def test_same_stored_incoming_replay_is_checked_and_different_result_cannot_overwrite(monkeypatch):
+    h=await completion_setup(monkeypatch);await h.coordinator().receive(h.claimed.run,h.first.claim_token,h.response)
+    original=h.ledger.snapshot.result_json
+    assert (await h.coordinator(current_policy=None).receive(h.claimed.run,h.first.claim_token,h.response)).run.state=='stored'
+    changed=copy.deepcopy(h.response);changed['data']['result']['interpretation']['text']='different valid result'
+    with pytest.raises(D.TechnicalCompletionError,match='RESULT_CONFLICT'):
+        await h.coordinator(current_policy=None).receive(h.claimed.run,h.first.claim_token,changed)
+    assert h.ledger.snapshot.result_json==original and h.store.row.state=='stored' and len(h.ledger.indexes)==1
+
+
+@pytest.mark.parametrize('pending',['new','dirty','deleted'])
+async def test_completion_readonly_reconcile_refuses_pending_caller_work_without_refresh(pending,monkeypatch):
+    h=await completion_setup(monkeypatch)
+    h.C.validate_principal.reset_mock();h.CR.read_owned.reset_mock();h.session.commit.reset_mock();h.session.flush.reset_mock()
+    value=NS(private='pending value');getattr(h.session,pending).add(id(value))
+    with pytest.raises(D.TechnicalAdmissionError,match='CONTEXT_DIRTY'):
+        await h.E.reconcile_completion(h.session,principal=h.p,analysis_id=h.claimed.run.analysis_id)
+    assert value.private=='pending value' and id(value) in getattr(h.session,pending)
+    h.C.validate_principal.assert_not_awaited();h.CR.read_owned.assert_not_awaited()
+    h.session.flush.assert_not_awaited();h.session.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize('boundary',['stage','publish_flush','publish_commit'])
+async def test_automatic_publication_cancel_rolls_back_and_propagates(boundary,monkeypatch):
+    h=await completion_setup(monkeypatch);original=h.E.TechnicalCompletionAdapter.stage
+    async def stage(*args):
+        if boundary=='stage':raise asyncio.CancelledError()
+        return await original(*args)
+    monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',stage)
+    if boundary=='publish_flush':h.session.flush=AsyncMock(side_effect=[None,asyncio.CancelledError()])
+    if boundary=='publish_commit':
+        committed=h.session.commit
+        async def commit():
+            if len(h.ledger.commits)==1:raise asyncio.CancelledError()
+            await committed()
+        h.session.commit=AsyncMock(side_effect=commit)
+    h.session.rollback.reset_mock()
+    with pytest.raises(asyncio.CancelledError):await h.coordinator().receive(h.claimed.run,h.first.claim_token,h.response)
+    assert h.session.rollback.await_count==1 and h.ledger.commits[0][0]=='result_ready'
+    assert h.store.period.reserved_nano==10000 and h.store.row.claim_consumed_at is not None
+
+
+async def test_same_existing_full_report_and_transient_stage_error_is_not_a_conflict(monkeypatch):
+    h=await completion_setup(monkeypatch);await ready_completion(h,monkeypatch)
+    frozen=h.coordinator().profile.from_stored(h.E.TechnicalCompletionAdapter(h.binding),h.store.row)
+    a2=principal(h.p.user_id)
+    await h.W.TechnicalOwnedReportService(h.session,principal=a2).stage(h.binding,frozen);await h.session.commit()
+    original=h.E.TechnicalCompletionAdapter.stage
+    async def transient(*args):raise OSError('synthetic transient stage error')
+    monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',transient)
+    with pytest.raises(D.TechnicalCompletionError,match='SERVICE_UNAVAILABLE'):
+        await h.coordinator(a2,None).publish(h.claimed.run.analysis_id)
+    assert h.store.row.state=='result_ready' and h.store.row.result_sha256==frozen.result_sha256 and h.store.row.held_nano==10000
+    monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',original)
+    assert (await h.coordinator(a2,None).publish(h.claimed.run.analysis_id)).run.state=='stored'
+    assert len(h.ledger.indexes)==1 and h.ledger.snapshot.owner_session_id==a2.session_id
+
+
+async def test_other_valid_stored_result_is_confirmed_conflict_without_overwrite(monkeypatch):
+    h=await completion_setup(monkeypatch);await ready_completion(h,monkeypatch)
+    changed=copy.deepcopy(h.response);changed['data']['result']['interpretation']['text']='different valid stored result'
+    frozen=h.binding.compose(changed)
+    await h.W.TechnicalOwnedReportService(h.session,principal=h.p).stage(h.binding,frozen);await h.session.commit()
+    with pytest.raises(D.TechnicalCompletionError,match='RESULT_CONFLICT'):
+        await h.coordinator(current_policy=None).publish(h.claimed.run.analysis_id)
+    assert h.store.row.state=='failed' and h.store.row.result_json is None and h.store.row.intent_json is None
+    assert h.ledger.snapshot.result_json==frozen.result_json and h.store.row.result_sha256!=frozen.result_sha256
+    assert h.store.row.held_nano==10000 and len(h.ledger.indexes)==1
+
+
+async def test_uncertain_stored_lookup_keeps_ready_snapshot_and_hold(monkeypatch):
+    h=await completion_setup(monkeypatch);await ready_completion(h,monkeypatch)
+    original=h.E.TechnicalCompletionAdapter.stage
+    async def unavailable(*args):raise OSError('synthetic unavailable')
+    monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',unavailable)
+    monkeypatch.setattr(h.W.TechnicalOwnedReportService,'read',AsyncMock(side_effect=OSError('synthetic lookup unavailable')))
+    before=(h.store.row.input_json,h.store.row.result_json,h.store.row.binding_sha256,h.store.row.accepted_at)
+    with pytest.raises(D.TechnicalCompletionError,match='SERVICE_UNAVAILABLE'):
+        await h.coordinator(current_policy=None).publish(h.claimed.run.analysis_id)
+    assert h.store.row.state=='result_ready' and before==(h.store.row.input_json,h.store.row.result_json,h.store.row.binding_sha256,h.store.row.accepted_at)
+    assert h.store.row.held_nano==10000
+
+
+async def test_ready_cancel_and_late_result_do_not_restore_snapshot_or_reexecute(monkeypatch):
+    h=await completion_setup(monkeypatch);await ready_completion(h,monkeypatch)
+    old=(h.store.row.input_sha256,h.store.row.result_sha256,h.store.row.binding_sha256,h.store.row.accepted_at)
+    await S.TechnicalAdmissionService(h.session,principal=h.p).close_unknown(h.claimed.run.analysis_id,'CANCELLED')
+    assert h.store.row.state=='unknown' and h.store.row.intent_json is h.store.row.input_json is h.store.row.result_json is None
+    assert (await h.coordinator(current_policy=None).receive(h.claimed.run,h.first.claim_token,h.response)).run.state=='unknown'
+    assert h.ledger.root is None and old==(h.store.row.input_sha256,h.store.row.result_sha256,h.store.row.binding_sha256,h.store.row.accepted_at)
+    assert h.store.row.held_nano==10000
+
+
+async def test_mutable_response_and_expected_UUID_are_frozen_before_first_await(monkeypatch):
+    h=await completion_setup(monkeypatch);expected=replace(h.claimed.run)
+    original_id=UUID(int=expected.analysis_id.int);response_text=h.E.canonical_json(h.response)
+    async def mutate(*args,**kw):
+        h.response['data']['result']['interpretation']['text']='changed after first await'
+        object.__setattr__(expected.analysis_id,'int',uuid4().int)
+    monkeypatch.setattr(h.C,'validate_principal',AsyncMock(side_effect=mutate))
+    result=await h.coordinator().receive(expected,h.first.claim_token,h.response)
+    assert result.run.analysis_id==original_id and h.ledger.snapshot.result_json==response_text
+
+
+@pytest.mark.parametrize('bad',[None,{'invalid':'response'},{'value':float('nan')}])
+async def test_invalid_result_only_closes_authenticated_matching_claim(bad,monkeypatch):
+    h=await completion_setup(monkeypatch)
+    result=await h.coordinator().receive(h.claimed.run,h.first.claim_token,bad)
+    assert result.run.state=='failed' and result.error_code=='RESULT_CONTRACT_INVALID'
+    assert result.accepted_at is None and h.store.row.intent_json is None and h.ledger.root is None
+    assert h.store.row.held_nano==10000
+
+
+async def test_snapshot_ACK_error_never_automatically_publishes_or_claims(monkeypatch):
+    h=await completion_setup(monkeypatch)
+    committed=h.session.commit
+    async def lost():await committed();raise OSError('synthetic ACK wrapper')
+    h.session.commit=AsyncMock(side_effect=lost)
+    with pytest.raises(D.TechnicalCompletionError,match='SERVICE_UNAVAILABLE'):
+        await h.coordinator().receive(h.claimed.run,h.first.claim_token,h.response)
+    assert h.ledger.commits[0][0]=='result_ready' and h.store.row.state=='result_ready' and h.ledger.root is None
+    assert h.store.row.held_nano==10000 and h.store.row.claim_consumed_at is not None
+
+
+async def test_clean_readonly_completion_reconcile_has_no_commit_or_new_claim(monkeypatch):
+    h=await completion_setup(monkeypatch);await ready_completion(h,monkeypatch)
+    monkeypatch.setattr(h.E,'validate_principal',AsyncMock())
+    h.session.flush.reset_mock();h.session.commit.reset_mock();h.session.rollback.reset_mock()
+    result=await h.E.reconcile_completion(h.session,principal=h.p,analysis_id=h.claimed.run.analysis_id)
+    assert result.run.state=='result_ready' and result.run.held_nano==10000
+    h.session.flush.assert_not_awaited();h.session.commit.assert_not_awaited();h.session.rollback.assert_not_awaited()
+
+
+async def test_receive_only_profile_has_no_second_admission_dispatch_post(monkeypatch):
+    h=await completion_setup(monkeypatch)
+    with pytest.raises(D.TechnicalCompletionError,match='INPUT_INVALID'):
+        await h.coordinator().post({},uuid4())
+    assert h.session.commit.await_count==0 and h.store.period.request_count==1
+
+
+@pytest.mark.parametrize('extra',[['--google-input','approved-file'],['--lifetime-seconds','300']])
+def test_completion_bad_CLI_options_stop_before_Docker(extra):
+    import argparse
+    source=ast.parse((ROOT/'backend/scripts/cf002_interactive_login.py').read_text())
+    actual=next(n for n in source.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    calls=[]
+    def Docker():calls.append(True);raise AssertionError('No resource call permitted')
+    values=dict(argparse=argparse,sys=NS(argv=['entry','--verify-technical-completion-db',*extra]),
+        __doc__='fixed CLI regression',LocalDocker=Docker)
+    exec(compile(ast.Module(body=[actual],type_ignores=[]),'<actual fixed CLI main>','exec'),values)
+    with pytest.raises(SystemExit) as stopped:values['main']()
+    assert stopped.value.code==2 and not calls
+
+
+async def test_completion_owned_entry_rejects_non_original_proof_before_resources():
+    from scripts.cf035_technical_owned_check import verify_technical_completion
+    with pytest.raises(RuntimeError,match='Technical completion requires original owned proof'):
+        await verify_technical_completion(NS(verify_ownership=lambda:pytest.fail('Untrusted proof used')))

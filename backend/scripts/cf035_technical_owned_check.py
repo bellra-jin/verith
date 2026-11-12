@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 
-def storage_fixture(owner_user_id, *, report_id=None, request_id=None, change=None):
+def storage_fixture(owner_user_id, *, report_id=None, request_id=None, change=None, binding=None):
     """Shared public synthetic fixture; never inspect an environment or credential."""
     from src.modules.analysis.domain.contracts import AnalysisContext, canonical_json, json_hash
     from src.modules.analysis.domain.agent_envelope import digest
@@ -20,6 +20,17 @@ def storage_fixture(owner_user_id, *, report_id=None, request_id=None, change=No
         raise RuntimeError('Technical fixture source changed')
     fixture = json.loads(path.read_text(encoding='utf-8'))
     request = copy.deepcopy(fixture['expected']['request']); response = copy.deepcopy(fixture['response'])
+    if binding is not None:
+        if (not isinstance(binding,TechnicalReadBinding) or binding.caller_context.owner_user_id!=owner_user_id
+                or report_id is not None or request_id is not None):
+            raise RuntimeError('Fixed completion fixture binding required')
+        binding.__post_init__();request=json.loads(binding.boundary.input_json);data=request['data']
+        response.update(request_id=request['request_id'],trace_id=request['trace_id'])
+        response['data'].update(request_snapshot=copy.deepcopy(data),request_sha256=json_hash(binding.boundary.input_json))
+        response['data']['result'].update(request_id=request['request_id'],trace_id=request['trace_id'],
+            ticker=data['stock']['stock_code'],as_of=data['requested_as_of'],resolved_stock_name=data['stock']['stock_name'])
+        if change is not None:change(response)
+        return binding,binding.compose(response)
     if report_id is not None: request['data']['context']['report_id'] = str(report_id)
     if request_id is not None: request['request_id'] = str(request_id)
     ids = request['data']['context']; stamp = datetime.fromisoformat(request['data']['requested_as_of'])
@@ -534,3 +545,315 @@ async def _verify(proof):
     check(legacy_before == legacy_after,'legacy row rewritten')
     groups.append('nonempty_downgrade_rejected_legacy_unchanged')
     return {'status':'passed','groups':groups,'engine_calls':0,'provider_calls':0,'public_http_calls':0}
+
+
+
+async def verify_technical_completion(proof):
+    from scripts.runner_owned_database import RunnerOwnedDatabase
+    from scripts.cf003_admission_check import isolated_application,check
+    if type(proof) is not RunnerOwnedDatabase:raise RuntimeError('Technical completion requires original owned proof')
+    proof.verify_ownership()
+    with isolated_application(proof) as observed:
+        result=await _verify_completion(proof)
+        check(not any(observed.values()),'CF050 forbidden I/O')
+        return result | {'observed_denials':dict(observed)}
+
+
+async def _verify_completion(proof):
+    import asyncio
+    from unittest.mock import patch
+    from sqlalchemy import text,select,event
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from alembic import command
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from db.models.auth.models import AuthUser
+    from db.models.common.stock import Stock
+    from db.models.technical.technical_report import TechnicalReport
+    from src.modules.auth.application.session_service import issue_session,revoke_session,AuthenticationRequired
+    from src.modules.technical.domain.execution_admission import Policy,Intent,TechnicalAdmissionError,TechnicalCompletionError
+    from src.modules.technical.application.execution_admission_service import TechnicalAdmissionService as Admission
+    from src.modules.technical.application import execution_completion as E
+    from src.modules.technical.infrastructure import execution_completion_repository as CR
+    from src.modules.analysis.application.coordinator import AnalysisCoordinator
+    from scripts.cf002_interactive_login import owned_session,safe_print
+    from scripts.cf003_admission_check import check,migration
+    groups=[]
+    limits=dict(operation='technical.analysis.v1',enabled=True,currency='USD',supported_tickers=['000720'],
+        user_daily_limit=100,service_daily_limit=100,daily_budget_nano=1000000,attempt_reserve_nano=10000,
+        deadline_seconds=10,model='synthetic-model',service_tier='default',price_id='cf050.synthetic.v1',
+        price_evidence_sha256='a'*64,input_nano_per_token=10,output_nano_per_token=20,
+        input_token_cap=100,output_token_cap=50,input_byte_cap=1000,output_byte_cap=500,max_calls=4)
+    policy=Policy.parse(limits)
+    intent=Intent.parse(dict(operation='technical.analysis.v1',ticker='000720',original_query='CF050 synthetic private chart',
+        requested_views=['technical'],conditions=dict(profile='technical.multiframe.v1',periods=['3m','1y','5y'])))
+    def mark(label):groups.append(label);safe_print({'phase':'cf050_check','label':label,'status':'passed'})
+    def coord(session,p,current=policy):return AnalysisCoordinator(session,principal=p,client=None,profile=E.TechnicalCompletionProfile(policy=current))
+    async def scalar(query,params=None):
+        async with owned_session(proof) as s:return await s.scalar(text(query),params or {})
+    async def totals():
+        async with owned_session(proof) as s:return tuple((await s.execute(text('SELECT (SELECT count(*) FROM technical_analysis_runs),coalesce((SELECT sum(request_count) FROM technical_usage_periods),0),coalesce((SELECT sum(reserved_nano) FROM technical_usage_periods),0),(SELECT coalesce(sum(held_nano),0) FROM technical_analysis_runs)'))).one())
+    async def user():
+        async with owned_session(proof) as s:
+            owner=AuthUser(id=uuid4());s.add(owner);await s.flush()
+            _,p=await issue_session(s,owner);_,a2=await issue_session(s,owner);await s.commit();return p,a2
+    async def new_run(p):
+        key='cf050-'+str(uuid4())
+        async with owned_session(proof) as s:first=await Admission(s,principal=p,policy=policy).admit(key,intent)
+        async with owned_session(proof) as s:claimed=await Admission(s,principal=p,policy=policy).dispatch_claim(first.run,first.claim_token)
+        check(first.newly_admitted and claimed.newly_claimed,'CF050 original admission and claim ACK')
+        async with owned_session(proof) as s:
+            row=await CR.owned(s,claimed.run.analysis_id,p.user_id);binding=E.binding_from_sql(row)
+        _,frozen=storage_fixture(p.user_id,binding=binding)
+        return dict(key=key,first=first,claimed=claimed,binding=binding,frozen=frozen,response=json.loads(frozen.result_json))
+    async def receive(p,item,response=None):
+        async with owned_session(proof) as s:return await coord(s,p).receive(item['claimed'].run,item['first'].claim_token,item['response'] if response is None else response)
+    async def publish(p,item):
+        async with owned_session(proof) as s:return await coord(s,p,None).publish(item['claimed'].run.analysis_id)
+    async def reconcile(p,item):
+        async with owned_session(proof) as s:return await E.reconcile_completion(s,principal=p,analysis_id=item['claimed'].run.analysis_id)
+    async def unavailable_stage(*args):raise OSError('fixed synthetic unavailable stage')
+    async def ready(p,item):
+        with patch.object(E.TechnicalCompletionAdapter,'stage',unavailable_stage):
+            try:await receive(p,item)
+            except TechnicalCompletionError as error:check(error.code=='SERVICE_UNAVAILABLE','CF050 ready retained')
+            else:check(False,'CF050 expected stage unavailable')
+        result=await reconcile(p,item);check(result.run.state=='result_ready','CF050 durable ready exists');return result
+    async def refused(query,params=None,*,deferred=False):
+        async with owned_session(proof) as s:
+            executed=False
+            try:
+                await s.execute(text(query),params or {});executed=True;await s.commit()
+            except IntegrityError:
+                await s.rollback();check(not deferred or executed,'CF050 deferred refusal after execute');return
+            check(False,'CF050 SQL must refuse')
+    async def expect_error(call,codes):
+        try:await call
+        except (TechnicalCompletionError,TechnicalAdmissionError) as error:
+            check(error.code in codes,'CF050 fixed refusal');return
+        check(False,'CF050 expected fixed refusal')
+    async def get_report(p,item):
+        async with owned_session(proof) as s:return await E.TechnicalOwnedReportService(s,principal=p).read(item['claimed'].run.report_id)
+
+    config=Config();config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
+    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c50001a7e0001'],'CF050 single migration head')
+    check(await scalar('SELECT version_num FROM alembic_version')==heads[0],'CF050 current head')
+    async with owned_session(proof) as s:s.add(Stock(stock_code='000720',stock_name='CF050 synthetic canonical',market='KOSPI'));await s.commit()
+    p,a2=await user();other,_=await user()
+    async with owned_session(proof) as s:old=await Admission(s,principal=p,policy=policy).admit('cf050-old-row',intent)
+    before=await totals();await migration(proof,'c48001a7e0001',downgrade=True)
+    check(not await scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='technical_analysis_runs' AND column_name='accepted_at')"),'CF050 old columns absent')
+    class DDLFailure(RuntimeError):pass
+    await proof.preflight();engine=create_async_engine(proof.url,connect_args=proof.connection_parameters());reached=[]
+    try:
+        async with engine.connect() as connection:
+            await proof.attest_connection(connection)
+            def inject(sync):
+                cfg=Config();cfg.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
+                cfg.attributes.update(connection=sync,verified_test_mode=True)
+                def after(conn,cursor,statement,parameters,context,executemany):
+                    if statement.lstrip().upper().startswith('ALTER TABLE TECHNICAL_ANALYSIS_RUNS ADD COLUMN COMPLETION_FORMAT'):
+                        reached.append(True);raise DDLFailure('fixed CF050 DDL rollback')
+                event.listen(sync,'after_cursor_execute',after)
+                try:command.upgrade(cfg,heads[0])
+                finally:event.remove(sync,'after_cursor_execute',after)
+            try:await connection.run_sync(inject);await connection.commit()
+            except DDLFailure:await connection.rollback()
+    finally:await engine.dispose()
+    check(reached==[True] and await scalar('SELECT version_num FROM alembic_version')=='c48001a7e0001','CF050 same connection DDL rollback')
+    check(not await scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='technical_analysis_runs' AND column_name='completion_format')"),'CF050 partial DDL absent')
+    await migration(proof,heads[0]);check(await totals()==before,'CF050 old identity/accounting preserved')
+    async with owned_session(proof) as s:check((await Admission(s,principal=p).get(old.run.analysis_id)).held_nano==10000,'CF050 old row readable')
+    mark('old_row_downgrade_upgrade_same_connection_DDL_rollback')
+
+    normal=await new_run(p);before=await totals();result=await receive(p,normal)
+    check(result.run.state=='stored' and result.run.held_nano==10000 and await totals()==before,'CF050 normal same-run stored no extra reservation')
+    stored=await get_report(a2,normal)
+    check(stored is not None and stored.frozen==normal['frozen'],'CF050 full owner report exact restore')
+    id=normal['claimed'].run.analysis_id;rid=normal['claimed'].run.report_id
+    check(await scalar('SELECT intent_json IS NULL AND input_json IS NULL AND result_json IS NULL FROM technical_analysis_runs WHERE id=:id',{'id':id}),'CF050 stored raw TEXT consumed')
+    check(await scalar("SELECT count(*) FROM agent_reports WHERE agent_type='technical' AND agent_report_id=:id",{'id':rid})==1,'CF050 exact index1')
+    check((await receive(p,normal)).run.state=='stored','CF050 exact incoming replay')
+    changed=copy.deepcopy(normal['response']);changed['data']['result']['interpretation']['text']='different synthetic result'
+    await expect_error(receive(p,normal,changed),{'RESULT_CONFLICT'})
+    async with owned_session(proof) as s:
+        check(not (await Admission(s,principal=p).dispatch_claim(normal['claimed'].run,normal['first'].claim_token)).newly_claimed,'CF050 completed claim authority false')
+    check(await totals()==before and (await get_report(a2,normal)).frozen==normal['frozen'],'CF050 replay read no new work')
+    mark('real_coordinator_CF031_CF035_normal_lossless_owner_read_replay_no_new_claim')
+
+    raced=await new_run(p);before=await totals();accepted=[];original_accept=CR.accept
+    async def accepted_once(*args):accepted.append(True);return await original_accept(*args)
+    async def race():
+        try:return await receive(p,raced)
+        except TechnicalCompletionError as error:check(error.code=='SERVICE_UNAVAILABLE','CF050 winner publication held');return None
+    with patch.object(E.TechnicalCompletionAdapter,'stage',unavailable_stage),patch.object(CR,'accept',accepted_once):
+        results=await asyncio.gather(race(),race())
+    check(len(accepted)==1 and any(value is not None for value in results),'CF050 two SQL sessions receive winner1')
+    check((await reconcile(p,raced)).run.state=='result_ready' and await totals()==before,'CF050 race snapshot atomic no second hold')
+    mark('two_SQL_session_receive_single_snapshot_winner1')
+
+    mismatch=await new_run(p);before=await totals()
+    for kind in ('owner','A2','token','attempt','policy'):
+        actual=other if kind=='owner' else a2 if kind=='A2' else p
+        expected=replace(mismatch['claimed'].run,attempt_id=uuid4()) if kind=='attempt' else mismatch['claimed'].run
+        token=b'z'*32 if kind=='token' else mismatch['first'].claim_token
+        current=Policy.parse(limits|{'deadline_seconds':9}) if kind=='policy' else policy
+        async with owned_session(proof) as s:
+            await expect_error(coord(s,actual,current).receive(expected,token,mismatch['response']),{'RESOURCE_NOT_FOUND','RESULT_CONTRACT_INVALID','POLICY_UNAVAILABLE'})
+    async with owned_session(proof) as s:await s.execute(text("UPDATE stocks SET stock_name='CF050 changed master' WHERE stock_code='000720'"));await s.commit()
+    await expect_error(receive(p,mismatch),{'RESULT_CONTRACT_INVALID'})
+    async with owned_session(proof) as s:await s.execute(text("UPDATE stocks SET stock_name='CF050 synthetic canonical' WHERE stock_code='000720'"));await s.commit()
+    check(await scalar('SELECT state FROM technical_analysis_runs WHERE id=:id',{'id':mismatch['claimed'].run.analysis_id})=='claimed' and await totals()==before,'CF050 untrusted mismatch cannot fail run')
+    invalid=await new_run(p);bad=await receive(p,invalid,{'invalid':'result'})
+    check(bad.run.state=='failed' and bad.accepted_at is None and bad.error_code=='RESULT_CONTRACT_INVALID','CF050 authenticated invalid response failed without snapshot')
+    mark('fresh_owner_A1_token_expected_policy_Stock_invalid_result_fences')
+
+    recovery_owner,recovery_a2=await user();late_ready=await new_run(recovery_owner);late_claim=await new_run(recovery_owner)
+    accepted=await ready(recovery_owner,late_ready);original=(accepted.run,accepted.input_sha256,accepted.result_sha256,accepted.binding_sha256,accepted.accepted_at)
+    async with owned_session(proof) as s:await revoke_session(s,recovery_owner)
+    stamp=await scalar('SELECT clock_timestamp()');end=max(late_ready['claimed'].run.deadline_at,late_claim['claimed'].run.deadline_at)
+    await asyncio.sleep(max(0,(end-stamp).total_seconds())+0.03)
+    before=await totals()
+    async with owned_session(proof) as s:
+        check((await coord(s,recovery_a2,None).get(late_ready['claimed'].run.analysis_id)).run.state=='result_ready','CF050 GET after deadline no publish')
+    check(await get_report(recovery_a2,late_ready) is None,'CF050 GET kept unposted snapshot')
+    completed=await publish(recovery_a2,late_ready)
+    check(completed.run.state=='stored' and (completed.input_sha256,completed.result_sha256,completed.binding_sha256,completed.accepted_at)==original[1:],'CF050 same accepted snapshot after deadline')
+    check(completed.run.admission_session_id==recovery_owner.session_id,'CF050 original admission session retained')
+    check(await scalar('SELECT owner_session_id FROM technical_report_snapshots WHERE report_id=:id',{'id':late_ready['claimed'].run.report_id})==recovery_a2.session_id,'CF050 actual A2 stage session')
+    # A1 is revoked. A2 can observe the expired unaccepted run but cannot receive
+    # a new snapshot or new claim; the original failure is not made unused.
+    late=await receive(recovery_a2,late_claim)
+    check(late.run.state=='unknown' and late.accepted_at is None and await totals()==before,'CF050 late unaccepted result refused')
+    cancelled=await new_run(p);ready_receipt=await ready(p,cancelled)
+    async with owned_session(proof) as s:await Admission(s,principal=a2).close_unknown(cancelled['claimed'].run.analysis_id,'CANCELLED')
+    late=await receive(p,cancelled)
+    check(late.run.state=='unknown' and late.result_sha256==ready_receipt.result_sha256 and await get_report(a2,cancelled) is None,'CF050 cancelled ready cannot restore/publish')
+    mark('DB_clock_expiry_A1_revoked_actual_A2_late_ready_publish_cancelled_late_refused')
+
+    for where in ('before','after'):
+        item=await new_run(p);before=await totals()
+        async with owned_session(proof) as s:
+            original_commit=s.commit
+            async def lost():
+                if where=='after':await original_commit()
+                raise OSError('fixed CF050 snapshot ACK wrapper')
+            s.commit=lost
+            await expect_error(coord(s,p).receive(item['claimed'].run,item['first'].claim_token,item['response']),{'SERVICE_UNAVAILABLE'})
+        check(await totals()==before and await get_report(a2,item) is None,'CF050 snapshot ACK no automatic publication')
+        receipt=await reconcile(a2,item)
+        check(receipt.run.state==('claimed' if where=='before' else 'result_ready'),'CF050 actual snapshot ACK readonly state')
+        if where=='after':check((await publish(a2,item)).run.state=='stored','CF050 snapshot ACK explicit recovery')
+    mark('actual_snapshot_commit_before_after_ACK_wrapper_readonly_recovery')
+
+    for where in ('before','after'):
+        item=await new_run(p);before=await totals()
+        async with owned_session(proof) as s:
+            original_commit=s.commit;commits=[]
+            async def lost():
+                commits.append(True)
+                if len(commits)==2:
+                    if where=='after':await original_commit()
+                    raise OSError('fixed CF050 publication ACK wrapper')
+                await original_commit()
+            s.commit=lost
+            await expect_error(coord(s,p).receive(item['claimed'].run,item['first'].claim_token,item['response']),{'SERVICE_UNAVAILABLE'})
+        receipt=await reconcile(a2,item)
+        check(receipt.run.state==('result_ready' if where=='before' else 'stored'),'CF050 actual publish ACK readonly state')
+        check((await publish(a2,item)).run.state=='stored' and await totals()==before,'CF050 publish ACK explicit same-run recovery')
+        check((await get_report(a2,item)).frozen==item['frozen'],'CF050 publish ACK full restore')
+    mark('real_publication_root_snapshot_index_state_commit_ACK_recovery')
+
+    item=await new_run(p);before=await totals();original_stage=E.TechnicalCompletionAdapter.stage
+    async def stage_cancel(self,session,principal,frozen):
+        await original_stage(self,session,principal,frozen);raise asyncio.CancelledError()
+    with patch.object(E.TechnicalCompletionAdapter,'stage',stage_cancel):
+        async with owned_session(proof) as s:
+            try:await coord(s,p).receive(item['claimed'].run,item['first'].claim_token,item['response'])
+            except asyncio.CancelledError:pass
+            else:check(False,'CF050 automatic publish cancellation propagates')
+            check(not s.in_transaction(),'CF050 cancellation rollback before caller context exit')
+            async with owned_session(proof) as other_session:
+                await other_session.execute(text("SET LOCAL lock_timeout='250ms'"))
+                await other_session.execute(text('SELECT id FROM technical_usage_periods WHERE id=:id FOR UPDATE'),{'id':item['claimed'].run.period_id})
+    check((await reconcile(a2,item)).run.state=='result_ready' and await get_report(a2,item) is None,'CF050 cancelled uncommitted report absent')
+    check((await publish(a2,item)).run.state=='stored' and await totals()==before,'CF050 cancellation explicit snapshot recovery')
+    mark('actual_stage_cancel_rollback_session_lock_release_ready_hold_preserved')
+
+    same=await new_run(p);await ready(p,same)
+    async with owned_session(proof) as s:
+        await E.TechnicalOwnedReportService(s,principal=a2).stage(same['binding'],same['frozen']);await s.commit()
+    with patch.object(E.TechnicalCompletionAdapter,'stage',unavailable_stage):await expect_error(publish(a2,same),{'SERVICE_UNAVAILABLE'})
+    check((await reconcile(a2,same)).run.state=='result_ready','CF050 same complete stored report transient error is not conflict')
+    check((await publish(a2,same)).run.state=='stored','CF050 same complete report explicit exact replay')
+    unknown=await new_run(p);await ready(p,unknown)
+    async with owned_session(proof) as s:
+        await E.TechnicalOwnedReportService(s,principal=a2).stage(unknown['binding'],unknown['frozen']);await s.commit()
+    async def unavailable_read(*args):raise OSError('fixed CF050 stored lookup unavailable')
+    with patch.object(E.TechnicalCompletionAdapter,'stage',unavailable_stage),patch.object(E.TechnicalOwnedReportService,'read',unavailable_read):
+        await expect_error(publish(a2,unknown),{'SERVICE_UNAVAILABLE'})
+    check((await reconcile(a2,unknown)).run.state=='result_ready','CF050 unconfirmed lookup preserves ready')
+    check((await publish(a2,unknown)).run.state=='stored','CF050 lookup recovery exact replay')
+    conflict=await new_run(p);await ready(p,conflict)
+    def changed_result(response):response['data']['result']['interpretation']['text']='different committed synthetic result'
+    _,different=storage_fixture(p.user_id,binding=conflict['binding'],change=changed_result)
+    async with owned_session(proof) as s:
+        await E.TechnicalOwnedReportService(s,principal=a2).stage(conflict['binding'],different);await s.commit()
+    await refused("UPDATE technical_analysis_runs SET state='stored',intent_json=NULL,input_json=NULL,result_json=NULL,redacted_at=clock_timestamp() WHERE id=:id",{'id':conflict['claimed'].run.analysis_id},deferred=True)
+    await expect_error(publish(a2,conflict),{'RESULT_CONFLICT'})
+    check((await reconcile(a2,conflict)).run.state=='failed' and (await get_report(a2,conflict)).frozen==different,'CF050 confirmed conflict no report overwrite')
+    mark('same_complete_report_vs_confirmed_conflict_vs_unknown_classification')
+
+    # Actual dirty ORM state must be rejected before CF035 populate_existing can
+    # refresh it. This is distinct from merely suppressing autoflush.
+    async with owned_session(proof) as s:
+        root=await s.get(TechnicalReport,rid);root.stock_name='CF050 pending caller change';writes=[]
+        def observed(conn,cursor,statement,parameters,context,executemany):
+            if statement.lstrip().upper().startswith(('INSERT','UPDATE','DELETE')):writes.append(True)
+        event.listen(s.bind.sync_connection,'before_cursor_execute',observed)
+        try:
+            await expect_error(E.reconcile_completion(s,principal=a2,analysis_id=id),{'CONTEXT_DIRTY'})
+            check(root.stock_name=='CF050 pending caller change' and root in s.dirty and not writes,'CF050 pending cache remains unchanged')
+        finally:event.remove(s.bind.sync_connection,'before_cursor_execute',observed)
+        await s.rollback()
+    mark('readonly_reconcile_pending_ORM_no_refresh_flush_or_commit')
+
+    ready_id=raced['claimed'].run.analysis_id;before=await totals()
+    for query,params,deferred in (
+        ('UPDATE technical_analysis_runs SET accepted_at=accepted_at+interval \'1 microsecond\' WHERE id=:id',{'id':ready_id},False),
+        ("UPDATE technical_analysis_runs SET result_sha256=:sha WHERE id=:id",{'id':ready_id,'sha':'f'*64},False),
+        ("UPDATE technical_analysis_runs SET state='claimed' WHERE id=:id",{'id':ready_id},False),
+        ("UPDATE technical_analysis_runs SET state='stored',intent_json=NULL,input_json=NULL,result_json=NULL,redacted_at=clock_timestamp() WHERE id=:id",{'id':ready_id},True),
+        ("UPDATE technical_reports SET owner_user_id=:owner WHERE id=:id",{'id':rid,'owner':other.user_id},True),
+        ("UPDATE technical_reports SET final_regime='cf050-changed' WHERE id=:id",{'id':rid},True),
+        ("UPDATE technical_reports SET created_at=created_at+interval '1 second' WHERE id=:id",{'id':rid},True),
+        ('DELETE FROM technical_reports WHERE id=:id',{'id':rid},True),
+        ("UPDATE technical_report_snapshots SET binding_sha256=:sha WHERE report_id=:id",{'id':rid,'sha':'f'*64},False),
+        ('DELETE FROM technical_report_snapshots WHERE report_id=:id',{'id':rid},True),
+        ("UPDATE agent_reports SET owner_session_id=:session WHERE agent_type='technical' AND agent_report_id=:id",{'id':rid,'session':other.session_id},True),
+        ("DELETE FROM agent_reports WHERE agent_type='technical' AND agent_report_id=:id",{'id':rid},True),
+        ("INSERT INTO agent_reports(id,agent_type,agent_report_id,owner_user_id) VALUES(:new,'technical',:id,NULL)",{'id':rid,'new':uuid4()},True),
+        ('TRUNCATE technical_reports CASCADE',{},False),('TRUNCATE technical_report_snapshots',{},False),('TRUNCATE agent_reports',{},False)):
+        await refused(query,params,deferred=deferred)
+    check(await totals()==before and (await get_report(a2,normal)).frozen==normal['frozen'],'CF050 direct SQL attacks preserve all accounting/canonical report')
+    mark('SQL_accepted_snapshot_terminal_and_stored_root_snapshot_full_index_update_delete_truncate_guards')
+
+    # Wrong binding must fail on the actual receive UPDATE, with fresh active
+    # A1/Stock/time, before any publication or deferred stored linkage checks.
+    tamper=await new_run(p);frozen=tamper['frozen'];tid=tamper['claimed'].run.analysis_id
+    check(await scalar('SELECT clock_timestamp()<deadline_at FROM technical_analysis_runs WHERE id=:id',{'id':tid}),'CF050 tamper active deadline')
+    await refused("UPDATE technical_analysis_runs SET state='result_ready',completion_format='technical.result-completion.v1',input_json=:input,input_sha256=:ih,result_json=:result,result_sha256=:rh,binding_sha256=:bad,accepted_at=clock_timestamp() WHERE id=:id",
+        {'id':tid,'input':frozen.input_json,'ih':frozen.input_sha256,'result':frozen.result_json,'rh':frozen.result_sha256,'bad':'0'*64})
+    check((await reconcile(p,tamper)).accepted_at is None,'CF050 wrong S binding not accepted')
+    mark('fresh_SQL_receive_expected_binding_fence_before_publication')
+    before=await totals()
+    try:await migration(proof,'c48001a7e0001',downgrade=True)
+    except RuntimeError:pass
+    else:check(False,'CF050 populated completion downgrade must reject')
+    check(await scalar('SELECT version_num FROM alembic_version')==heads[0] and await totals()==before,'CF050 populated downgrade retained')
+    mark('new_completion_populated_downgrade_refused_old_ledger_unchanged')
+    return dict(status='passed',groups=groups,receiving_only=True,new_admission_or_claim_in_completion=0,
+        provider_calls=0,engine_dispatch=0,usage_settlement=False,hold_refund=0,
+        concurrency='actual two SQL sessions',ACK_loss='wrapper simulation around actual PG commits',
+        expiry='actual DB clock',dirty_session='rejected before ORM refresh',fixture='synthetic CF031; no actual engine')

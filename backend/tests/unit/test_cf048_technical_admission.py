@@ -390,7 +390,7 @@ def completion_response(binding):
     return response
 
 
-async def completion_setup(monkeypatch):
+async def completion_setup(monkeypatch,*,claim=True):
     """Actual coordinator/profile/CF031/CF035; persistence/auth I/O is explicit DI."""
     from src.modules.technical.application import execution_completion as E,owned_report_service as W
     from src.modules.technical.infrastructure import execution_completion_repository as CR,report_repository as WR
@@ -398,8 +398,10 @@ async def completion_setup(monkeypatch):
     from db.models.technical.report_snapshot import TechnicalReportSnapshot
     from db.models.common.agent_report import AgentReport
     session,p,policy,intent,store,first=await admitted(monkeypatch)
-    claimed=await S.TechnicalAdmissionService(session,principal=p,policy=policy).dispatch_claim(first.run,first.claim_token)
-    assert claimed.newly_claimed
+    claimed=await S.TechnicalAdmissionService(session,principal=p,policy=policy).dispatch_claim(first.run,first.claim_token) if claim else None
+    if claim:assert claimed.newly_claimed
+    for field in ('completion_format','input_json','input_sha256','result_json','result_sha256','binding_sha256','accepted_at','error_code'):
+        setattr(store.row,field,None)
     store.row._completion_period=store.period
     binding=E.binding_from_sql(store.row);response=completion_response(binding)
     ledger=NS(root=None,snapshot=None,indexes=[],groups=[],commits=[],stage_auth=[])
@@ -658,3 +660,229 @@ async def test_completion_owned_entry_rejects_non_original_proof_before_resource
     from scripts.cf035_technical_owned_check import verify_technical_completion
     with pytest.raises(RuntimeError,match='Technical completion requires original owned proof'):
         await verify_technical_completion(NS(verify_ownership=lambda:pytest.fail('Untrusted proof used')))
+
+
+async def runtime_setup(monkeypatch,*,status=200,handler=None):
+    import httpx
+    from src.modules.technical.application import execution_runtime as X
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    h=await completion_setup(monkeypatch,claim=False);sent=[]
+    async def reply(request):
+        sent.append(request)
+        assert request.url.path=='/internal/technical/boundary' and request.headers['X-Technical-Service-Token']=='t'*32
+        if handler:return await handler(request)
+        return httpx.Response(status,json=completion_response(h.E.binding_from_sql(h.store.row)))
+    client=AIClient('http://technical.synthetic',10,httpx.MockTransport(reply),service_token='t'*32)
+    monkeypatch.setattr(X,'validate_principal',S.validate_principal)
+    def runtime(**changes):
+        options=dict(principal=h.p,client=client,policy=h.policy,enabled=True,utcnow=lambda:h.store.stamp)
+        options.update(changes);return X.TechnicalExecutionRuntime(h.session,**options)
+    h.X=X;h.client=client;h.sent=sent;h.runtime=runtime
+    return h
+
+
+@pytest.mark.parametrize('invalid',['disabled','client','policy','bad_policy','token','URL','service_token','transport','method','context'])
+async def test_runtime_preflight_bad_configuration_never_claims_or_sends(invalid,monkeypatch):
+    h=await runtime_setup(monkeypatch);options={};token=h.first.claim_token
+    if invalid=='disabled':options['enabled']=False
+    if invalid=='client':options['client']=object()
+    if invalid=='policy':options['policy']=None
+    if invalid=='bad_policy':options['policy']=D.Policy.parse(policy_values(enabled=False))
+    if invalid=='token':token=b'x'
+    if invalid=='URL':h.client._base_url='http://user@technical.synthetic/path'
+    if invalid=='service_token':h.client._flow_token='bad'
+    if invalid=='transport':h.client._transport=object()
+    if invalid=='method':h.client.technical_boundary=AsyncMock()
+    if invalid=='context':h.session.dirty.add(object())
+    with pytest.raises(D.TechnicalCompletionError,match='SERVICE_UNAVAILABLE'):
+        await h.runtime(**options).execute_admitted_once(h.first.run,token)
+    assert h.store.row.state=='admitted' and h.store.row.claim_consumed_at is None and not h.sent and not h.ledger.commits
+
+
+async def test_runtime_real_admission_claim_client_receive_writer_one_invocation(monkeypatch):
+    h=await runtime_setup(monkeypatch);runtime=h.runtime()
+    result=await runtime.execute_admitted_once(h.first.run,h.first.claim_token)
+    assert result.run.state=='stored' and result.run.held_nano==10000 and len(h.sent)==1
+    assert [v[0] for v in h.ledger.commits]==['claimed','claimed','result_ready','stored']
+    request=json.loads(h.sent[0].content)
+    assert request==json.loads(h.binding.boundary.input_json)
+    assert len(h.ledger.indexes)==1 and h.ledger.snapshot.input_json==h.binding.boundary.input_json
+    assert h.store.period.request_count==1 and h.store.period.reserved_nano==10000
+    before=h.session.commit.await_count
+    with pytest.raises(D.TechnicalCompletionError):await runtime.execute_admitted_once(h.first.run,h.first.claim_token)
+    assert h.session.commit.await_count==before and len(h.sent)==1
+    assert (await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)).run.state=='stored'
+    assert len(h.sent)==1
+
+
+@pytest.mark.parametrize('phase',['claim','fresh'])
+async def test_runtime_commit_ACK_unknown_never_dispatches(phase,monkeypatch):
+    h=await runtime_setup(monkeypatch);commit=h.session.commit;calls=0
+    async def lost():
+        nonlocal calls
+        calls+=1;await commit()
+        if calls==(1 if phase=='claim' else 2):raise OSError(PRIVATE)
+    h.session.commit=AsyncMock(side_effect=lost)
+    with pytest.raises((D.TechnicalAdmissionError,D.TechnicalCompletionError)) as error:
+        await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    assert PRIVATE not in str(error.value) and not h.sent and h.store.period.reserved_nano==10000
+
+
+@pytest.mark.parametrize('change',['ready','unknown','config','method','deadline'])
+async def test_runtime_fresh_state_and_capture_drift_prevents_boundary(change,monkeypatch):
+    h=await runtime_setup(monkeypatch);commit=h.session.commit;changed=False
+    async def after_claim():
+        nonlocal changed
+        await commit()
+        if changed:return
+        changed=True
+        if change=='config':h.client._flow_token='u'*32
+        elif change=='method':h.client.technical_boundary=AsyncMock()
+        elif change=='deadline':h.store.stamp=h.first.run.deadline_at
+        elif change=='unknown':
+            h.store.row.state='unknown';h.store.row.intent_json=None;h.store.row.redacted_at=h.store.stamp;h.store.row.unknown_reason='CANCELLED'
+        else:
+            # Independent result accepted before this invocation's fresh lock.
+            frozen=h.E.TechnicalCompletionAdapter(h.binding).validate_and_freeze(h.response)
+            await h.CR.accept(h.session,h.store.row,h.store.row.claim_digest,frozen)
+    h.session.commit=AsyncMock(side_effect=after_claim)
+    try:result=await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    except D.TechnicalCompletionError:assert change in {'config','method','deadline'}
+    else:assert result.run.state in {'result_ready','unknown'}
+    assert not h.sent and h.store.period.reserved_nano==10000
+
+
+async def test_runtime_incoming_expected_policy_and_principal_are_frozen_before_auth(monkeypatch):
+    h=await runtime_setup(monkeypatch);runtime=h.runtime();expected=replace(h.first.run)
+    original=S.validate_principal
+    async def mutate(*args,**kwargs):
+        await original(*args,**kwargs)
+        object.__setattr__(expected.analysis_id,'int',uuid4().int)
+        object.__setattr__(h.policy,'text',D.Policy.parse(policy_values(user_daily_limit=2)).text)
+        runtime.principal=principal()
+    monkeypatch.setattr(S,'validate_principal',AsyncMock(side_effect=mutate))
+    result=await runtime.execute_admitted_once(expected,h.first.claim_token)
+    assert result.run.state=='stored' and result.run.analysis_id==h.store.row.id and len(h.sent)==1
+    assert h.ledger.snapshot.owner_user_id==h.p.user_id
+
+
+@pytest.mark.parametrize('status',[403,422,500,504])
+async def test_runtime_client_failure_uses_claimed_fence_and_full_hold(status,monkeypatch):
+    h=await runtime_setup(monkeypatch,status=status)
+    result=await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    assert result.run.state=='unknown' and result.run.held_nano==10000 and len(h.sent)==1
+    assert result.run.unknown_reason==('TIMEOUT' if status==504 else 'DISPATCH_UNCERTAIN')
+    assert h.ledger.root is None and h.store.row.intent_json is None
+    assert (await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)).run.state=='unknown' and len(h.sent)==1
+
+
+async def test_runtime_external_client_cancel_adds_no_SQL_cleanup(monkeypatch):
+    async def cancelled(request):raise asyncio.CancelledError(PRIVATE)
+    h=await runtime_setup(monkeypatch,handler=cancelled);close=AsyncMock()
+    monkeypatch.setattr(S.TechnicalAdmissionService,'close_unknown',close)
+    with pytest.raises(asyncio.CancelledError):await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    close.assert_not_awaited();assert h.store.row.state=='claimed' and len(h.sent)==1
+    assert [v[0] for v in h.ledger.commits]==['claimed','claimed'] and h.store.period.reserved_nano==10000
+
+
+@pytest.mark.parametrize('failure',['stage','cancel','receive_ACK'])
+async def test_runtime_receive_failure_never_closes_already_accepted_result(failure,monkeypatch):
+    h=await runtime_setup(monkeypatch);close=AsyncMock()
+    monkeypatch.setattr(S.TechnicalAdmissionService,'close_unknown',close)
+    if failure in {'stage','cancel'}:
+        async def fail(*args):
+            if failure=='cancel':raise asyncio.CancelledError(PRIVATE)
+            raise OSError(PRIVATE)
+        monkeypatch.setattr(h.E.TechnicalCompletionAdapter,'stage',fail)
+    else:
+        original=h.session.commit
+        async def lost():
+            await original()
+            if h.store.row.state=='result_ready':raise OSError(PRIVATE)
+        h.session.commit=AsyncMock(side_effect=lost)
+    with pytest.raises(asyncio.CancelledError if failure=='cancel' else D.TechnicalCompletionError):
+        await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    close.assert_not_awaited();assert h.store.row.state=='result_ready' and h.store.row.result_json and len(h.sent)==1
+    assert h.store.period.reserved_nano==h.store.row.held_nano==10000
+
+
+async def test_runtime_client_failure_racing_ready_never_redacts_accepted_snapshot(monkeypatch):
+    async def accept_then_fail(request):
+        frozen=h.E.TechnicalCompletionAdapter(h.binding).validate_and_freeze(h.response)
+        await h.CR.accept(h.session,h.store.row,h.store.row.claim_digest,frozen)
+        import httpx
+        return httpx.Response(500)
+    h=await runtime_setup(monkeypatch,handler=accept_then_fail);close=AsyncMock()
+    monkeypatch.setattr(S.TechnicalAdmissionService,'close_unknown',close)
+    result=await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    close.assert_not_awaited();assert result.run.state=='result_ready' and h.store.row.result_json and len(h.sent)==1
+
+
+async def test_AIClient_technical_snapshot_is_used_after_await_without_mutable_readback(monkeypatch):
+    import httpx
+    from src.shared.infrastructure.clients import ai_client as A
+    h=await runtime_setup(monkeypatch);original=httpx.AsyncClient
+    class MutatingClient(original):
+        async def __aenter__(self):
+            h.client._base_url='http://changed.invalid';h.client._flow_token='changed';h.client._transport=None
+            return await super().__aenter__()
+    monkeypatch.setattr(A.httpx,'AsyncClient',MutatingClient)
+    result=await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    assert result.run.state=='stored' and h.sent[0].url.host=='technical.synthetic'
+    assert h.sent[0].headers['X-Technical-Service-Token']=='t'*32
+    assert PRIVATE not in repr(h.client._technical_boundary_configuration) # bound method repr has no secret snapshot
+
+
+@pytest.mark.parametrize('phase',['fresh','client_failure'])
+async def test_runtime_unexpected_SQL_error_is_fixed_without_raw_parameters_or_retry(phase,monkeypatch):
+    from sqlalchemy.exc import StatementError
+    h=await runtime_setup(monkeypatch,status=503);original=h.X.validate_principal;calls=0
+    async def broken(*args,**kw):
+        nonlocal calls
+        calls+=1
+        if calls==(1 if phase=='fresh' else 2):raise StatementError(PRIVATE,PRIVATE,{'private':PRIVATE},RuntimeError(PRIVATE))
+        return await original(*args,**kw)
+    monkeypatch.setattr(h.X,'validate_principal',broken)
+    with pytest.raises(D.TechnicalCompletionError,match='SERVICE_UNAVAILABLE') as error:
+        await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    assert PRIVATE not in str(error.value) and error.value.__suppress_context__
+    assert h.store.row.state=='claimed' and h.store.row.held_nano==10000 and len(h.sent)==(0 if phase=='fresh' else 1)
+    assert h.store.period.request_count==1 and h.store.period.reserved_nano==10000
+
+
+async def test_runtime_external_ClaimReceipt_is_not_an_execution_authority(monkeypatch):
+    h=await runtime_setup(monkeypatch)
+    with pytest.raises(D.TechnicalCompletionError):
+        await h.runtime().execute_admitted_once(D.ClaimReceipt(h.first.run,False),h.first.claim_token)
+    assert h.store.row.state=='admitted' and not h.sent and not h.ledger.commits
+
+
+async def test_runtime_shorter_waiter_timeout_exits_context_before_claimed_cleanup(monkeypatch):
+    async def never(request):await asyncio.Event().wait()
+    h=await runtime_setup(monkeypatch,handler=never);monkeypatch.setattr(h.X,'WAIT_SECONDS',0.01)
+    result=await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    assert result.run.state=='unknown' and result.run.unknown_reason=='TIMEOUT' and result.run.held_nano==10000
+    assert asyncio.current_task().cancelling()==0 and len(h.sent)==1
+
+
+async def test_runtime_delayed_fresh_ACK_cannot_extend_original_deadline(monkeypatch):
+    h=await runtime_setup(monkeypatch);original=h.session.commit;calls=0
+    async def delayed():
+        nonlocal calls
+        calls+=1;await original()
+        if calls==2:h.store.stamp=h.first.run.deadline_at+timedelta(seconds=1)
+    h.session.commit=AsyncMock(side_effect=delayed)
+    with pytest.raises(D.TechnicalCompletionError):await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
+    assert not h.sent and h.store.row.state=='claimed' and h.store.row.held_nano==10000
+
+
+async def test_runtime_late_client_return_cannot_escape_shorter_waiter_deadline(monkeypatch):
+    import httpx
+    clock=[0.0]
+    async def late(request):
+        clock[0]=4.0  # model a delayed timeout callback while synchronous work returns
+        return httpx.Response(200,json=h.response)
+    h=await runtime_setup(monkeypatch,handler=late)
+    result=await h.runtime(clock=lambda:clock[0]).execute_admitted_once(h.first.run,h.first.claim_token)
+    assert result.run.state=='unknown' and result.run.unknown_reason=='TIMEOUT'
+    assert h.ledger.root is None and h.store.row.held_nano==10000 and len(h.sent)==1

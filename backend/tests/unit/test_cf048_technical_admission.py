@@ -359,7 +359,7 @@ def test_migration_and_model_share_exact_constraints_and_retained_identity_links
             if isinstance(target.value,ast.Name) and target.value.id=='PERIOD_CHECKS':
                 values['PERIOD_CHECKS'][ast.literal_eval(target.slice)]=ast.literal_eval(node.value)
     assert values['PERIOD_CHECKS']==model.PERIOD_CHECKS
-    assert {k:v for k,v in values['RUN_CHECKS'].items() if k!='state'}=={k:v for k,v in model.RUN_CHECKS.items() if k!='state'}
+    assert {k:v for k,v in values['RUN_CHECKS'].items() if k!='state'}=={k:(model.OLD_SPEC_CHECK if k=='spec' else v) for k,v in model.RUN_CHECKS.items() if k!='state'}
     newer=ast.parse((ROOT/'backend/db/migrations/versions/20261112_c50001a7e0001_technical_result_completion.py').read_text())
     additions={n.targets[0].id:ast.literal_eval(n.value) for n in newer.body
         if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id in {'OLD_STATE_CHECK','STATE_CHECK','COMPLETION_CHECKS'}}
@@ -886,3 +886,219 @@ async def test_runtime_late_client_return_cannot_escape_shorter_waiter_deadline(
     result=await h.runtime(clock=lambda:clock[0]).execute_admitted_once(h.first.run,h.first.claim_token)
     assert result.run.state=='unknown' and result.run.unknown_reason=='TIMEOUT'
     assert h.ledger.root is None and h.store.row.held_nano==10000 and len(h.sent)==1
+
+# CF053: explicit artificial policy/configuration, never operational settings.
+from src.modules.technical.domain import provider_execution as P
+
+def provider_configuration(policy=None,**changes):
+    return P.Configuration.parse(dict(schema_version=P.SCHEMA,policy=(policy or D.Policy.parse(policy_values())).data(),
+        counter={'free':True,'mapping':'technical.responses.model-input.v1','version':'synthetic.v1','provenance_sha256':'b'*64,'evidence_sha256':'c'*64},
+        caps={'request':4096,'count':4096,'generation':4096},ai_origin='https://ai.invalid',authority_origin='https://backend.invalid',cache_mode='none',trace_mode='none')|changes)
+
+async def provider_admitted(monkeypatch):
+    session,p,policy,intent,store=setup(monkeypatch);cfg=provider_configuration(policy)
+    first=await S.TechnicalAdmissionService(session,principal=p,policy=policy).admit_provider('provider-key',intent,cfg)
+    from db.models.technical.execution_admission import TechnicalAnalysisRun
+    for column in TechnicalAnalysisRun.__table__.columns:
+        if not hasattr(store.row,column.name):setattr(store.row,column.name,None)
+    store.row._completion_period=store.period
+    return session,p,policy,intent,store,cfg,first
+
+async def provider_claimed(monkeypatch):
+    values=await provider_admitted(monkeypatch);session,p,policy,intent,store,cfg,first=values
+    claim=await S.TechnicalAdmissionService(session,principal=p,policy=policy).dispatch_provider_claim(first.run,first.claim_token,cfg)
+    return (*values,claim)
+
+async def test_CF053_new_spec_same_namespace_once_grant_replay_never_reissues(monkeypatch):
+    session,p,policy,intent,store,cfg,first,claim=await provider_claimed(monkeypatch)
+    assert first.run.spec_sha256==P.SPEC_SHA256 and claim.newly_claimed and len(claim.grant)==64
+    body=P.parse_execution(P.decode(claim.execution_json),cfg)
+    assert body['control_sha256']==store.row.execution_control_sha256
+    assert hashlib.sha256(claim.grant.encode()).digest()==store.row.execution_grant_digest
+    second=await S.TechnicalAdmissionService(session,principal=p,policy=policy).dispatch_provider_claim(claim.run,first.claim_token,cfg)
+    assert not second.newly_claimed and second.grant is None and second.execution_json is None
+    assert store.period.request_count==1 and store.period.reserved_nano==10000
+    with pytest.raises(D.TechnicalAdmissionError,match='IDEMPOTENCY_CONFLICT'):
+        await S.TechnicalAdmissionService(session,principal=p,policy=policy).admit('provider-key',intent)
+    assert claim.grant not in repr(claim)
+
+@pytest.mark.parametrize('cap',[None,True,False,'10',1.0,0,-1,2097153])
+def test_CF053_configuration_caps_strict(cap):
+    with pytest.raises(P.ExecutionInvalid):provider_configuration(caps={'request':cap,'count':4096,'generation':4096})
+
+@pytest.mark.parametrize('raw',['http://ai.invalid','https://u:p@ai.invalid','https://ai.invalid/path','https://ai.invalid?query=1','https://ai.invalid#x'])
+def test_CF053_origins_are_closed_HTTPS(raw):
+    with pytest.raises(P.ExecutionInvalid):provider_configuration(ai_origin=raw)
+
+def test_CF053_mirror_source_exact_except_existing_relative_boundary_import():
+    backend=(ROOT/'backend/src/modules/technical/domain/provider_execution.py').read_text()
+    ai=(ROOT/'ai/src/agents/technical/domain/execution_contracts.py').read_text()
+    assert ai==backend.replace('.execution_boundary','.boundary_contracts')
+
+@pytest.mark.parametrize('number_kind',['float','bool'])
+async def test_CF053_old_binding_rejects_controlled_and_strict_coverage(monkeypatch,number_kind):
+    from src.modules.technical.application import execution_completion as E
+    from src.modules.technical.application.boundary_adapter import TechnicalBoundaryBinding,TechnicalBoundaryAdapter
+    session,p,policy,intent,store,cfg,first,claim=await provider_claimed(monkeypatch)
+    execution=P.decode(claim.execution_json);start=P.start_receipt(execution['control_sha256'],str(uuid4()),store.stamp.isoformat())
+    store.row.execution_started_at=store.stamp;store.row.execution_executor_id=UUID(start['executor_id'])
+    store.row.execution_start_json=P.canonical(start);store.row.execution_start_sha256=start['start_sha256']
+    binding=E.binding_from_sql(store.row)
+    old=TechnicalBoundaryBinding(binding.boundary.context,binding.boundary.report_id,binding.boundary.request_id,binding.boundary.trace_id,binding.boundary.input_json)
+    synthetic=completion_response(NS(boundary=old))
+    expected={k:start[k] for k in ('control_sha256','start_sha256','executor_id')}
+    response=P.result(execution['boundary_request'],synthetic['data']['result'],expected)
+    controlled=TechnicalBoundaryAdapter(binding.boundary).validate_and_freeze(response)
+    assert controlled.result_schema==P.SCHEMA
+    with pytest.raises(ValueError):TechnicalBoundaryAdapter(old).validate_and_freeze(response)
+    # Every integer count has canonical integer identity; bool/float are not aliases.
+    def alter(value):
+        if type(value) is dict:
+            for k,v in value.items():
+                if type(v) is int and (number_kind=='float' or v in {0,1}):value[k]=float(v) if number_kind=='float' else bool(v);return True
+                if alter(v):return True
+        if type(value) is list:
+            for v in value:
+                if alter(v):return True
+        return False
+    bad=copy.deepcopy(response);assert alter(bad['data']['coverage'])
+    with pytest.raises(P.ExecutionInvalid):P.validate_controlled(bad,execution['boundary_request'],expected)
+
+
+def evidence_record(control,**changes):
+    return dict(ordinal=1,analysis_id=control['analysis_id'],attempt_id=control['attempt_id'],policy_sha256=control['policy_sha256'],
+        request_sha256='d'*64,prompt_sha256='e'*64,projection_sha256='f'*64,model='synthetic-model',service_tier='default',input_token_cap=100,output_token_cap=50,held_nano=2000,
+        entered=True,response_received=True,usage=[1,1,2],estimated_nano=30,response_model='match',response_tier='match',text_accepted=True,reason=None,elapsed_ms=1,
+        count_entered=True,count_response_received=True,count_validated=True,counted_input_tokens=1)|changes
+
+async def test_CF053_usage_overflow_preserves_usage_failure_without_false_success(monkeypatch):
+    *_,cfg,first,claim=await provider_claimed(monkeypatch)
+    execution=P.decode(claim.execution_json);control=execution['control'];start=P.start_receipt(execution['control_sha256'],str(uuid4()),control['started_at'])
+    value=dict(schema_version='technical.usage.v1',analysis_id=control['analysis_id'],attempt_id=control['attempt_id'],policy_sha256=control['policy_sha256'],
+        control_sha256=start['control_sha256'],start_sha256=start['start_sha256'],executor_id=start['executor_id'],outcome='failed',records=[])
+    huge=P.MAX//10+1
+    row=evidence_record(control,usage=[huge,0,huge],estimated_nano=None,text_accepted=False,reason='USAGE_LIMIT_MISMATCH')
+    value['records']=[row];assert P.evidence(value,cfg,control,start)==value
+    for field in ('response_model','response_tier'):
+        value['records']=[evidence_record(control,**{field:'mismatch'})]
+        with pytest.raises(P.ExecutionInvalid):P.evidence(value,cfg,control,start)
+    value['records']=[evidence_record(control,request_sha256=int('1'*64))]
+    with pytest.raises(P.ExecutionInvalid):P.evidence(value,cfg,control,start)
+
+@pytest.mark.parametrize('raw,expected',[(True,True),(False,False),('true',True),('false',False),('TRUE',True)])
+def test_CF053_enable_is_explicit_delayed_parser(raw,expected):
+    from src.modules.technical.api.execution_authority_router import enabled
+    assert enabled(raw) is expected
+
+@pytest.mark.parametrize('raw',[None,1,'1',' true ',[],{}])
+def test_CF053_enable_invalid_is_closed(raw):
+    from src.modules.technical.api.execution_authority_router import enabled
+    with pytest.raises(P.ExecutionInvalid):enabled(raw)
+
+@pytest.mark.parametrize('change',['query','raw_path','method','duplicate','cookie','encoding','grant','token','length'])
+def test_CF053_callback_auth_and_closed_headers_before_any_dependency(change):
+    from src.modules.technical.api.execution_authority_router import authenticate_headers
+    path='/internal/technical/execution/start'
+    scope={'type':'http','method':'POST','path':path,'raw_path':path.encode(),'query_string':b'',
+        'headers':[(b'content-type',b'application/json'),(b'x-technical-authority-token',b'b'*32),(b'x-technical-execution-grant',b'f'*64)]}
+    if change=='query':scope['query_string']=b'x=1'
+    elif change=='raw_path':scope['raw_path']=b'/internal/technical/execution/%73tart'
+    elif change=='method':scope['method']='GET'
+    elif change=='duplicate':scope['headers'].append((b'x-technical-authority-token',b'b'*32))
+    elif change=='cookie':scope['headers'].append((b'cookie',b'session=private'))
+    elif change=='encoding':scope['headers'].append((b'content-encoding',b'gzip'))
+    elif change=='grant':scope['headers'][-1]=(b'x-technical-execution-grant',b'e'*63)
+    elif change=='token':scope['headers'][1]=(b'x-technical-authority-token',b'c'*32)
+    else:scope['headers'].append((b'content-length',b'8193'))
+    with pytest.raises(P.ExecutionInvalid):authenticate_headers(scope,'b'*32)
+
+async def test_CF053_bad_ready_precedes_any_admission_or_claim(monkeypatch):
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.shared.infrastructure.clients.ai_client import AIClient,AIUnavailableError
+    from fastapi import FastAPI
+    from starlette.responses import JSONResponse
+    app=FastAPI();seen=[]
+    @app.post('/internal/technical/execution/ready')
+    async def ready():seen.append(True);return JSONResponse({'ready':True})
+    session,p,policy,intent,store=setup(monkeypatch);cfg=provider_configuration(policy)
+    import httpx
+    client=AIClient('https://ai.invalid',60,httpx.ASGITransport(app=app),execution_token='a'*32)
+    runtime=TechnicalExecutionRuntime(session,principal=p,client=client,policy=policy,enabled=True)
+    with pytest.raises(AIUnavailableError):await runtime.admit_provider_once('key',intent,cfg)
+    assert seen==[True] and store.row is None and store.period.request_count==0
+    session.commit.assert_not_awaited()
+
+def test_CF053_spec_CHECK_SQL_compilation_retains_exact_boolean_bytes():
+    from sqlalchemy import Table,MetaData,Column,Text,CheckConstraint
+    from sqlalchemy.schema import CreateTable
+    from sqlalchemy.dialects.postgresql import dialect
+    from db.models.technical import execution_admission as model
+    table=Table('cf053_literal_probe',MetaData(),Column('spec_json',Text),Column('spec_sha256',Text),Column('operation',Text),CheckConstraint(model.RUN_CHECKS['spec']))
+    compiled=str(CreateTable(table).compile(dialect=dialect()))
+    # SQLAlchemy text bind syntax must never consume :true/:false in a JSON
+    # literal. The server receives exact canonical bytes, not NULL substitution.
+    assert '"provider_authority"NULL' not in compiled and '"settlement"NULL' not in compiled
+    assert P.SPEC_JSON.encode().hex() in compiled
+
+async def test_CF053_late_ready_fixed5_has_admission_and_claim0(monkeypatch):
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.shared.infrastructure.clients import ai_client as C
+    from fastapi import FastAPI
+    from starlette.responses import JSONResponse
+    import httpx
+    session,p,policy,intent,store=setup(monkeypatch);cfg=provider_configuration(policy);clock=NS(value=0.0)
+    monkeypatch.setattr(C,'time',NS(monotonic=lambda:clock.value));app=FastAPI();seen=[]
+    @app.post('/internal/technical/execution/ready')
+    async def ready():
+        seen.append(True);clock.value=6
+        return JSONResponse({'schema_version':P.SCHEMA,'configuration':cfg.data(),'spec_sha256':P.SPEC_SHA256,'ready':True})
+    client=C.AIClient('https://ai.invalid',60,httpx.ASGITransport(app=app),execution_token='a'*32)
+    runtime=TechnicalExecutionRuntime(session,principal=p,client=client,policy=policy,enabled=True)
+    with pytest.raises(C.AITimeoutError):await runtime.admit_provider_once('late-key',intent,cfg)
+    assert seen==[True] and store.row is None and store.period.request_count==0
+    session.commit.assert_not_awaited()
+
+async def test_CF053_callback_cancellation_closes_only_its_owned_dependency(monkeypatch):
+    from fastapi import FastAPI
+    import httpx
+    from src.modules.technical.api.execution_authority_router import make_router
+    from src.modules.technical.application.execution_authority_service import TechnicalExecutionAuthority
+    events=[];entered=asyncio.Event();session=Session()
+    async def sessions():
+        try:events.append('opened');yield session
+        finally:events.append('closed')
+    async def start(self,*args):
+        assert self.session is session;entered.set();await asyncio.Future()
+    monkeypatch.setattr(TechnicalExecutionAuthority,'start',start)
+    app=FastAPI();app.include_router(make_router(session_factory=sessions,configuration=provider_configuration,token=lambda:'b'*32))
+    body={'schema_version':P.SCHEMA,'analysis_id':str(uuid4()),'control_sha256':'c'*64,'executor_id':str(uuid4())}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://backend.invalid') as client:
+        task=asyncio.create_task(client.post('/internal/technical/execution/start',json=body,headers={'X-Technical-Authority-Token':'b'*32,'X-Technical-Execution-Grant':'f'*64}))
+        await entered.wait();task.cancel()
+        with pytest.raises(asyncio.CancelledError):await task
+    assert events==['opened','closed']
+    session.commit.assert_not_awaited();session.flush.assert_not_awaited()
+
+async def test_CF053_late_ready_cleanup_has_admission0(monkeypatch):
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.shared.infrastructure.clients import ai_client as C
+    from fastapi import FastAPI
+    from starlette.responses import JSONResponse
+    import httpx
+    session,p,policy,intent,store=setup(monkeypatch);cfg=provider_configuration(policy);clock=NS(value=0.0)
+    app=FastAPI();seen=[]
+    @app.post('/internal/technical/execution/ready')
+    async def ready():
+        seen.append(True);return JSONResponse({'schema_version':P.SCHEMA,'configuration':cfg.data(),'spec_sha256':P.SPEC_SHA256,'ready':True})
+    class DelayedClose:
+        def __init__(self,**kwargs):self.inner=httpx.AsyncClient(**kwargs)
+        async def __aenter__(self):return await self.inner.__aenter__()
+        async def __aexit__(self,*args):
+            result=await self.inner.__aexit__(*args);clock.value=6;return result
+    monkeypatch.setattr(C,'httpx',NS(AsyncClient=DelayedClose,ASGITransport=httpx.ASGITransport,TimeoutException=httpx.TimeoutException))
+    monkeypatch.setattr(C,'time',NS(monotonic=lambda:clock.value))
+    client=C.AIClient('https://ai.invalid',60,httpx.ASGITransport(app=app),execution_token='a'*32)
+    runtime=TechnicalExecutionRuntime(session,principal=p,client=client,policy=policy,enabled=True)
+    with pytest.raises(C.AITimeoutError):await runtime.admit_provider_once('cleanup-late-key',intent,cfg)
+    assert seen==[True] and store.row is None and store.period.request_count==0
+    session.commit.assert_not_awaited()

@@ -880,10 +880,23 @@ def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
     tree = ast.parse(Path(sys.modules[AccessBoundary.__module__].__file__).read_text())
     klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AccessBoundary')
     fn = next(n for n in klass.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '__call__')
-    # CF045 adds only these two internal endpoints; keep the old public digest.
-    additions=[n for n in fn.body if isinstance(n,ast.If) and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Name) and n.test.left.id=='path' and len(n.test.ops)==1 and isinstance(n.test.ops[0],ast.In) and isinstance(n.test.comparators[0],ast.Set) and {v.value for v in n.test.comparators[0].elts}=={'/internal/supervisor/meaning/authorize','/internal/supervisor/meaning/settle'}]
-    assert len(additions)==1
-    fn.body = [n for n in fn.body if n is not additions[0] and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
+    # Separate only the exact CF045/CF053 internal branches; retain the old public digest.
+    endpoints = (
+        {'/internal/supervisor/meaning/authorize', '/internal/supervisor/meaning/settle'},
+        {'/internal/technical/execution/start', '/internal/technical/execution/observe'},
+    )
+    additions = []
+    for paths in endpoints:
+        matches = [n for n in fn.body if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                   and isinstance(n.test.left, ast.Name) and n.test.left.id == 'path'
+                   and len(n.test.ops) == 1 and isinstance(n.test.ops[0], ast.In)
+                   and isinstance(n.test.comparators[0], ast.Set)
+                   and {v.value for v in n.test.comparators[0].elts} == paths]
+        assert len(matches) == 1
+        additions.append(matches[0])
+    # Pin the separately reviewed auth-before-body / fixed-five-second CF053 branch too.
+    assert hashlib.sha256(ast.dump(additions[1], include_attributes=False).encode()).hexdigest() == '7c86cf29015f2a5e8bc672bacec2bb402c33496e8b6d53edc12618ad5238a190'
+    fn.body = [n for n in fn.body if n not in additions and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'
 
 

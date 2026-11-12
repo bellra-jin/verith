@@ -265,7 +265,14 @@ def test_migration_matches_model_checks_and_preserves_old_revision():
     path = Path(__file__).resolve().parents[2]/'db/migrations/versions/20261111_c35001a7e0001_technical_owned_snapshot.py'
     spec = importlib.util.spec_from_file_location('_cf035_migration',path)
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    assert module.CHECKS == CHECKS and module.LIMITS == TEXT_LIMITS
+    historical = CHECKS | {'schemas':"input_schema='analysis.agent.v1' AND result_schema='technical.boundary.v1'"}
+    assert module.CHECKS == historical and module.LIMITS == TEXT_LIMITS
+    new_path=path.with_name('20261112_c53001a7e0001_technical_provider_execution.py')
+    new_spec=importlib.util.spec_from_file_location('_cf053_snapshot_migration',new_path)
+    current=importlib.util.module_from_spec(new_spec);new_spec.loader.exec_module(current)
+    assert current.SNAPSHOT_CHECK==CHECKS['schemas']
+    assert current.down_revision=='c50001a7e0001'
+    assert hashlib.sha256(path.read_bytes()).hexdigest()=='27adbb499e1daa46e3c59cc7688c5920c50d4688d51938ba05f014ea01792885'
     assert module.down_revision == 'c23001a7e0001'
     text = path.read_text()
     assert 'BEFORE UPDATE ON technical_report_snapshots' in text

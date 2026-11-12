@@ -7,14 +7,16 @@ import hmac
 import secrets
 import time
 from uuid import UUID, uuid4
+from types import SimpleNamespace
 from sqlalchemy.exc import SQLAlchemyError
 from src.modules.auth.application.session_service import Principal, validate_principal
 from src.modules.technical.domain.execution_admission import (
     AdmissionReceipt, ClaimReceipt, Intent, Policy, RunReceipt, TechnicalAdmissionError,
     OPERATION, REASONS, SPEC_JSON, SPEC_SHA256, canonical, decode, integer, sha, uid,
-    COMPLETION_FIELDS, CompletionReceipt,
+    COMPLETION_FIELDS, CompletionReceipt, ProviderClaim,
 )
 from src.modules.technical.infrastructure import execution_admission_repository as repo
+from src.modules.technical.domain import provider_execution as P
 
 
 class _ReplayRace(Exception):
@@ -61,6 +63,8 @@ class TechnicalAdmissionService:
                     return replace(result,newly_admitted=False,claim_token=None)
                 if type(result) is ClaimReceipt:
                     return replace(result,newly_claimed=False,intent_json=None)
+                if type(result) is ProviderClaim:
+                    return replace(result,newly_claimed=False,execution_json=None,grant=None)
             return result
         except BaseException as error:
             try:
@@ -104,7 +108,7 @@ class TechnicalAdmissionService:
                 or row.started_at != row.as_of or row.started_at < period.period_start or row.deadline_at > period.period_end
                 or row.deadline_at-row.started_at > timedelta(seconds=policy.data()['deadline_seconds'])
                 or row.ticker not in policy.data()['supported_tickers']
-                or row.spec_json != SPEC_JSON or row.spec_sha256 != SPEC_SHA256
+                or (row.spec_json,row.spec_sha256) not in {(SPEC_JSON,SPEC_SHA256),(P.SPEC_JSON,P.SPEC_SHA256)}
                 or row.stock_sha256 != sha(row.stock_json) or type(stock) is not dict
                 or set(stock) != {'stock_code','stock_name','market'} or stock['stock_code'] != row.ticker
                 or type(stock['stock_name']) is not str or not stock['stock_name'].strip()
@@ -125,6 +129,24 @@ class TechnicalAdmissionService:
             intent_sha256=row.intent_sha256,policy_sha256=row.policy_sha256,spec_sha256=row.spec_sha256,
             as_of=row.as_of,deadline_at=row.deadline_at,state=row.state,reserved_nano=row.reserved_nano,held_nano=row.held_nano,
             claim_consumed_at=row.claim_consumed_at,redacted_at=row.redacted_at,unknown_reason=row.unknown_reason)
+        if row.spec_sha256==P.SPEC_SHA256:
+            try:
+                cfg=P.Configuration(row.execution_configuration_json)
+                if cfg.fingerprint!=row.execution_configuration_sha256 or cfg.policy_sha256!=row.policy_sha256:raise P.ExecutionInvalid()
+                if row.claim_consumed_at is not None:
+                    if type(row.execution_grant_digest) is not bytes or len(row.execution_grant_digest)!=32:raise P.ExecutionInvalid()
+                    control=P.decode(row.execution_control_json,8192);P.shape(control,P.CONTROL_FIELDS)
+                    if any(control[k]!=str(getattr(result,k)) for k in ('analysis_id','admission_request_id','attempt_id','report_id','boundary_request_id','trace_id')):raise P.ExecutionInvalid()
+                    if control['configuration_sha256']!=cfg.fingerprint or control['policy_sha256']!=row.policy_sha256 or control['spec_sha256']!=P.SPEC_SHA256 or control['intent_sha256']!=row.intent_sha256 or control['stock_sha256']!=row.stock_sha256 or control['reserved_nano']!=row.reserved_nano or control['started_at']!=row.started_at.isoformat() or control['deadline_at']!=row.deadline_at.isoformat():raise P.ExecutionInvalid()
+                    P.digest(row.execution_control_sha256)
+                if getattr(row,'execution_started_at',None) is not None:
+                    start=P.decode(row.execution_start_json,8192)
+                    if start!=P.start_receipt(row.execution_control_sha256,str(row.execution_executor_id),row.execution_started_at.isoformat()) or start['start_sha256']!=row.execution_start_sha256:raise P.ExecutionInvalid()
+                if getattr(row,'execution_evidence_json',None) is not None:
+                    body=P.decode(row.execution_evidence_json,16384)
+                    if P.sha(row.execution_evidence_json)!=row.execution_evidence_sha256:raise P.ExecutionInvalid()
+                    P.evidence(body,cfg,control,start)
+            except (P.ExecutionInvalid,AttributeError,TypeError,ValueError):raise TechnicalAdmissionError('STORED_INVALID') from None
         CompletionReceipt(result,**{key:getattr(row,key,None) for key in COMPLETION_FIELDS})
         return result
 
@@ -146,16 +168,23 @@ class TechnicalAdmissionService:
             return True
         return False
 
-    async def admit(self, key, intent):
+    async def admit_provider(self,key,intent,configuration):
+        if type(configuration) is not P.Configuration or self._policy_text()!=P.canonical(configuration.data()['policy']):
+            raise TechnicalAdmissionError('POLICY_UNAVAILABLE')
+        return await self.admit(key,intent,_execution_configuration=configuration)
+
+    async def admit(self, key, intent, *, _execution_configuration=None):
         principal = self._principal();key_digest = self._key(key)
         if type(intent) is not Intent:
             raise TechnicalAdmissionError()
         frozen_intent = Intent(intent.text)
         policy_text = self._policy_text()  # immutable text captured before first await
+        config_text=_execution_configuration.text if type(_execution_configuration) is P.Configuration else None
+        wanted_spec=P.SPEC_SHA256 if config_text is not None else SPEC_SHA256
 
         async def replay(row):
             row,period = await self._locked(principal,repo.database_uuid(row.id))
-            if row.intent_sha256 != frozen_intent.fingerprint:
+            if row.intent_sha256 != frozen_intent.fingerprint or row.spec_sha256!=wanted_spec or config_text is not None and getattr(row,'execution_configuration_json',None)!=config_text:
                 raise TechnicalAdmissionError('IDEMPOTENCY_CONFLICT')
             self._expire(row,await repo.clock(self.session))
             return AdmissionReceipt(self._receipt(row,period),False),None
@@ -197,9 +226,10 @@ class TechnicalAdmissionService:
             row=await repo.insert_run(self.session,dict(id=uuid4(),owner_user_id=principal.user_id,
                 admission_session_id=principal.session_id,period_id=period.id,operation=OPERATION,key_digest=key_digest,
                 intent_json=frozen_intent.text,intent_sha256=frozen_intent.fingerprint,policy_sha256=period.policy_sha256,
-                spec_json=SPEC_JSON,spec_sha256=SPEC_SHA256,stock_json=stock_json,stock_sha256=sha(stock_json),ticker=data['ticker'],
+                spec_json=P.SPEC_JSON if config_text is not None else SPEC_JSON,spec_sha256=wanted_spec,stock_json=stock_json,stock_sha256=sha(stock_json),ticker=data['ticker'],
                 admission_request_id=uuid4(),attempt_id=uuid4(),planned_report_id=uuid4(),boundary_request_id=uuid4(),trace_id=uuid4(),
                 as_of=stamp,started_at=stamp,deadline_at=deadline,claim_digest=hashlib.sha256(token).digest(),claim_consumed_at=None,
+                execution_configuration_json=config_text,execution_configuration_sha256=P.sha(config_text) if config_text is not None else None,
                 reserved_nano=period.attempt_reserve_nano,held_nano=period.attempt_reserve_nano,state='admitted',unknown_reason=None,redacted_at=None))
             if row is None:
                 raise _ReplayRace()
@@ -242,28 +272,35 @@ class TechnicalAdmissionService:
         except (SQLAlchemyError,OSError,TimeoutError):
             raise TechnicalAdmissionError('UNAVAILABLE') from None
 
-    async def dispatch_claim(self, expected, claim_token):
+    async def dispatch_provider_claim(self,expected,claim_token,configuration):
+        if type(configuration) is not P.Configuration:raise TechnicalAdmissionError('CLAIM_DENIED')
+        return await self.dispatch_claim(expected,claim_token,_execution_configuration=configuration)
+
+    async def dispatch_claim(self, expected, claim_token, *, _execution_configuration=None):
         principal=self._principal()
         if type(expected) is not RunReceipt or type(claim_token) is not bytes or len(claim_token)!=32:
             raise TechnicalAdmissionError('CLAIM_DENIED')
         expected=RunReceipt(**{f.name:getattr(expected,f.name) for f in fields(RunReceipt)})
         token=bytes(claim_token);policy_text=self._policy_text()
+        cfg=P.Configuration(_execution_configuration.text) if type(_execution_configuration) is P.Configuration else None
+        def negative(run):return ProviderClaim(run,False) if cfg is not None else ClaimReceipt(run,False)
         immutable=tuple(f.name for f in fields(RunReceipt) if f.name not in {'state','claim_consumed_at','redacted_at','unknown_reason'})
         async def action():
             await validate_principal(self.session,principal,lock=True)
             row,period=await self._locked(principal,expected.analysis_id)
             current=self._receipt(row,period)
+            if (cfg is not None)!=(row.spec_sha256==P.SPEC_SHA256) or cfg is not None and (cfg.text!=row.execution_configuration_json or cfg.policy_sha256!=row.policy_sha256):raise TechnicalAdmissionError('CLAIM_DENIED')
             if any(getattr(current,key)!=getattr(expected,key) for key in immutable):
                 raise TechnicalAdmissionError('CLAIM_DENIED')
             base=time.monotonic();stamp=await repo.clock(self.session)
             if self._expire(row,stamp) or row.state=='unknown':
-                return ClaimReceipt(self._receipt(row,period),False),None
+                return negative(self._receipt(row,period)),None
             if row.state in {'result_ready','stored','failed'}:
-                return ClaimReceipt(current,False),None
+                return negative(current),None
             if row.admission_session_id!=principal.session_id or not hmac.compare_digest(row.claim_digest,hashlib.sha256(token).digest()):
                 raise TechnicalAdmissionError('CLAIM_DENIED')
             if row.state=='claimed':
-                return ClaimReceipt(current,False),None
+                return negative(current),None
             if policy_text is None:
                 raise TechnicalAdmissionError('POLICY_UNAVAILABLE')
             active=Policy(policy_text);active.enabled()
@@ -272,14 +309,27 @@ class TechnicalAdmissionService:
             stock=await repo.stock(self.session,row.ticker)
             if stock is None or canonical({'stock_code':stock.stock_code,'stock_name':stock.stock_name,'market':stock.market})!=row.stock_json:
                 row.state='unknown';row.intent_json=None;row.redacted_at=stamp;row.unknown_reason='STOCK_CHANGED'
-                return ClaimReceipt(self._receipt(row,period),False),None
+                return negative(self._receipt(row,period)),None
             bound=base+(row.deadline_at-stamp).total_seconds()
             if time.monotonic()>=bound:
                 row.state='unknown';row.intent_json=None;row.redacted_at=stamp;row.unknown_reason='EXPIRED'
-                return ClaimReceipt(self._receipt(row,period),False),None
+                return negative(self._receipt(row,period)),None
             row.state='claimed';row.claim_consumed_at=stamp
+            if cfg is not None:
+                run=self._receipt_for_new_grant(row,period)
+                boundary=P.boundary_for(run,Intent(row.intent_json).data(),decode(row.stock_json,4096))
+                execution=P.control_for(run,boundary,cfg);grant=secrets.token_hex(32)
+                row.execution_grant_digest=hashlib.sha256(grant.encode('ascii')).digest()
+                row.execution_control_json=P.canonical(execution['control']);row.execution_control_sha256=execution['control_sha256']
+                return ProviderClaim(self._receipt(row,period),True,P.canonical(execution),grant),bound
             return ClaimReceipt(self._receipt(row,period),True,row.intent_json),bound
         return await self._mutation(action)
+
+    @classmethod
+    def _receipt_for_new_grant(cls,row,period):
+        values={c.key:getattr(row,c.key,None) for c in repo.Run.__table__.columns}
+        consumed=values['claim_consumed_at'];values.update(state='admitted',claim_consumed_at=None)
+        return replace(cls._receipt(SimpleNamespace(**values),period),state='claimed',claim_consumed_at=consumed)
 
     async def close_unknown(self, analysis_id, reason):
         principal=self._principal();uid(analysis_id)

@@ -72,18 +72,20 @@ async def get_report(session: AsyncSession, report_id: UUID) -> TechnicalReport 
     return await session.get(TechnicalReport, report_id)
 
 
-def owned_selection(owner_user_id):
+def owned_selection(owner_user_id, *, public_only=False):
     """Filter root and snapshot owners and ALL Technical indexes before loading."""
     indexes = (select(AgentReport.agent_report_id)
         .where(AgentReport.agent_type == 'technical')
         .group_by(AgentReport.agent_report_id)
         .having(func.count() == 1,
                 func.count().filter(AgentReport.owner_user_id == owner_user_id) == 1))
-    return (select(TechnicalReport, TechnicalReportSnapshot)
+    statement = (select(TechnicalReport, TechnicalReportSnapshot)
         .join(TechnicalReportSnapshot, TechnicalReportSnapshot.report_id == TechnicalReport.id)
         .where(TechnicalReport.owner_user_id == owner_user_id,
                TechnicalReportSnapshot.owner_user_id == owner_user_id, TechnicalReport.id.in_(indexes))
         .execution_options(populate_existing=True))
+    if public_only:statement=statement.where(TechnicalReportSnapshot.result_schema=='technical.boundary.v1')
+    return statement
 
 
 def owned_statement(report_id, owner_user_id):
@@ -91,7 +93,7 @@ def owned_statement(report_id, owner_user_id):
 
 
 def owned_ids_statement(owner_user_id, *, stock_code=None, limit=10, offset=0):
-    statement = owned_selection(owner_user_id).with_only_columns(TechnicalReport.id)
+    statement = owned_selection(owner_user_id,public_only=True).with_only_columns(TechnicalReport.id)
     if stock_code is not None: statement = statement.where(TechnicalReport.stock_code == stock_code)
     return statement.order_by(TechnicalReport.created_at.desc(), TechnicalReport.id.desc()).limit(limit+1).offset(offset)
 
@@ -232,3 +234,10 @@ async def delete_all_roots(session: AsyncSession) -> int:
     """technical_reports **전체** 삭제(자식 CASCADE). 삭제된 행수 반환(전체 삭제용)."""
     result = await session.execute(delete(TechnicalReport))
     return result.rowcount or 0
+
+
+async def execution_for_report(session,report_id,owner):
+    from db.models.technical.execution_admission import TechnicalAnalysisRun,TechnicalUsagePeriod
+    row=await session.scalar(select(TechnicalAnalysisRun).where(TechnicalAnalysisRun.planned_report_id==report_id,TechnicalAnalysisRun.owner_user_id==owner))
+    if row is not None:row._completion_period=await session.get(TechnicalUsagePeriod,row.period_id)
+    return row

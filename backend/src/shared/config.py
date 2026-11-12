@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     FUNDAMENTAL_SERVICE_TOKEN: str = ""
     FLOW_ANALYSIS_ENABLED: bool = False
     FLOW_SERVICE_TOKEN: str = Field(default="", repr=False)
+    TECHNICAL_EXECUTION_ENABLED: Any = False
+    TECHNICAL_EXECUTION_CONFIG: str = ""
+    TECHNICAL_EXECUTION_AI_SERVICE_TOKEN: str = Field(default="", repr=False)
+    TECHNICAL_EXECUTION_AUTHORITY_TOKEN: str = Field(default="", repr=False)
     SUPERVISOR_MEANING_ENABLED: Any = False  # Raw: invalid paid config cannot break free planning.
     SUPERVISOR_MEANING_SERVICE_TOKEN: str = Field(default="", repr=False)
     SUPERVISOR_MEANING_ACCOUNT_BINDINGS: str = ""

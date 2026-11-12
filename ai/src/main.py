@@ -32,10 +32,17 @@ async def lifespan(app):
         yield
     finally:
         supervisor_meaning_runtime = None
+        if "app" in globals():app.state.technical_execution_runtime = None
 
 supervisor_router = make_supervisor_router(runtime=lambda: supervisor_meaning_runtime)
 
 app = FastAPI(title="verith-ai", lifespan=lifespan)
+app.state.technical_execution_runtime = None
+
+def install_technical_execution_runtime(options):
+    from src.agents.technical.application.execution_runtime import install_runtime
+    app.state.technical_execution_runtime = install_runtime(options)
+
 
 # 내부 AI endpoint 라우터와 §9 error envelope 핸들러 등록.
 app.include_router(flow_router)

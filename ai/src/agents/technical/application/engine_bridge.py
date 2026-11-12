@@ -47,7 +47,7 @@ class TechnicalEngineBridge:
     A cooperative deadline cannot stop an unresponsive synchronous function.
     """
     def __init__(self, *, sync_runner, llm_client, fetcher, cache, trace_sink,
-                 enabled=False, deadline=None):
+                 enabled=False, deadline=None, controlled=False, on_cancel=None):
         if (type(enabled) is not bool or not callable(sync_runner)
             or inspect.iscoroutinefunction(sync_runner)
             or inspect.iscoroutinefunction(getattr(sync_runner, '__call__', None))
@@ -62,6 +62,10 @@ class TechnicalEngineBridge:
             or type(deadline.expires_at) not in {int, float}
             or not math.isfinite(deadline.expires_at)):
             raise EngineBridgeUnavailable()
+        if type(controlled) is not bool or controlled and deadline is None:raise EngineBridgeUnavailable()
+        if on_cancel is not None and not callable(on_cancel):raise EngineBridgeUnavailable()
+        self.on_cancel=on_cancel
+        self.controlled=controlled
         self.enabled = enabled
         self.sync_runner = sync_runner
         self.llm_client = llm_client
@@ -73,7 +77,7 @@ class TechnicalEngineBridge:
     async def __call__(self, payload, *, trace_id):
         if not self.enabled or type(trace_id) is not str or not trace_id:
             raise EngineBridgeUnavailable()
-        deadline = Deadline(min(time.monotonic() + WAIT_SECONDS,
+        deadline = Deadline(min(math.inf if self.controlled else time.monotonic() + WAIT_SECONDS,
             self.deadline.expires_at if self.deadline is not None else math.inf))
         deadline.check('technical_bridge_snapshot')
         snapshot = copy.deepcopy(payload)
@@ -115,6 +119,7 @@ class TechnicalEngineBridge:
             except asyncio.CancelledError as error:
                 if cancelled is None:
                     cancelled = error
+                    if self.on_cancel is not None:self.on_cancel()
         worker.join()  # is_alive() is already false; no blocking runner work here.
         if cancelled is not None:
             raise cancelled
@@ -125,7 +130,7 @@ class TechnicalEngineBridge:
 
 
 def make_engine_bridge(*, sync_runner, llm_client, fetcher, cache, trace_sink,
-                       enabled=False, deadline=None):
+                       enabled=False, deadline=None, controlled=False, on_cancel=None):
     return TechnicalEngineBridge(sync_runner=sync_runner, llm_client=llm_client,
         fetcher=fetcher, cache=cache, trace_sink=trace_sink,
-        enabled=enabled, deadline=deadline)
+        enabled=enabled, deadline=deadline, controlled=controlled, on_cancel=on_cancel)

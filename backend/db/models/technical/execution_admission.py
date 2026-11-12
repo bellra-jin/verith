@@ -50,6 +50,18 @@ COMPLETION_CHECKS = {
 }
 
 
+PROVIDER_SPEC_JSON = '{"boundary":"technical.boundary.v1","operation":"technical.analysis.v1","periods":["3m","1y","5y"],"profile":"technical.multiframe.v1","provider_authority":true,"settlement":false,"storage":"technical.owned-stage.v1","version":"technical.provider-execution.v1"}'
+PROVIDER_SPEC_SHA256 = 'b526fffe2e3c2ccce4c2c6a75f259bb61d82349ae2ceda16347b7b20f3d21e88'
+OLD_SPEC_CHECK=RUN_CHECKS['spec']
+RUN_CHECKS['spec'] = '('+OLD_SPEC_CHECK+") OR (spec_json=convert_from(decode('"+PROVIDER_SPEC_JSON.encode('utf-8').hex()+"','hex'),'UTF8') AND spec_sha256='"+PROVIDER_SPEC_SHA256+"')"
+PROVIDER_CHECKS={
+ 'configuration': "((spec_sha256='"+PROVIDER_SPEC_SHA256+"' AND execution_configuration_json IS NOT NULL AND octet_length(execution_configuration_json) BETWEEN 2 AND 32768 AND execution_configuration_sha256=encode(digest(convert_to(execution_configuration_json,'UTF8'),'sha256'),'hex')) OR (spec_sha256<>'"+PROVIDER_SPEC_SHA256+"' AND execution_configuration_json IS NULL AND execution_configuration_sha256 IS NULL)) IS TRUE",
+ 'grant': "((execution_grant_digest IS NULL AND execution_control_json IS NULL AND execution_control_sha256 IS NULL) OR (spec_sha256='"+PROVIDER_SPEC_SHA256+"' AND claim_consumed_at IS NOT NULL AND octet_length(execution_grant_digest)=32 AND execution_control_json IS NOT NULL AND octet_length(execution_control_json) BETWEEN 2 AND 8192 AND execution_control_sha256 ~ '^[0-9a-f]{64}$')) IS TRUE",
+ 'start': "((execution_started_at IS NULL AND execution_executor_id IS NULL AND execution_start_json IS NULL AND execution_start_sha256 IS NULL) OR (execution_grant_digest IS NOT NULL AND isfinite(execution_started_at) AND execution_started_at>=claim_consumed_at AND execution_started_at<deadline_at AND execution_executor_id IS NOT NULL AND execution_start_json IS NOT NULL AND octet_length(execution_start_json) BETWEEN 2 AND 8192 AND execution_start_sha256 ~ '^[0-9a-f]{64}$')) IS TRUE",
+ 'evidence': "((execution_evidence_json IS NULL AND execution_evidence_sha256 IS NULL AND execution_observed_at IS NULL) OR (execution_started_at IS NOT NULL AND execution_evidence_json IS NOT NULL AND octet_length(execution_evidence_json) BETWEEN 2 AND 16384 AND jsonb_typeof(execution_evidence_json::jsonb)='object' AND execution_evidence_sha256=encode(digest(convert_to(execution_evidence_json,'UTF8'),'sha256'),'hex') AND isfinite(execution_observed_at) AND execution_observed_at>=execution_started_at)) IS TRUE",
+}
+
+
 class TechnicalUsagePeriod(Base):
     __tablename__ = 'technical_usage_periods'
     id: Mapped[UUID] = uuid_pk()
@@ -113,10 +125,23 @@ class TechnicalAnalysisRun(Base):
     binding_sha256: Mapped[str | None] = mapped_column(Text)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(Text)
+    execution_configuration_json: Mapped[str | None] = mapped_column(Text)
+    execution_configuration_sha256: Mapped[str | None] = mapped_column(Text)
+    execution_grant_digest: Mapped[bytes | None] = mapped_column(LargeBinary)
+    execution_control_json: Mapped[str | None] = mapped_column(Text)
+    execution_control_sha256: Mapped[str | None] = mapped_column(Text)
+    execution_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_executor_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    execution_start_json: Mapped[str | None] = mapped_column(Text)
+    execution_start_sha256: Mapped[str | None] = mapped_column(Text)
+    execution_evidence_json: Mapped[str | None] = mapped_column(Text)
+    execution_evidence_sha256: Mapped[str | None] = mapped_column(Text)
+    execution_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint('owner_user_id','operation','key_digest',name='uq_technical_analysis_key'),
         ForeignKeyConstraint(['period_id','policy_sha256'],['technical_usage_periods.id','technical_usage_periods.policy_sha256'],ondelete='RESTRICT',name='fk_technical_run_period_policy'),
         Index('ix_technical_run_period_owner','period_id','owner_user_id'),
         *(CheckConstraint(value,name='cf048_run_'+key) for key,value in RUN_CHECKS.items()),
+        *(CheckConstraint(value,name='cf053_provider_'+key) for key,value in PROVIDER_CHECKS.items()),
         *(CheckConstraint(value,name='cf050_completion_'+key) for key,value in COMPLETION_CHECKS.items()),
     )

@@ -42,7 +42,14 @@ def binding_from_intent(row,intent):
     request=dict(schema_version=SCHEMA_VERSION,request_id=str(run.boundary_request_id),trace_id=str(run.trace_id),data=request_data,error=None)
     context=AnalysisContext(run.analysis_id,run.admission_request_id,run.attempt_id,admission.database_uuid(row.owner_user_id),
         B_OPERATION,b_fingerprint,run.as_of,run.deadline_at)
-    boundary=TechnicalBoundaryBinding(context,run.report_id,run.boundary_request_id,run.trace_id,canonical_json(request))
+    execution_json=None
+    from src.modules.technical.domain import provider_execution as P
+    if run.spec_sha256==P.SPEC_SHA256:
+        if row.execution_started_at is None:raise TechnicalAdmissionError('STORED_INVALID')
+        execution=P.control_for(run,request,P.Configuration(row.execution_configuration_json))
+        if P.canonical(execution['control'])!=row.execution_control_json or execution['control_sha256']!=row.execution_control_sha256:raise TechnicalAdmissionError('STORED_INVALID')
+        execution_json=P.canonical(dict(execution=execution,start=P.decode(row.execution_start_json)))
+    boundary=TechnicalBoundaryBinding(context,run.report_id,run.boundary_request_id,run.trace_id,canonical_json(request),execution_json)
     caller_text=canonical_json(dict(operation=S_OPERATION,boundary_request=request))
     caller_context=replace(context,operation=S_OPERATION,input_fingerprint=json_hash(caller_text))
     return TechnicalReadBinding(caller_context,caller_text,boundary)
@@ -118,7 +125,7 @@ class TechnicalCompletionProfile:
             # fresh owner/token/expected check may close a legitimate claim.
             raw='null'
         return expected,raw
-    async def check_receive(self,session,row,principal,expected,token):
+    async def check_dispatch(self,session,row,principal,expected,token):
         current=run_receipt(row)
         changed={'state','claim_consumed_at','redacted_at','unknown_reason'}
         if (type(token) is not bytes or len(token)!=32 or any(getattr(expected,f.name)!=getattr(current,f.name)
@@ -135,6 +142,12 @@ class TechnicalCompletionProfile:
         stock=await admission.stock(session,row.ticker)
         if stock is None or canonical_json(dict(stock_code=stock.stock_code,stock_name=stock.stock_name,market=stock.market))!=row.stock_json:
             raise self.error('RESULT_CONTRACT_INVALID',current.analysis_id)
+    async def check_receive(self,session,row,principal,expected,token):
+        await self.check_dispatch(session,row,principal,expected,token)
+        from src.modules.technical.domain import provider_execution as P
+        if row.spec_sha256==P.SPEC_SHA256 and row.execution_started_at is None:
+            raise self.error('RESULT_CONTRACT_INVALID',expected.analysis_id)
+
     async def verify_replay(self,session,row,principal,response):
         if row.state not in {'result_ready','stored'}:return
         if row.state=='stored':

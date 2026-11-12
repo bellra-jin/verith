@@ -387,3 +387,24 @@ INSERT/UPDATE guard는 identity·정책/기간·실행당 예약과 정책의 de
 claimed→result_ready→stored와 필요한 failed/unknown 전이만 추가한다. 첫 accept의 실제 SQL fence는 원 claim/세션·owner·Stock·기간·원 deadline 및 B/S binding을 대조한다. accepted hash/시각은 이후 불변이며 ready만 pending TEXT를 보유한다. stored/failed/unknown은 원 intent와 pending input/result TEXT를 NULL로 소비하되 ID/key/hash·claim·전체 hold는 유지한다. 미채택 실패에는 완료 metadata가 없다.
 
 같은 commit의 root/snapshot/전체 Technical index 정확1개·owner/hash·실제 stage session을 deferred guard로 결합한다. 연결된 stored 정본의 root/snapshot/index 변경·삭제·TRUNCATE를 거절하며 미연결 기존 보고서는 이 새 결합에 포함하지 않는다. 전체 child projection의 의미 검증은 기존 CF035 writer/read를 재사용한다. downgrade는 원 period/run을 잠그고 새 상태/완료 값이 전부 없는 경우에만 이전 CHECK/guard를 복원한다. 이는 전용 테스트 PG에 적용한 검증이며 운영 DB 적용은 아니다. [완료 계약](../../docs/contracts/technical-boundary-v1.md#cf050-같은-technical-run의-결과-수신과-저장-복구)을 따른다.
+
+### CF053: 동일 Technical run의 start/evidence (c53001a7e0001)
+
+새 table/registry/Flow ledger 없이 `technical_analysis_runs`에 nullable execution 열12개를 추가한다.
+`execution_configuration_json/sha256`은 비밀 없는 명시 policy/counter/caps/origin 구성,
+`execution_grant_digest`는 일회 opaque grant의 SHA256,
+`execution_control_json/sha256`은 원 IDs·intent/B/Stock/spec/policy/config hash·예약·원 기한 binding이다.
+`execution_started_at`, `execution_executor_id`, `execution_start_json/sha256`은 단일 fresh start를,
+`execution_evidence_json/sha256`, `execution_observed_at`은 최대16KiB 최종 관측을 보존한다.
+raw grant·key·HTTP header·raw SDK 오류·prompt/response는 새 관측 열에 저장하지 않는다.
+
+기존 spec은 새 execution 열이 전부 비어 있어야 한다. 새 spec/config는 INSERT 뒤 불변이고,
+claim/grant·start·evidence는 한 방향으로만 고정된다. 기존 period/owner/key/FK·삭제/TRUNCATE 보존
+경계와 전액 hold를 재사용한다. evidence는 실제 정산/환급이 아니며 expiry/revocation 뒤 record-only
+수신도 실행권을 만들지 않는다. 같은 hash만 replay하고 다른 late evidence는 conflict다.
+
+snapshot FORMAT/B/L은 유지한다. `technical_report_snapshots`의 정확 old synthetic/new controlled
+schema 조합, SQL run spec에서 분기한 binding hash와 completion/stored guard를 함께 적용한다.
+controlled snapshot은 대응 accepted/stored provider run 없이 생성할 수 없다. c530 자체의 부분 DDL
+실패는 같은 transaction에서 rollback하며 provider record가 있으면 downgrade를 DROP 전에 거절한다.
+기존 c350/c480/c500 migration bytes는 수정하지 않는다.

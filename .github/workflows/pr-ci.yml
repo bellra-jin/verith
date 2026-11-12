@@ -1,6 +1,7 @@
 name: PR safe checks
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [develop]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -9,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-safe-checks-${{ github.event.pull_request.number }}
+  group: pr-safe-checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

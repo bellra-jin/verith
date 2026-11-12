@@ -600,3 +600,15 @@ runtime 참조를 해제하며 startup 자체는 HTTP·DB·provider·계정 발�
 실제 관측한 잘못된 `외국인` mention은 원문 위치가 정확해도 계속 거절된다. 이번 수정의
 semantic identity는 prompt SHA만 바뀌며 과거 실행의 spec·입력·회계는 갱신하지 않는다.
 합성 후보의 수용/거절 회귀는 수정 후 실제 모델의 분류 품질이나 전체 실행 수용 증거가 아니다.
+
+
+## Supervisor·Flow 전용 앱 시작점
+
+`src.supervisor.api.flow_app:create_app`은 기존 production Supervisor/Flow router만
+조립하는 uvicorn `--factory` 시작점이다. 기존 main·다른 agent·환경 파일을 변경하지 않으며
+앱 생성 시 설정/키를 읽거나 meaning runtime을 설치하지 않는다. 기존 default-off·서비스
+인증·deadline·실제 Flow engine/usage 계약을 그대로 사용한다. 모델 없는 policy2의 종목
+명확화와 미지원 조건 waiver는 실행 동의를 대체하지 않는다.
+
+[구현·집중 검증과 실제 실행의 구분](../work/supervisor-flow-app.md)을 따른다. 이 앱의
+합성 ASGI 검증은 provider·DB·운영 설정이나 전체 Supervisor→Flow 실제 인수 증거가 아니다.

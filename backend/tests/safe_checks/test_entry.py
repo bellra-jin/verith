@@ -786,7 +786,7 @@ class CF023Boundary(unittest.TestCase):
         from scripts import check_safe as c
         import hashlib
         root=Path(__file__).resolve().parents[3]
-        self.assertEqual(set(c.CF045_INPUTS),{'ai/src/supervisor/application/meaning_gateway_factory.py','ai/src/supervisor/infrastructure/backend/meaning_budget_client.py','ai/src/main.py'})
+        self.assertEqual(set(c.CF045_INPUTS),{'ai/src/supervisor/application/meaning_gateway_factory.py','ai/src/supervisor/infrastructure/backend/meaning_budget_client.py','ai/src/main.py','ai/src/supervisor/api/flow_app.py'})
         self.assertEqual(len(c.CF023_INPUTS),32)
         for path,digest in c.CF045_INPUTS.items():
             self.assertTrue(c.source_allowed(path));self.assertFalse(c.source_allowed(path+'.adjacent'))

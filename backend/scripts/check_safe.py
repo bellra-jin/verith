@@ -403,6 +403,7 @@ CF023_SOURCES=frozenset(['backend/src/modules/supervisor/domain/contracts.py', '
 CF044_SOURCES=frozenset(['backend/db/models/supervisor/meaning_accounting.py', 'backend/db/migrations/versions/20261111_c44001a7e0001_supervisor_accounting.py', 'backend/src/modules/supervisor/domain/meaning_accounting.py', 'backend/src/modules/supervisor/infrastructure/meaning_accounting_repository.py', 'backend/src/modules/supervisor/application/meaning_accounting_service.py'])
 CF023_SOURCES = CF023_SOURCES | CF044_SOURCES
 CF045_INPUTS={'ai/src/supervisor/application/meaning_gateway_factory.py': 'cf0559833386db4cf9081a9c6d23a2d02f56cdc292f4002acbc483f4b02d0978', 'ai/src/supervisor/infrastructure/backend/meaning_budget_client.py': '593fb7f497725f26f6fcc40592d9e13f3afae9e7c0f7b6c98ad8ed1d4824783a', 'ai/src/main.py': '6f059cb65fc478f57b1e950accd2b7728c503b51c6232e77f38c9996b2f1c3a1'}
+CF045_INPUTS['ai/src/supervisor/api/flow_app.py']='89ec533b6a02f9b3e2a3d202847beb53967e71fca42b72eb0be72d894f0180ad'
 CF045_SOURCES=frozenset(['backend/src/modules/supervisor/api/meaning_phase_router.py', 'backend/db/migrations/versions/20261112_c45001a7e0001_supervisor_meaning_phase.py'])
 CF023_SOURCES=CF023_SOURCES|CF045_SOURCES
 NEW.update(CF045_INPUTS)

@@ -1949,3 +1949,114 @@ def test_heldout_typed_answer_sources_are_not_consent_or_borrowable_negation(cas
         raw['conditions'][0]['negation']=None;frame=G.assess(d,raw,source='model_assisted').frame
         assert any(c.kind=='exclude' and c.value=='기관' for c in frame.conditions)
     assert all(c.disposition!='honored' for c in frame.conditions)
+
+
+# Exact production-only app assembly; no provider/DB or full main import.
+def supervisor_flow_app_module():
+    import hashlib,importlib.util,importlib.machinery,types
+    from scripts.check_safe import CF023_INPUTS,CF045_INPUTS
+    relative='ai/src/supervisor/api/flow_app.py'
+    for suffix in ('','flow','flow.api','flow.application'):
+        name='src.agents'+('.'+suffix if suffix else '')
+        location=ROOT/'ai/src/agents'/suffix.replace('.','/')
+        if name not in sys.modules:
+            package=types.ModuleType(name);package.__path__=[]
+            package.__spec__=importlib.machinery.ModuleSpec(name,None,is_package=True)
+            package.__spec__.submodule_search_locations=[str(location)];sys.modules[name]=package
+        else:
+            assert sys.modules[name].__spec__.submodule_search_locations==[str(location)]
+    if 'src.shared.runtime' not in sys.modules:
+        package=types.ModuleType('src.shared.runtime');package.__path__=[]
+        package.__spec__=importlib.machinery.ModuleSpec('src.shared.runtime',None,is_package=True)
+        package.__spec__.submodule_search_locations=[str(ROOT/'ai/src/shared/runtime')];sys.modules['src.shared.runtime']=package
+    else:
+        assert sys.modules['src.shared.runtime'].__spec__.submodule_search_locations==[str(ROOT/'ai/src/shared/runtime')]
+    modules=[('src.shared.runtime.deadline','ai/src/shared/runtime/deadline.py'),('src.agents.flow.api.schemas','ai/src/agents/flow/api/schemas.py'),
+             ('src.agents.flow.application.execution_runtime','ai/src/agents/flow/application/execution_runtime.py'),
+             ('src.agents.flow.api.http','ai/src/agents/flow/api/http.py'),
+             ('src.supervisor.api.flow_app',relative)]
+    for name,path in modules:
+        full=ROOT/path;assert hashlib.sha256(full.read_bytes()).hexdigest()==(CF023_INPUTS|CF045_INPUTS)[path]
+        if name not in sys.modules:
+            spec=importlib.util.spec_from_file_location(name,full);module=importlib.util.module_from_spec(spec)
+            sys.modules[name]=module
+            try:spec.loader.exec_module(module)
+            except BaseException:
+                sys.modules.pop(name,None);raise
+        assert Path(sys.modules[name].__spec__.origin).resolve()==full.resolve()
+    return sys.modules['src.supervisor.api.flow_app']
+
+
+def test_production_flow_app_factory_imports_no_configuration_or_unrelated_agents(monkeypatch):
+    import os
+    module=supervisor_flow_app_module()
+    runtime=sys.modules['src.agents.flow.application.execution_runtime'];engines=[]
+    original=runtime.FlowExecutionRuntime.__init__
+    def capture(self,engine=None):engines.append(engine);original(self,engine)
+    with patch.object(os,'getenv',side_effect=AssertionError('factory must not read configuration')),patch.object(runtime.FlowExecutionRuntime,'__init__',capture):
+        first=module.create_app();second=module.create_app()
+    assert first is not second and engines==[None,None]
+    paths=set(first.openapi()['paths'])
+    assert {'/health','/internal/flow/analyze','/internal/supervisor/core/plan'}<=paths
+    assert not any(any(agent in path for agent in ('technical','fundamental','industry')) for path in paths)
+    assert not any(n.startswith(('src.agents.industry','src.agents.fundamental','src.agents.technical','src.agents.flow.application.agent')) for n in sys.modules)
+    with pytest.raises(TypeError):module.create_app(engine=object())
+    assert not ATTEMPTS
+
+
+@pytest.mark.parametrize('endpoint',['/internal/supervisor/core/plan','/internal/flow/analyze'])
+@pytest.mark.parametrize('case',['off','missing','wrong','duplicate'])
+async def test_production_flow_app_preserves_feature_and_auth_before_body_or_engine(monkeypatch,endpoint,case):
+    module=supervisor_flow_app_module();monkeypatch.setenv('FLOW_ANALYSIS_ENABLED','false' if case=='off' else 'true')
+    headers=[('Content-Type','application/json')]
+    if case=='wrong':headers.append(('X-Flow-Service-Token','wrong'))
+    if case=='duplicate':headers.extend([('X-Flow-Service-Token',TOKEN)]*2)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.create_app()),base_url='http://ai') as client:
+        result=await client.post(endpoint,content=b'not-json',headers=headers)
+    assert result.status_code==(403 if case=='off' else 401)
+    assert 'no-store' in result.headers['cache-control'] and not ATTEMPTS
+
+
+async def test_production_flow_app_policy2_typed_stock_start_continue_preserve_waivers_without_model(monkeypatch):
+    module=supervisor_flow_app_module();d=draft('현대건설 외국인 말고 3주 수급',answers=[dict(answer_id=str(uuid4()),slot='stock',value='현대건설')])
+    base=dict(schema_version=B.VERSION,request_id=str(uuid4()),trace_id=str(uuid4()),error=None)
+    data=dict(phase='start',policy_version='supervisor.flow-core.2',draft=d.model_dump(mode='json'),attempt_id=str(uuid4()))
+    model=AsyncMock(side_effect=AssertionError('no meaning model in this app'))
+    with patch.object(O.OpenAIMeaningGateway,'propose',model):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.create_app()),base_url='http://ai') as client:
+            health=await client.get('/health');assert health.json()==dict(status='ok',service='ai-supervisor-flow')
+            first=await client.post('/internal/supervisor/core/plan',json=base|dict(data=data),headers={'X-Flow-Service-Token':TOKEN})
+            assert first.status_code==200;start=first.json()['data'];assert start['action']=='resolve_stock' and start['meaning_status']=='deterministic'
+            resolved=resolution().model_copy(update=dict(stock=resolution().stock.model_copy(update=dict(stock_code='000720',stock_name='현대건설'))))
+            last=await client.post('/internal/supervisor/core/plan',json=base|dict(data=data|dict(phase='continue',frame=start['frame'],resolution=resolved.model_dump(mode='json'))),headers={'X-Flow-Service-Token':TOKEN})
+    assert last.status_code==200;plan=last.json()['data']['plan']
+    assert plan['status']=='scope_confirmation' and plan['partial'] is True
+    assert plan['resolution']['stock']['stock_code']=='000720'
+    assert {(c['kind'],c['value'],c['disposition']) for c in plan['frame']['conditions']}=={('exclude','외국인','unsupported'),('period','3주','unsupported')}
+    assert set(plan['required_waivers'])=={c['condition_id'] for c in plan['frame']['conditions']}
+    model.assert_not_awaited();assert not ATTEMPTS
+
+
+async def test_production_flow_app_never_installs_paid_meaning_from_process_settings(monkeypatch):
+    module=supervisor_flow_app_module()
+    for key,value in startup_settings().items():monkeypatch.setenv(key,value)
+    d=draft('현대건설 수급');body=dict(schema_version=B.VERSION,request_id=str(uuid4()),trace_id=str(uuid4()),error=None,data=dict(phase='start',policy_version='supervisor.flow-core.2',draft=d.model_dump(mode='json'),attempt_id=str(uuid4())))
+    model=AsyncMock(side_effect=AssertionError('paid runtime must not be installed'))
+    with patch.object(O.OpenAIMeaningGateway,'propose',model):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.create_app()),base_url='http://ai') as client:
+            result=await client.post('/internal/supervisor/core/plan',json=body,headers={'X-Flow-Service-Token':TOKEN})
+    assert result.status_code==200 and result.json()['data']['meaning_status']=='unavailable'
+    model.assert_not_awaited()
+
+
+async def test_production_flow_app_real_default_engine_is_disabled_before_graph_import(monkeypatch):
+    from datetime import UTC,datetime,timedelta,timezone
+    module=supervisor_flow_app_module();schemas=sys.modules['src.agents.flow.api.schemas']
+    monkeypatch.delenv('FLOW_ENGINE_EXECUTION_ENABLED',raising=False)
+    stamp=datetime.now(UTC)-timedelta(seconds=1);local=stamp.astimezone(timezone(timedelta(hours=9)))
+    normalized=dict(ticker='000720',question='합성 경로 검사',as_of=stamp.isoformat())
+    body=dict(schema_version=1,analysis_id=str(uuid4()),attempt_id=str(uuid4()),admission_request_id=str(uuid4()),fingerprint=schemas.sha(normalized),stock_name='현대건설',**normalized,candidate_date=(local.date() if local.hour>=18 else local.date()-timedelta(days=1)).isoformat(),deadline_at=(stamp+timedelta(seconds=120)).isoformat(),spec=schemas.SPEC)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.create_app()),base_url='http://ai') as client:
+        result=await client.post('/internal/flow/analyze',json=body,headers={'X-Flow-Service-Token':TOKEN})
+    assert result.status_code==503 and result.json()['error']['code']=='SERVICE_UNAVAILABLE'
+    assert not ATTEMPTS and 'src.agents.flow.application.agent' not in sys.modules

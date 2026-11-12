@@ -499,3 +499,23 @@ closure는 기존 safe get/view·redaction으로 돌아간다. 특히 이미 sta
 명시 내부 policy로만 계정을 생성한다. 동일 operation/owner/canonical scope는 기간·정책 변경으로 복제할 수 없다. 예약은 실제 Principal/session 및 preparation/attempt/request/draft/spec/projection을 SQL로 대조한 회계 선소비이며 provider 실행권이 아니다. account→reservation 잠금과 단일 commit ACK 후에만 mutation 결과를 반환한다. ACK 불명은 caller-known 고정 binding으로 no-autoflush SELECT reconcile만 한다.
 관측 usage는 저장된 현 semantic/model/tier/price/caps와 strict 정수로 대조한다. observed도 예약액 자동환급0이며 추정액은 청구확정액이 아니다. unknown/anomalous는 hold+blocked, 동일 terminal receipt만 replay한다. 늦은 다른 정산은 conflict다. 세션 만료/준비 redaction은 소비된 예약의 정산을 환급/재실행으로 바꾸지 않는다.
 운영 epoch/정책 발급·Backend↔AI phase transport·요청별 Gateway는 미조립이다. 기존 CF023 epoch/Flow 회계 및 실제 소비 기록은 불변이다.
+
+## CF037 B6 · CF038 이후의 고정 단일 재검증
+
+CF038의 현재 prompt/semantic/alignment와 과거 소비 source/spec를 분리해 검증한다.
+과거 요청을 현재 prompt로 재직렬화해 같은 요청이었다고 간주하지 않는다.
+고정 ordinal4 하나만 원 canonical namespace/bootstrap/lock에 결합하며, 과거 ordinal3의
+응답·관측 usage·정산 ACK·의미 거절·closed/cleanup/False를 독립 pin으로 보존한다.
+기존 350m과 계획된 새 50m의 합은 400m이며 예약액은 청구확정액이 아니다.
+
+이번 제한은 동일 합성 질문, count1/generation1/HTTP2/attempt1/supplier1/verify_live1,
+자동 retry0이다. 실제 issued_at부터 lease600/start-ready120/callback5/preload30/cleanup30을
+유지하고 이 고정 분기의 종료는 2026-11-12T08:00:00Z를 넘지 않는다.
+기존 분기의 종료 시각·once·회계 결과를 수정하지 않는다.
+
+유일한 exact text로 위치를 정합화해도 잘못된 overview는 기존 판정대로 거절한다.
+허용된 질문의 종목·Flow 의도·외국인 제외 부정 근거·3주 단위와 미지원 기간 장벽을 보존한다.
+진단은 현재 실제 validator 위치에 대응하는 고정 코드와 제한된 질문 근거만 남긴다.
+새 발급·송신은 완전한 기존 소비 이력과 실제 durable write/readback·동일 invocation의
+stdio/local ACK가 검증된 뒤에만 가능하다. 실패·불명·취소는 추가 송신 없이 hold로 끝낸다.
+운영 epoch/정책·Gateway·CF044 운영 계정의 연결이나 활성화를 뜻하지 않는다.

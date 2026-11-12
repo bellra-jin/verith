@@ -4,6 +4,7 @@ The private coordinator must supply independently retained authority and file pi
 Synthetic callbacks exercise this boundary; they are never a live authority adapter.
 """
 import asyncio
+import ast
 from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -328,7 +329,7 @@ class Scope:
         if (
             runtime.get("key_metadata") != original_source.get("identity")
             or runtime.get("source_manifest", {}).get("backend/scripts/cf026_supervisor_live_controller.py") != original_source.get("code_root", {}).get("controller_sha256")
-            or grant.get("requests", [])[:1] != [d["request"]]
+            or grant.get("requests", [])[:1] != [historical_request(d, base)]
             or grant.get("semantic_sha256") != historical_semantic(d)
             or grant.get("price_sha256") != d["price_sha256"]
         ):
@@ -382,8 +383,8 @@ def code_directory_identity(path):
 
 def reviewed_execution_root(source, data, module_hash):
     code_root = source.code_root.path
-    if data.get("retry", {}).get("ordinal") in {2,3}:
-        code_root = code_root.parent / "verith-supervisor-single-revalidation"
+    if data.get("retry", {}).get("ordinal") in {2,3,4}:
+        code_root = code_root.parent / ("verith-supervisor-post-alignment-revalidation" if data["retry"]["ordinal"]==4 else "verith-supervisor-single-revalidation")
         expected = dict(path=str(code_root), directory=code_directory_identity(code_root), helper_sha256=module_hash)
         if data["retry"].get("current_code") != expected:
             raise Closed("CODE_DRIFT")
@@ -402,11 +403,11 @@ def once_identity(scope):
 
 def reservation_total(scope):
     retry = scope.data.get("retry")
-    return 350000000 if retry and retry.get("ordinal") == 3 else 300000000 if retry and retry.get("ordinal") == 2 else 250000000 if retry else 200000000
+    return 400000000 if retry and retry.get("ordinal") == 4 else 350000000 if retry and retry.get("ordinal") == 3 else 300000000 if retry and retry.get("ordinal") == 2 else 250000000 if retry else 200000000
 
 
 def historical_semantic(data):
-    if data.get("retry", {}).get("ordinal") not in {2,3}:
+    if data.get("retry", {}).get("ordinal") not in {2,3,4}:
         return data["semantic_sha256"]
     # Only the reviewed provider5 -> provider55 change; every other semantic
     # input stays in the old hash. This never repins a historical artifact.
@@ -415,7 +416,11 @@ def historical_semantic(data):
     from src.modules.supervisor.domain.contracts import MEANING_SPEC
     if MEANING_SPEC["caps"]["provider_seconds"] != 55 or MEANING_SPEC["caps"]["verifier_seconds"] != 60:
         raise Closed("REQUEST_DRIFT")
-    old = MEANING_SPEC | {"caps": MEANING_SPEC["caps"] | {"provider_seconds": 5}}
+    spec=MEANING_SPEC
+    if data.get('retry',{}).get('ordinal')==4 or data['semantic_sha256']==PRE_ALIGNMENT_SEMANTIC:
+        spec=MEANING_SPEC | {'prompt_sha256':PRE_ALIGNMENT_PROMPT}
+        if C.digest(spec)!=PRE_ALIGNMENT_SEMANTIC:raise Closed('REQUEST_DRIFT')
+    old = spec | {"caps": spec["caps"] | {"provider_seconds": 5}}
     return C.digest(old)
 
 
@@ -426,6 +431,8 @@ def check_retry(d, base):
     independent history check. They do not mint authority or restore consumed rights.
     """
     retry = d["retry"]
+    if type(retry) is dict and retry.get("ordinal") == 4:
+        return check_retry4(d, base)
     if type(retry) is dict and retry.get("ordinal") == 3:
         return check_retry3(d, base)
     if type(retry) is dict and retry.get("ordinal") == 2:
@@ -798,7 +805,8 @@ class Session:
                 ):
                     raise Closed("AUTHORITY_ACK_UNKNOWN")
                 if self.lease is None:
-                    end = "2026-11-11T21:00:00+00:00" if not self.synthetic and self.scope.data.get("retry",{}).get("ordinal")==3 else None
+                    ordinal=self.scope.data.get('retry',{}).get('ordinal')
+                    end = ('2026-11-12T08:00:00+00:00' if ordinal==4 else '2026-11-11T21:00:00+00:00' if ordinal==3 else None) if not self.synthetic else None
                     self.lease = Lease(ack["issued_at"], self.scope.data["consent_at"], self.clock, not_after=end)
                 elif C.parse_expiry(ack["issued_at"]) != self.lease.issued:
                     raise Closed("LEASE_DRIFT")
@@ -1106,10 +1114,29 @@ def grounding_rejection(draft, candidate):
                            location=dict(function=location[0],line=location[1]),item=detail)
                 raise
         return traced
+    original_alignment=policy.align_model_proposal
+    def alignment(draft_value,proposal_value):
+        nonlocal found
+        try:return original_alignment(draft_value,proposal_value)
+        except (ValueError,TypeError) as error:
+            trace=error.__traceback__
+            while trace is not None:
+                frame=trace.tb_frame
+                if frame.f_code.co_filename==policy.__file__ and frame.f_code.co_name=='align_model_proposal' and trace.tb_lineno in (379,383):
+                    section=frame.f_locals.get('section');item=frame.f_locals.get('item');data=frame.f_locals.get('data')
+                    if section in indexes and type(item) is dict and type(data) is dict and item in data.get(section,[]):
+                        from src.supervisor.domain.meaning import Evidence
+                        detail=dict(evidence=evidence(Evidence.model_validate(item['evidence'])),negation=evidence(Evidence.model_validate(item['negation'])) if item['negation'] is not None else None)
+                        if section=='views':detail['view']=item['view']
+                        if section=='conditions':detail.update(domain=item['domain'],kind=item['kind'],supplied_value=item['value'] if item['value'] in draft.original_query else None,supplied_value_length=len(item['value']),supplied_value_in_question=item['value'] in draft.original_query)
+                        found=dict(stage='alignment',field=section,index=data[section].index(item),reason='EVIDENCE_SOURCE_NOT_FOUND' if trace.tb_lineno==379 else 'EVIDENCE_TEXT_ABSENT_OR_AMBIGUOUS',location=dict(function='align_model_proposal',line=trace.tb_lineno),item=detail)
+                trace=trace.tb_next
+            raise
     try:
         proposal=MeaningProposal.model_validate(candidate)
         schema_valid = True
-        with patch.object(policy.Grounding,"add_mention",wrap("add_mention","mentions")),\
+        with patch.object(policy,"align_model_proposal",alignment),\
+             patch.object(policy.Grounding,"add_mention",wrap("add_mention","mentions")),\
              patch.object(policy.Grounding,"add_view",wrap("add_view","views")),\
              patch.object(policy.Grounding,"add_condition",wrap("add_condition","conditions")):
             policy.assess(draft,proposal,source="model_assisted")
@@ -1486,3 +1513,145 @@ def check_retry3(d, base):
         or direct.get('local_accounting_ack_matches') is not True or direct.get('entry_RELEASED') is not False
         or direct.get('entry_sha256')!=hashes['entry'] or C.parse_expiry(d['consent_at'])<=C.parse_expiry(record['issued_at'])):
         raise Closed('RETRY_EVIDENCE')
+
+
+# Exact pre-CF038 contract, used only to validate already-consumed history.
+PRE_ALIGNMENT_SEMANTIC='c3cb325b4b4e92cf72b1ff62714dec6e12f8637220dcaa0b2d9443644b397251'
+PRE_ALIGNMENT_PROMPT='519c74093fd260c424e68feb877c963c318815237d5177522054ce2b1d728f39'
+
+
+def retry4_prior(data, base):
+    r=data.get('retry')
+    path=base/'.cf037-supervisor-grounding-diagnostic-20261111'/'reviewed-successor-inputs.json'
+    pin=r.get('evidence',{}).get('inputs') if type(r) is dict else None
+    if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256'} or pin['path']!=str(path):raise Closed('RETRY_EVIDENCE')
+    inputs=Artifact('inputs',path,pin['stamp_json'],pin['sha256']).verify(base)
+    prior=inputs.get('template',{}).get('scope_template')
+    if type(prior) is not dict or prior.get('retry',{}).get('ordinal')!=3:raise Closed('RETRY_EVIDENCE')
+    return inputs,prior
+
+
+def historical_request(data,base):
+    if data.get('retry',{}).get('ordinal')==4:
+        return retry4_prior(data,base)[1]['request']
+    return data['request']
+
+
+def check_retry4(d, base):
+    """Today's one fixed run after observed, closed ordinal3; no general retry."""
+    r=d['retry']
+    keys={'schema','ordinal','prior_retry','evidence','historical_code','readback_binding','record_body','record_body_sha256','record_item_id','record_turn_id',
+          'consent_message_id','carried_nano','total_reserved_nano','current_code'}
+    if (type(r) is not dict or set(r)!=keys or r['schema']!='cf026.successor.retry4.v1'
+        or type(r['ordinal']) is not int or r['ordinal']!=4 or type(r['carried_nano']) is not int or r['carried_nano']!=350000000
+        or type(r['total_reserved_nano']) is not int or r['total_reserved_nano']!=400000000
+        or type(r['consent_message_id']) is not str or C.re.fullmatch(r'Sentinel_[a-f0-9]{32}',r['consent_message_id']) is None):raise Closed('RETRY_SCOPE')
+    inputs,prior=retry4_prior(d,base)
+    if (prior.get('retry')!=r['prior_retry'] or any(prior.get(k)!=d[k] for k in ('namespace','predecessor_bootstrap','predecessor_sha256','artifacts','price_sha256'))
+        or prior.get('semantic_sha256')!=PRE_ALIGNMENT_SEMANTIC
+        or prior.get('request',{}).get('prepare_body')!=d['request'].get('prepare_body')
+        or prior['request'].get('draft_sha256')!=d['request'].get('draft_sha256')):raise Closed('RETRY_EVIDENCE')
+    # Old validators see the old scope, not the newly rendered prompt/hash.
+    check_retry3(prior,base)
+    home=base/'.cf037-supervisor-grounding-diagnostic-20261111'
+    expected=dict(inputs=home/'reviewed-successor-inputs.json',journal=home/'successor-journal-retry-3'/'state.json',
+        phases=home/'successor-phases-retry-3.json',runtime=home/'prepared-runtime-manifest.json',source=home/'runtime-source-manifest.json',
+        manifest=home/'final-manifest.json',result=home/'actual-result.json',readback=home/'actual-ordinal3-readback.json')
+    if type(r['evidence']) is not dict or set(r['evidence'])!=set(expected):raise Closed('RETRY_EVIDENCE')
+    records={}
+    for name,path in expected.items():
+        pin=r['evidence'][name]
+        if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256'} or pin['path']!=str(path):raise Closed('RETRY_EVIDENCE')
+        records[name]=Artifact(name,path,pin['stamp_json'],pin['sha256']).verify(base)
+    runtime=records['runtime'];manifest=records['manifest'];source=records['source']
+    if (records['inputs']!=inputs or inputs.get('runtime')!=runtime or runtime.get('source_manifest')!=source.get('runtime_source_hashes')
+        or runtime.get('source_count')!=281 or len(runtime.get('source_manifest',{}))!=281
+        or runtime.get('successor_sha256')!=prior.get('module_sha256')
+        or runtime['source_manifest'].get('backend/scripts/cf026_successor.py')!=prior['module_sha256']
+        or manifest.get('inputs_sha256')!=r['evidence']['inputs']['sha256']
+        or manifest.get('source_manifest_sha256')!=r['evidence']['source']['sha256']
+        or manifest.get('private_active')!=inputs.get('private_code_sha256')):raise Closed('CODE_DRIFT')
+    oldroot=base/'verith-supervisor-single-revalidation'
+    code_paths=dict(entry=(home/'private_entry.py',0o600),runtime=(home/'private_runtime.py',0o600),assembly=(home/'private_assembly.py',0o600),
+        helper=(oldroot/'backend/scripts/cf026_successor.py',0o644),prompt=(oldroot/'ai/src/supervisor/prompts/meaning.txt',0o644),
+        policy=(oldroot/'ai/src/supervisor/application/meaning_policy.py',0o644),semantic=(oldroot/'backend/src/modules/supervisor/domain/contracts.py',0o644))
+    if type(r['historical_code']) is not dict or set(r['historical_code'])!=set(code_paths):raise Closed('CODE_DRIFT')
+    raw_code={};hashes={}
+    names=dict(helper='backend/scripts/cf026_successor.py',prompt='ai/src/supervisor/prompts/meaning.txt',policy='ai/src/supervisor/application/meaning_policy.py',semantic='backend/src/modules/supervisor/domain/contracts.py')
+    for name,(path,mode) in code_paths.items():
+        pin=r['historical_code'][name]
+        if type(pin) is not dict or set(pin)!={'path','stamp_json','sha256'} or pin['path']!=str(path):raise Closed('CODE_DRIFT')
+        raw,_=C.read_fixed(path,mode,C.decode(pin['stamp_json']),limit=131072)
+        value=hashlib.sha256(raw).hexdigest();hashes[name]=value;raw_code[name]=raw
+        if value!=pin['sha256']:raise Closed('CODE_DRIFT')
+        expected_hash=runtime['source_manifest'].get(names[name]) if name in names else manifest['private_inactive'].get('private_'+name+'.py')
+        if value!=expected_hash:raise Closed('CODE_DRIFT')
+    if raw_code['entry'].count(b'RELEASED = False\n')!=1 or b'RELEASED = True\n' in raw_code['entry']:raise Closed('CODE_DRIFT')
+    from src.modules.supervisor.domain.contracts import MEANING_SPEC,MEANING_SPEC_SHA256,PreparationRequest
+    from src.supervisor.infrastructure.openai_meaning_gateway import rendered_request,INPUT_FIELDS
+    tree=ast.parse(raw_code['semantic'])
+    definitions=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='MEANING_SPEC' for x in n.targets)]
+    if len(definitions)!=1:raise Closed('CODE_DRIFT')
+    oldspec=ast.literal_eval(definitions[0].value)
+    if (C.digest(oldspec)!=PRE_ALIGNMENT_SEMANTIC or oldspec.get('prompt_sha256')!=PRE_ALIGNMENT_PROMPT
+        or hashes['prompt']!=PRE_ALIGNMENT_PROMPT or oldspec | {'prompt_sha256':MEANING_SPEC['prompt_sha256']}!=MEANING_SPEC
+        or d['semantic_sha256']!=MEANING_SPEC_SHA256):raise Closed('REQUEST_DRIFT')
+    body=PreparationRequest.model_validate(d['request']['prepare_body'])
+    oldrender=rendered_request(body.draft);oldrender['instructions']=raw_code['prompt'].decode('utf8')
+    if prior['request']['request_sha256']!=C.digest(oldrender) or prior['request']['projection_sha256']!=C.digest({k:oldrender[k] for k in INPUT_FIELDS}):raise Closed('REQUEST_DRIFT')
+    marker='CF026_SUCCESSOR_RESERVE_ONCE\n';body=r['record_body']
+    if type(body) is not str or not body.startswith(marker) or len(body.encode())>8192 or hashlib.sha256(body.encode()).hexdigest()!=r['record_body_sha256']:raise Closed('RETRY_EVIDENCE')
+    record=C.decode(body[len(marker):]);required={'schema','additional_reserve_nano','authority_sha256','count_cap','delegation','generation_cap','http_cap','invocation','issued_at','namespace','predecessor_sha256','process_id','retry_cap','retry_ordinal','retry_of_sha256','scope_sha256','successor_once','synthetic_only','total_reserved_nano'}
+    if (set(record)!=required or record['schema']!='cf026.successor.reserve-once.v1' or record['synthetic_only'] is not False
+        or record['namespace']!=d['namespace'] or record['predecessor_sha256']!=d['predecessor_sha256'] or record['invocation']==d['invocation']
+        or type(record['process_id']) is not int or record['process_id']<=0
+        or record['successor_once']!=C.digest(dict(namespace=d['namespace'],predecessor_bootstrap=d['predecessor_bootstrap'],retry_ordinal=3))
+        or record['retry_of_sha256']!=r['prior_retry']['record_body_sha256'] or record['authority_sha256']!=inputs['authority_sha256']
+        or record['delegation']!='same-invocation-ordered-local-fsync' or C.parse_expiry(record['issued_at'])<C.parse_expiry(prior['consent_at'])):raise Closed('RETRY_EVIDENCE')
+    for key,value in dict(additional_reserve_nano=50000000,total_reserved_nano=350000000,retry_ordinal=3,count_cap=1,generation_cap=1,http_cap=2,retry_cap=0).items():
+        if type(record[key]) is not int or record[key]!=value:raise Closed('RETRY_EVIDENCE')
+    routing=r['readback_binding'];readback=records['readback'];matches=[]
+    if type(routing) is not dict or set(routing)!={'source_thread_id','destination_thread_id'}:raise Closed('RETRY_EVIDENCE')
+    for value in routing.values():
+        if type(value) is not str or str(UUID(value))!=value:raise Closed('RETRY_EVIDENCE')
+    if routing['source_thread_id']==routing['destination_thread_id'] or readback.get('thread',{}).get('id')!=routing['destination_thread_id']:raise Closed('RETRY_EVIDENCE')
+    for turn in readback.get('turns',[]):
+        for item in turn.get('items',[]):
+            text=item.get('output',{}).get('text')
+            if item.get('type')=='functionCallOutput' and item.get('namespace')=='cloud_threads' and item.get('name')=='send_message' and item.get('output',{}).get('truncated') is False and type(text) is str:
+                match=C.re.fullmatch(r'\s*<codex_delegation>\s*<source_thread_id>([^<>]+)</source_thread_id>\s*<input>([\s\S]*)</input>\s*</codex_delegation>\s*',text)
+                if match and match[1]==routing['source_thread_id'] and match[2]==body:matches.append((item.get('id'),turn.get('id')))
+    if matches!=[(r['record_item_id'],r['record_turn_id'])]:raise Closed('RETRY_EVIDENCE')
+    journal,phases,result=records['journal'],records['phases'],records['result'];events=journal.get('journal',[])
+    accounts=[e for e in events if e.get('phase')=='final_accounting']
+    if (journal.get('schema')!='cf026.successor.journal.v1' or journal.get('status')!='closed' or journal.get('scope_sha256')!=record['scope_sha256']
+        or journal.get('rights')!=dict(count=1,generation=1) or len(accounts)!=1 or not events or events[-1].get('phase')!='cleanup_confirmed'
+        or len([e for e in events if e.get('phase')=='closing' and e.get('external_accounting_ACK') is True])!=1):raise Closed('RETRY_EVIDENCE')
+    account=accounts[0];ledger=account.get('ledger',{});attempts=ledger.get('attempts',[])
+    if (account.get('reserved_nano')!=350000000 or account.get('observation')!='fresh_ledger' or len(attempts)!=1
+        or any(type(ledger.get(k)) is not int or ledger[k]!=v for k,v in dict(count=1,generation=1,reserved=50000000).items())
+        or ledger.get('blocked') is not False or attempts[0].get('state')!='observed'
+        or account.get('diagnostic',{}).get('verifier',{}).get('meaning_status')!='rejected'
+        or account.get('diagnostic',{}).get('verifier',{}).get('settlement')!='observed'
+        or account.get('quality',{}).get('status')!='rejected' or account['quality'].get('assessment') is not None
+        or account.get('gateway_diagnostic',{}).get('settlement_uncertain') is not False
+        or 'settlement_ACK' not in [e.get('stage') for e in account.get('gateway_diagnostic',{}).get('events',[])]):raise Closed('ACCOUNTING')
+    usage=attempts[0].get('usage',{});price=oldspec['price']
+    if (set(usage)!={'input_tokens','output_tokens','total_tokens','cached_tokens'} or any(type(v) is not int or v<0 for v in usage.values())
+        or usage['input_tokens']>16384 or usage['output_tokens']>2048 or usage['cached_tokens']>usage['input_tokens']
+        or usage['total_tokens']!=usage['input_tokens']+usage['output_tokens'] or attempts[0].get('model')!=oldspec['model']
+        or type(attempts[0].get('estimated_nano')) is not int
+        or attempts[0]['estimated_nano']!=(usage['input_tokens']-usage['cached_tokens'])*price['input_nano_per_token']+usage['cached_tokens']*price['cached_nano_per_token']+usage['output_tokens']*price['output_nano_per_token']):raise Closed('ACCOUNTING')
+    binding={k:record[k] for k in record if k not in {'schema','synthetic_only','process_id','authority_sha256','delegation','issued_at'}}
+    ack=binding|dict(phase='accounting',authority_sha256=record['authority_sha256'],sequence=6,issued_at=record['issued_at'],consumed=True,record_sha256=C.digest(account))
+    if phases.get('binding')!=binding or phases.get('ack')!=ack or phases.get('sequence')!=6 or phases.get('phases')!=['reserve','issue','start','count','generation','accounting']:raise Closed('ACCOUNTING')
+    pins=result.get('postexecution_pins',{})
+    if (result.get('schema')!='cf037.b5.actual-result.v1' or result.get('accounting')!=account or result.get('journal_closed') is not True
+        or result.get('cleanup_confirmed') is not True or result.get('entry_released') is not False or result.get('total_reserved_nano')!=350000000
+        or result.get('frozen_inputs_sha256')!=r['evidence']['inputs']['sha256'] or result.get('frozen_source_manifest_sha256')!=r['evidence']['source']['sha256']
+        or result.get('frozen_preissue_manifest_sha256')!=r['evidence']['manifest']['sha256'] or result.get('actual_record_readback_sha256')!=r['evidence']['readback']['sha256']
+        or result.get('record_count')!=1
+        or result.get('inactive_entry_sha256')!=hashes['entry'] or any(pins.get('private_'+k+'.py')!=hashes[k] for k in ('entry','runtime','assembly'))
+        or pins.get('successor-journal-retry-3/state.json')!=r['evidence']['journal']['sha256']
+        or pins.get('successor-phases-retry-3.json')!=r['evidence']['phases']['sha256']
+        or C.parse_expiry(d['consent_at'])<=C.parse_expiry(record['issued_at'])):raise Closed('RETRY_EVIDENCE')

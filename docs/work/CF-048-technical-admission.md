@@ -1,6 +1,6 @@
 # CF048 · Technical 실행 접수와 비용 보류
 
-기준 develop `36f49d97ad2bcbc9c59204146b4cc044aff3656f`, 전용 `feat/technical-execution-admission`. CF048 v1.2의 정확 15파일 범위다. 기존 사용자 WIP·Flow 원장·Supervisor 보수 예약 $0.50·실제 소비 기록과 PR61 HOLD를 보존한다.
+기준 develop `36f49d97ad2bcbc9c59204146b4cc044aff3656f`, 전용 `feat/technical-execution-admission`. CF048 v1.2의 15파일과 원격 CI에서 확인된 기존 Meaning 음성 시계 회귀의 직접 호환 수정 1파일이다. 기존 사용자 WIP·Flow 원장·Supervisor 보수 예약 $0.50·실제 소비 기록과 PR61 HOLD를 보존한다.
 
 ## 제품 결과
 
@@ -17,6 +17,8 @@ Technical 전용 run/일일 period 두 SQL 표와 미등록 내부 서비스가 
 - PG 입력 소스 265개/AI 순수 호환 pin 6개를 전후 대조했고, 원본/사본·dependency·module origin postcheck와 소유 DB/소스 사본 cleanup이 통과했다. 공급자·실제 자격 읽기는 0이다.
 
 초기 unit의 170개 assertion은 통과했지만 기존 worker의 Flow origin sentinel이 없어서 최종 수용이 실패했다. guard를 유지하고 기존 정확 6개 순수 파일 loader를 적용한 뒤 재검증했다. 이 실패를 통과 기록으로 바꾸지 않았다. PG는 첫 실제 회차에서 통과했다.
+
+PR66 최초 CI `43235288885`는 기존 Meaning unit의 CF042 `future_start` 음성 1건에서 실패했다(366 통과/1 실패, guard0). 가속 시계의 미래 1초는 실제 10ms이므로 ASGI 진입 전 과거가 될 수 있었다. 추가 경로 `test_cf023_supervisor_meaning.py`의 해당 invalid-state 검사에서만 clock을 고정해 미래 조건을 결정적으로 유지했다. 다른 실제 timeout 검사와 제품 75/15초·guard는 불변이며 보호 Meaning unit 367개가 통과했다. 실패 job을 무변경 재실행하지 않고 수정한 정확 head의 전체 CI를 다시 확인한다.
 
 ## 남은 경계
 

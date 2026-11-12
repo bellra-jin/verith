@@ -1748,8 +1748,204 @@ def test_participant_answer_negation_cannot_move_between_named_sources(fault):
     assert candidate==before
 
 
-def test_stock_mention_guidance_changes_only_prompt_semantic_identity():
-    previous=T.semantic_spec()|{'prompt_sha256':'0456f2afc6939b45a61c6d59159bd42a8e807647c656b15fb7ed23a0bf7714c4'}
+def test_historical_semantics_and_wire_shape_survive_description_metadata():
+    previous=T.semantic_spec()|{'prompt_sha256':'0456f2afc6939b45a61c6d59159bd42a8e807647c656b15fb7ed23a0bf7714c4','schema_sha256':'1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'}
     assert M.sha(previous)=='8a873009b7bf71f78b90efbf495ecd920ea12a8027f0ad629b5a530759f3c943'
-    assert T.semantic_spec()['schema_sha256']=='1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'
+    prior_roles=previous|{'prompt_sha256':'bc46a22dedceccf2e8b9dcce631c710014595d4440304791f10776bf217fcc6e'}
+    assert M.sha(prior_roles)=='fcacc993fa77c783b0148daa15e42fa13ce2c3f526bc071355394ccc07f37911'
+    wire=copy.deepcopy(T.CANDIDATE_SCHEMA)
+    for field in ('mentions','views','conditions'):
+        assert type(wire['properties'][field].pop('description')) is str
+    assert M.sha(wire)=='1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'
     assert T.semantic_spec()==B.MEANING_SPEC and M.sha(T.semantic_spec())==B.MEANING_SPEC_SHA256
+
+async def test_observed_period_view_composite_is_narrowed_without_losing_conditions_or_waivers():
+    q='현대건설 외국인 말고 3주 수급';d=draft(q)
+    raw=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)],
+        views=[dict(view='flow',evidence=ev(q,'3주 수급'),negation=None)])
+    before=copy.deepcopy(raw);aligned=G.align_model_proposal(d,raw)
+    assert aligned.views[0].evidence.model_dump()==ev(q,'수급') and raw==before
+    frame,status=await S.understand_v2(d,NS(propose=AsyncMock(return_value=raw)))
+    assert status=='supplemented' and [m.text for m in frame.mentions]==['현대건설']
+    assert frame.requested_views==['flow'] and frame.negated_views==[]
+    prior={c.condition_id:c.model_dump() for c in G.assess(d).frame.conditions if c.domain=='flow'}
+    after={c.condition_id:c.model_dump() for c in frame.conditions if c.domain=='flow'}
+    assert prior==after
+    assert {c.value for c in frame.conditions}=={'외국인','3주'}
+    assert all(c.disposition=='unsupported' for c in frame.conditions)
+    assert G.validate_fixed_frame(d,frame)==frame
+    r=sys.modules['src.supervisor.domain.core_contracts'].Resolution(status='resolved',reason='exact_match',stock=dict(stock_code='000720',stock_name='현대건설',market='KOSPI'),candidates=[])
+    plan=P.continuation_v2(d,frame,r).plan
+    assert plan.status=='scope_confirmation' and plan.partial
+    assert set(plan.required_waivers)==set(after) and plan.selected_views==['flow']
+
+
+@pytest.mark.parametrize('period,word',[('4주','순매수'),('5거래일','자금 흐름'),('2개월','FLOW'),('최근 5거래일','순매도')])
+def test_closed_flow_composite_grammar_is_not_specific_to_the_observed_question(period,word):
+    q=f'대우건설 {period} {word}';d=draft(q)
+    raw=proposal(mentions=[dict(evidence=ev(q,'대우건설'),negation=None)],views=[dict(view='flow',evidence=ev(q,period+' '+word),negation=None)])
+    aligned=G.align_model_proposal(d,raw)
+    assert aligned.views[0].evidence.model_dump()==ev(q,word)
+    frame=G.assess(d,raw,source='model_assisted').frame
+    assert any(c.kind=='period' and c.value==period and c.disposition=='unsupported' for c in frame.conditions)
+    assert G.validate_fixed_frame(d,frame)==frame
+
+
+@pytest.mark.parametrize('text,view,negative',[
+    ('3주 수급과 차트','flow',None),('외국인 3주 수급','flow',None),('3주 외국인 수급','flow',None),
+    ('3주 말고 수급','flow',None),('3주 수급 말고','flow','말고'),('수급 3주','flow',None),
+    ('0주 수급','flow',None),('10001주 수급','flow',None),('3.5주 수급','flow',None),
+    ('100주 보유 중 수급','flow',None),('3주, 수급','flow',None),('3주\n수급','flow',None),
+    ('3주 차트','technical',None),('3주 기업 정보','overview',None),('3주 수급','overview',None),
+])
+def test_composite_with_extra_meaning_or_unsupported_grammar_is_not_salvaged(text,view,negative):
+    q='대우건설 '+text;raw=proposal(mentions=[dict(evidence=ev(q,'대우건설'),negation=None)],
+        views=[dict(view=view,evidence=ev(q,text),negation=ev(q,negative) if negative else None)])
+    before=copy.deepcopy(raw)
+    with pytest.raises(M.CoreInvalid):G.assess(draft(q),raw)
+    assert raw==before
+
+
+@pytest.mark.parametrize('q',['대우건설 3주 수급 수급','대우건설 3주 수급 3주','대우건설 3주 수급 5일',
+                              '대우건설 3주 수급 말고','대우건설 3주 수급은 말고'])
+def test_composite_repetition_multiple_periods_and_adjacent_view_negation_are_rejected(q):
+    raw=proposal(mentions=[dict(evidence=ev(q,'대우건설'),negation=None)],views=[dict(view='flow',evidence=ev(q,'3주 수급'),negation=None)])
+    with pytest.raises(M.CoreInvalid):G.assess(draft(q),raw)
+
+
+def test_composite_canonical_duplicate_and_stored_frame_replay_guards_remain_strict():
+    q='대우건설 3주 수급';d=draft(q)
+    raw=proposal(views=[dict(view='flow',evidence=ev(q,'3주 수급'),negation=None),dict(view='flow',evidence=ev(q,'수급'),negation=None)])
+    with pytest.raises((M.CoreInvalid,ValueError)):G.align_model_proposal(d,raw)
+    valid=proposal(mentions=[dict(evidence=ev(q,'대우건설'),negation=None)],views=[dict(view='flow',evidence=ev(q,'3주 수급'),negation=None)])
+    frame=G.assess(d,valid,source='model_assisted').frame
+    with patch.object(G,'narrow_period_flow_evidence',side_effect=AssertionError('model-only seam')):
+        assert G.validate_fixed_frame(d,frame)==frame
+        assert G.assess(d).frame.interpretation_source=='deterministic'
+
+
+def test_composite_answer_source_is_exact_and_cannot_borrow_question_or_negation():
+    stock_id,view_id,other_id=(str(uuid4()) for _ in range(3))
+    d=draft('차트',answers=[dict(answer_id=stock_id,slot='stock',value='대우건설'),
+        dict(answer_id=view_id,slot='views',value='2개월 자금 흐름'),dict(answer_id=other_id,slot='period',value='3주')])
+    def ae(aid,text,start,end):return dict(source_kind='clarification_answer',answer_id=aid,start=start,end=end,text=text)
+    raw=proposal(mentions=[dict(evidence=ae(stock_id,'대우건설',0,4),negation=None)],views=[dict(view='flow',evidence=ae(view_id,'2개월 자금 흐름',0,9),negation=None)])
+    aligned=G.align_model_proposal(d,raw)
+    assert aligned.views[0].evidence.answer_id==view_id and aligned.views[0].evidence.text=='자금 흐름'
+    for wrong in ('missing',other_id,None):
+        bad=copy.deepcopy(raw);bad['views'][0]['evidence']['answer_id']=wrong
+        with pytest.raises((M.CoreInvalid,ValueError)):G.assess(d,bad)
+
+
+def prompt_examples():
+    text=(ROOT/'ai/src/supervisor/prompts/meaning.txt').read_text()
+    inputs=[json.loads(line.removeprefix('EXAMPLE_INPUT: ')) for line in text.splitlines() if line.startswith('EXAMPLE_INPUT: ')]
+    outputs=[json.loads(line.removeprefix('EXAMPLE_OUTPUT: ')) for line in text.splitlines() if line.startswith('EXAMPLE_OUTPUT: ')]
+    assert len(inputs)==len(outputs)==8
+    return list(zip(inputs,outputs))
+
+
+def test_complete_prompt_examples_validate_real_roles_sources_and_closed_schema_without_execution():
+    for value,raw in prompt_examples():
+        d=M.Draft.model_validate(value);candidate=T.MeaningProposal.model_validate(raw)
+        frame=G.assess(d,candidate,source='model_assisted').frame
+        assert G.validate_fixed_frame(d,frame)==frame
+        assert set(raw)=={'schema_version','mentions','views','conditions'}
+    assert len(M.canonical(O.rendered_request(draft())).encode())<=T.CAPS['request_bytes']
+
+
+# Independent H01-H14 were supplied without seeing the new few-shot prompt.
+# These are handcrafted-candidate/parser evaluations, not generated model accuracy.
+HELDOUT_QUESTIONS={
+'H01':'한미약품 기관 빼고 4주 순매수','H02':'LG전자 외국인 최근 5거래일 자금 흐름',
+'H03':'대한항공 차트 말고 수급','H04':'삼성전기 차트와 실적, 수급','H05':'기아 수급',
+'H06':'035720 개인 제외 9일 수급','H07':'두산에너빌리티와 한국전력 수급',
+'H08':'한국전력 말고 대우건설 수급','H09':'삼성전기 기관 수급, 기관 제외',
+'H10':'LG전자 수급 말고 차트, 수급','H11':'포스코퓨처엠 100주 보유 중 수급',
+'H12':'한국전력 어제 말고 오늘 기관 순매도','H13':'2개월 자금 흐름','H14':'롯데케미칼 수급'}
+
+
+def test_heldout_questions_are_not_the_prompt_examples():
+    assert not set(HELDOUT_QUESTIONS.values()) & {d['original_query'] for d,_ in prompt_examples()}
+
+
+@pytest.mark.parametrize('case',['H01','H02','H03','H04','H05','H06','H07','H08','H12'])
+def test_independent_heldout_role_period_negation_and_ambiguity_contract(case):
+    q=HELDOUT_QUESTIONS[case];d=draft(q);raw=proposal()
+    names={'H01':['한미약품'],'H02':['LG전자'],'H03':['대한항공'],'H04':['삼성전기'],
+           'H05':['기아'],'H06':['035720'],'H07':['두산에너빌리티','한국전력'],'H08':['한국전력','대우건설'],'H12':['한국전력']}[case]
+    raw['mentions']=[dict(evidence=ev(q,name),negation=ev(q,'말고') if case=='H08' and name=='한국전력' else None) for name in names]
+    views={'H01':[('flow','4주 순매수',None)],'H02':[('flow','최근 5거래일 자금 흐름',None)],
+           'H03':[('technical','차트','말고'),('flow','수급',None)],
+           'H04':[('technical','차트',None),('fundamental','실적',None),('flow','수급',None)],
+           'H05':[('flow','수급',None)],'H06':[('flow','9일 수급',None)],'H07':[('flow','수급',None)],
+           'H08':[('flow','수급',None)],'H12':[('flow','순매도',None)]}[case]
+    raw['views']=[dict(view=v,evidence=ev(q,text),negation=ev(q,n) if n else None) for v,text,n in views]
+    frame=G.assess(d,raw,source='model_assisted').frame
+    assert {m.text for m in frame.mentions}==set(names) and G.validate_fixed_frame(d,frame)==frame
+    if case in {'H01','H02','H06'}:
+        actor,kind,period={'H01':('기관','exclude','4주'),'H02':('외국인','focus','최근 5거래일'),'H06':('개인','exclude','9일')}[case]
+        assert any(c.kind==kind and c.value==actor for c in frame.conditions)
+        assert any(c.kind=='period' and c.value==period and c.disposition=='unsupported' for c in frame.conditions)
+        assert frame.negated_views==[] and frame.requested_views==['flow']
+    if case=='H03':assert frame.requested_views==['flow'] and frame.negated_views==['technical']
+    if case=='H04':
+        assert set(frame.requested_views)=={'flow','technical','fundamental'}
+        plan=P.plan_for(d,frame,policy_version='supervisor.flow-core.2')
+        assert plan.partial and plan.selected_views==[]
+    if case=='H05':assert frame.requested_views==['flow'] and not frame.conditions
+    if case=='H06':assert [m.text for m in frame.mentions]==['035720']
+    if case=='H07':assert 'multi_stock' in frame.unresolved_slots and P.plan_for(d,frame,policy_version='supervisor.flow-core.2').selected_views==[]
+    if case=='H08':assert {m.text for m in frame.mentions if not m.negated}=={'대우건설'} and next(m for m in frame.mentions if m.text=='한국전력').negated
+    if case=='H12':
+        assert {'어제','오늘','기관'} <= {c.value for c in frame.conditions}
+        yesterday=next(c for c in frame.conditions if c.value=='어제')
+        assert [e.text for e in yesterday.evidence]==['어제','말고']
+        assert not any('2026' in c.value for c in frame.conditions)
+
+
+@pytest.mark.parametrize('case',['H09','H10'])
+def test_heldout_repeated_conflicting_evidence_is_not_disambiguated_by_offsets(case):
+    q=HELDOUT_QUESTIONS[case]
+    if case=='H09':raw=proposal(conditions=[dict(domain='flow',kind='focus',value='기관',evidence=ev(q,'기관'),negation=None)])
+    else:raw=proposal(views=[dict(view='flow',evidence=ev(q,'수급'),negation=ev(q,'말고'))])
+    with pytest.raises(M.CoreInvalid):G.assess(draft(q),raw)
+    if case=='H09':assert 'scope' in G.assess(draft(q)).frame.unresolved_slots
+
+
+async def test_H11_holding_quantity_context_is_not_erased_to_accept_a_composite_period_view():
+    q=HELDOUT_QUESTIONS['H11'];d=draft(q)
+    raw=proposal(mentions=[dict(evidence=ev(q,'포스코퓨처엠'),negation=None)],views=[dict(view='flow',evidence=ev(q,'100주 보유 중 수급'),negation=None)])
+    with pytest.raises(M.CoreInvalid):G.assess(d,raw)
+    raw['views'][0]['evidence']=ev(q,'수급')
+    frame=G.assess(d,raw,source='model_assisted').frame
+    assert 'meaning' in frame.unresolved_slots
+    assert any(c.kind=='unrecognized' and ('보유' in c.value or '중' in c.value) for c in frame.conditions)
+    assert not any(c.disposition=='honored' for c in frame.conditions)
+    first=await P.start_v2(d,gateway=NS(propose=AsyncMock(return_value=raw)),attempt_id=str(uuid4()))
+    assert first.action=='clarify' and first.lookup is None
+    assert first.plan.status=='needs_clarification' and first.plan.selected_views==[]
+    # Existing PERIOD can label this raw token unsupported; that is a documented
+    # parser limitation, not proof that100주 means a100-week analysis request.
+
+
+@pytest.mark.parametrize('case',['H13','H14'])
+def test_heldout_typed_answer_sources_are_not_consent_or_borrowable_negation(case):
+    q=HELDOUT_QUESTIONS[case];stock_id,a1,a2=(str(uuid4()) for _ in range(3))
+    def ae(aid,source,text):
+        v=ev(source,text);return v|dict(source_kind='clarification_answer',answer_id=aid)
+    if case=='H13':
+        d=draft(q,answers=[dict(answer_id=stock_id,slot='stock',value='대우건설'),dict(answer_id=a1,slot='flow_focus',value='개인 제외')])
+        raw=proposal(mentions=[dict(evidence=ae(stock_id,'대우건설','대우건설'),negation=None)],views=[dict(view='flow',evidence=ev(q,q),negation=None)],
+            conditions=[dict(domain='flow',kind='exclude',value='개인',evidence=ae(a1,'개인 제외','개인'),negation=ae(a1,'개인 제외','제외'))])
+        frame=G.assess(d,raw,source='model_assisted').frame
+        assert frame.mentions[0].evidence.answer_id==stock_id and any(c.value=='2개월' for c in frame.conditions)
+        excluded=next(c for c in frame.conditions if c.kind=='exclude')
+        assert all(e.answer_id==a1 for e in excluded.evidence)
+    else:
+        d=draft(q,answers=[dict(answer_id=a1,slot='flow_focus',value='외국인'),dict(answer_id=a2,slot='flow_focus',value='기관 말고')])
+        raw=proposal(mentions=[dict(evidence=ev(q,'롯데케미칼'),negation=None)],conditions=[dict(domain='flow',kind='focus',value='외국인',evidence=ae(a1,'외국인','외국인'),negation=ae(a2,'기관 말고','말고'))])
+        with pytest.raises(M.CoreInvalid):G.assess(d,raw)
+        raw['conditions'][0]['negation']=None;frame=G.assess(d,raw,source='model_assisted').frame
+        assert any(c.kind=='exclude' and c.value=='기관' for c in frame.conditions)
+    assert all(c.disposition!='honored' for c in frame.conditions)

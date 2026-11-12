@@ -1,6 +1,6 @@
 "use client";
 import {useState,useEffect,useLayoutEffect,useRef} from 'react';
-import {conditionLabel,conditionDisposition,clarificationSlot,meaningLabel} from '../lib/supervisor-request';
+import {conditionLabel,conditionDisposition,clarificationSlot,meaningLabel,operationLabel,type CoreOperation} from '../lib/supervisor-request';
 import type {Draft,Plan,Outcome,Answer,Preparation} from '../model/chat';
 export type ChatProps={canStartNew?:boolean;
 verificationPending?:boolean;
@@ -12,6 +12,7 @@ draft:Draft;
 plan:Plan|null;
 outcome:Outcome|null;
 busy:boolean;
+operation?:CoreOperation|null;
 verified:boolean;
 locked:boolean;
 replayable:boolean;
@@ -43,12 +44,12 @@ export function ChatView(p:ChatProps){
    <p className="sc-notice"><a href="/reports/technical">저장된 차트 결과 보기 · 조회 전용</a><small>저장 결과 탐색이며 새 Technical 분석을 실행하지 않습니다.</small><a href="/fundamental">재무 분석·본인 결과 열기</a><small>별도 재무 화면에서 실행 여부를 확인합니다. 채팅의 재무 실행은 아직 미연결입니다.</small></p>
   <header className="sc-header"><span className="sc-eyebrow">VERIθ · RESEARCH</span><h1>무엇이 궁금하신가요?</h1><p>질문을 확인하고, 지금 연결된 분석부터 근거와 함께 살펴봅니다.</p><div className="sc-badges"><span>연결됨 · Flow</span><span>차트·재무 · 채팅 실행 미연결</span></div></header>
   <div className="sc-thread" aria-live="polite">
-   {p.verificationPending&&<p role="status">상태 확인 중 · 실행 없음</p>}
+   {p.verificationPending&&<p className="sc-operation" role="status">{operationLabel(p.operation??'verification-get')}</p>}
    {deleted?<article className="sc-card"><h2>삭제된 결과입니다</h2><p>원질문과 계획·결과를 다시 표시하지 않습니다.</p></article>:<>
     {p.draft.original_query&&<article className="sc-question"><small>내 질문</small><p>{p.draft.original_query}</p></article>}
     {p.draft.answers.map(a=><p className="sc-answer" key={a.answer_id}>확인 답변 · {({stock:'종목',views:'분석 관점',flow_focus:'수급 주체',period:'기간',scope:'범위'} as const)[a.slot]}: {a.value}</p>)}
     {p.preparation&&<p className="sc-preparation" role="status">{meaningLabel(p.preparation.meaning_status)} · 첫 채택 <PreparationTime expiresAt={p.preparation.expires_at}/>{p.preparation.state==='consumed'&&<span> 준비가 이미 확정 요청에 연결됐습니다. 기존 요청으로 확인하세요.</span>}</p>}
-    {p.busy&&<p role="status">요청을 확인 중입니다. 분석 진행률을 추정하지 않습니다.</p>}
+    {p.busy&&<p className="sc-operation" role="status">{p.operation?operationLabel(p.operation):'응답을 확인 중입니다. 처리 진행률을 추정하지 않습니다.'}</p>}
     {plan&&<article className="sc-card"><h2 ref={heading} tabIndex={-1}>{plan.status==='needs_clarification'?'질문을 조금 더 확인할게요':plan.status==='needs_stock_selection'?'어떤 종목인가요?':'요청 범위와 연결 가능한 분석'}</h2>
       <div className="sc-badges">{plan.requested_views.map(v=><span key={v}>{labels[v]??v}</span>)}</div>
       {plan.frame.unresolved_slots.map(slot=>slot==='meaning'?<p key={slot}>현재 정책으로 남은 의미를 확정할 수 없습니다. 원질문을 구체적으로 편집해 주세요. 답변 반복으로 이 장벽을 없애지 않습니다.</p>:<Clarification key={slot} slot={slot} disabled={blocked||p.locked||p.draft.revision>=4} onAnswer={value=>p.onAnswer(slot==='scope'&&plan.policy_version==='supervisor.flow-core.2'?'scope':clarificationSlot(slot),value)}/>)}
@@ -62,6 +63,7 @@ export function ChatView(p:ChatProps){
       {ready&&!p.locked&&<div className="sc-consent">{plan.partial&&<label><input type="checkbox" checked={p.partialConsent} disabled={blocked} onChange={e=>p.onPartial(e.target.checked)}/> Flow 부분 범위만 실행하고 미연결 관점은 실행하지 않는 데 동의합니다</label>}<label><input type="checkbox" checked={p.consent} disabled={blocked} onChange={e=>p.onConsent(e.target.checked)}/> 확인한 계획의 Flow 실행에 동의합니다</label><button className="sc-primary" disabled={!p.verified||blocked||!p.consent||plan.partial&&!p.partialConsent||plan.required_waivers.some(id=>!p.waivers.includes(id))} onClick={p.onConfirm}>확인한 Flow 실행</button></div>}
      </article>}
     {p.outcome&&<article className="sc-card"><h2>{p.outcome.coverage==='partial'?'부분 결과':p.outcome.coverage==='fulfilled'?'확정 범위 결과':'실행 상태'}</h2>{p.outcome.views.map(v=><p key={v.view}>{labels[v.view]??v.view} · {({not_executed:'미연결 · 실행하지 않음',not_admitted:'접수 전',running:'실행 중',result_ready:'결과 보존 · 게시 대기',stored:'저장됨',failed:'실패',unknown:'상태 불명',deleted:'삭제됨'} as Record<string,string>)[v.state]??'상태 확인 필요'}</p>)}
+     {status==='running'&&<p className="sc-operation" role="status">Flow 분석 실행 중 · 서버가 보고한 상태입니다.</p>}
      {status==='unknown'&&<p>결과가 불명확합니다. 실패·취소 또는 과금 중단을 뜻하지 않습니다. 자동 재실행하지 않습니다.</p>}
      {status==='result_ready'&&<p>결과는 보존됐지만 아직 게시되지 않았습니다. 같은 요청의 명시적 POST로 snapshot만 게시합니다.</p>}
      {status==='stored'&&p.outcome.flow?.report_url&&<a href={p.outcome.flow.report_url}>저장된 본인 Flow 보고서 보기</a>}
@@ -71,7 +73,7 @@ export function ChatView(p:ChatProps){
    </>}
   </div>
   {p.error&&<p className="sc-error" role="alert">{p.error}</p>}
-  {p.locked&&<div className="sc-recovery"><button disabled={blocked} onClick={p.onObserve}>상태 다시 확인 · GET만</button>{!deleted&&<button disabled={blocked||!p.verified||!p.replayable||status==='running'||status==='stored'||status==='failed'||status==='unknown'} onClick={p.onConfirm}>같은 확정 요청 확인 · 필요시 snapshot 게시</button>}{!p.replayable&&<p>이 직접 링크에는 고정 확인 입력이 없어 GET-only 조회만 가능합니다. 기존 요청을 새 키로 재구성하지 않습니다.</p>}<p>확정된 원문·조건·키를 유지합니다. GET은 실행하거나 게시하지 않습니다.</p></div>}
+  {p.locked&&<div className="sc-recovery"><button disabled={blocked} onClick={p.onObserve}>상태 다시 확인 · GET만</button>{!deleted&&<button disabled={blocked||!p.verified||!p.replayable||status==='running'||status==='stored'||status==='failed'||status==='unknown'} onClick={p.onConfirm}>같은 확정 요청 확인 · 필요시 snapshot 게시</button>}{!p.replayable&&<p>이 직접 링크에는 고정 확인 입력이 없어 GET-only 조회만 가능합니다. 기존 요청을 새 키로 재구성하지 않습니다.</p>}<p>확정된 원문·조건·키를 유지합니다. GET은 새 분석을 실행하거나 게시하지 않습니다.</p></div>}
   {p.observationEnded&&<p>자동 관측이 끝났습니다. 상태 다시 확인은 계속 사용할 수 있습니다.</p>}
   {!p.locked&&<form className="sc-composer" onSubmit={e=>{e.preventDefault();
   p.onPrepare();

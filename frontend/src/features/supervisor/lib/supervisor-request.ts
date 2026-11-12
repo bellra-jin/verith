@@ -5,8 +5,38 @@ export const VERSION='supervisor.core.v1';
 const views=['flow','technical','fundamental','macro','industry','news','overview'];
 export const object=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 const hex=(v:unknown):v is string=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
-export class CoreHttpError extends Error{constructor(public status:number,public code:string='SERVICE_UNAVAILABLE'){super('요청을 확인할 수 없습니다. 고정된 요청을 보존하고 상태를 다시 확인해 주세요.');
-}}
+export type CoreOperation='preparation-post'|'preparation-get'|'child-post'|'confirm-post'|'request-get'|'verification-get'|'preparation-delete';
+const responseMessages={
+ USAGE_LIMIT_EXCEEDED:'이 요청에 사용 한도 응답이 왔습니다. 자동으로 다시 실행하지 않습니다.',
+ FEATURE_UNAVAILABLE:'현재 해당 기능을 이용할 수 없습니다.',
+ DEADLINE_EXCEEDED:'응답 확인 기한이 지났습니다. 처리·취소·비용 여부는 이 안내만으로 확정할 수 없습니다.',
+ SERVICE_UNAVAILABLE:'요청 상태를 확인하지 못했습니다. 자동으로 다시 실행하지 않습니다.',
+} as const;
+const errorStatus:Record<string,number>={USAGE_LIMIT_EXCEEDED:429,FEATURE_UNAVAILABLE:403,DEADLINE_EXCEEDED:504};
+function safeResponseMessage(status:number,code:string){return errorStatus[code]===status?responseMessages[code as keyof typeof responseMessages]:responseMessages.SERVICE_UNAVAILABLE;}
+export class CoreHttpError extends Error{constructor(public status:number,public code:string='SERVICE_UNAVAILABLE'){super(safeResponseMessage(status,code));}}
+export function responseErrorCode(wire:Record<string,unknown>,status:number,legacy:string[]){
+ if(Object.keys(wire).sort().join(',')!=='data,error,request_id,schema_version,trace_id'||wire.data!==null||!object(wire.error)||Object.keys(wire.error).sort().join(',')!=='code,message'||typeof wire.error.code!=='string'||typeof wire.error.message!=='string')return 'SERVICE_UNAVAILABLE';
+ const code=wire.error.code;
+ if(Object.hasOwn(errorStatus,code))return errorStatus[code]===status?code:'SERVICE_UNAVAILABLE';
+ return legacy.includes(code)?code:'SERVICE_UNAVAILABLE';
+}
+export function operationLabel(operation:CoreOperation){return ({
+ 'preparation-post':'질문과 실행 범위 확인 응답 대기 · 분석 시작을 확인한 상태가 아닙니다.',
+ 'preparation-get':'준비 상태 조회 중 · 새 분석 실행 없음 · GET만',
+ 'child-post':'선택한 종목의 준비 응답 대기 · 분석 시작을 확인한 상태가 아닙니다.',
+ 'confirm-post':'확정 요청 응답 대기 · 접수·분석 시작 여부는 응답 후 확인합니다.',
+ 'request-get':'상태 확인 중 · 새 분석 실행 없음 · GET만',
+ 'verification-get':'상태 확인 중 · 새 분석 실행 없음 · GET만',
+ 'preparation-delete':'준비 원문 삭제 확인 중 · 이미 실행된 분석 취소를 뜻하지 않습니다.',
+} as const)[operation];}
+export function coreErrorMessage(error:unknown,operation:CoreOperation,hasServerId:boolean){
+ const message=error instanceof CoreHttpError?error.message:responseMessages.SERVICE_UNAVAILABLE;
+ const recovery=hasServerId?(operation==='preparation-get'||operation==='preparation-delete'||operation==='preparation-post'||operation==='child-post'?'기존 준비 ID로 상태를 다시 조회해 주세요.':'같은 요청의 상태 다시 확인(GET만)을 이용해 주세요.'):
+ operation==='preparation-post'||operation==='child-post'?'서버 ID를 확인하지 못했습니다. 고정된 입력과 키를 보존하고 같은 준비 요청으로 명시적으로 확인해 주세요.':
+ operation==='confirm-post'?'서버 ID를 확인하지 못했습니다. 고정된 입력과 키를 보존하고 같은 확정 요청으로 명시적으로 확인해 주세요.':'보존된 입력이 있다면 기존의 같은 요청 확인 경로를 이용해 주세요.';
+ return message+' '+recovery;
+}
 export function canonical(v:unknown):string{
  if(Array.isArray(v))return '['+v.map(canonical).join(',')+']';
  if(object(v))return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}';
@@ -82,9 +112,7 @@ export async function coreRequest(kind:'prepare'|'confirm'|'get',payload:Draft|C
  const value=await bounded(response,signal);
  guard();
  if(!object(value)||value.schema_version!==VERSION||!uuid(value.request_id)||!uuid(value.trace_id))throw new CoreHttpError(502);
- if(!response.ok){const code=object(value.error)&&typeof value.error.code==='string'?value.error.code:'SERVICE_UNAVAILABLE';
- throw new CoreHttpError(response.status,['USAGE_LIMIT_EXCEEDED','PLAN_STALE','HANDOFF_EXPIRED','RESOURCE_NOT_FOUND','IDEMPOTENCY_CONFLICT','PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED','MEANING_LIMIT_EXCEEDED'].includes(code)?code:'SERVICE_UNAVAILABLE');
- }
+ if(!response.ok)throw new CoreHttpError(response.status,responseErrorCode(value,response.status,['PLAN_STALE','HANDOFF_EXPIRED','RESOURCE_NOT_FOUND','IDEMPOTENCY_CONFLICT','PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED','MEANING_LIMIT_EXCEEDED']));
  if(value.error!==null)throw new CoreHttpError(502);
  const result=kind==='prepare'?await planValue(value.data,payload as Draft):await outcomeValue(value.data);
  guard();
@@ -229,7 +257,7 @@ export async function preparationRequest(kind:'post'|'get'|'delete',payload:Prep
  const wire=await bounded(response,signal);
  guard();
  if(!object(wire)||wire.schema_version!==VERSION||!uuid(wire.request_id)||!uuid(wire.trace_id))throw new CoreHttpError(502);
- if(!response.ok){const code=object(wire.error)&&typeof wire.error.code==='string'?wire.error.code:'SERVICE_UNAVAILABLE';throw new CoreHttpError(response.status,['PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED','MEANING_LIMIT_EXCEEDED','IDEMPOTENCY_CONFLICT','PLAN_STALE'].includes(code)?code:'SERVICE_UNAVAILABLE');}
+ if(!response.ok)throw new CoreHttpError(response.status,responseErrorCode(wire,response.status,['PREPARATION_EXPIRED','PREPARATION_DELETED','PREPARATION_CONSUMED','MEANING_LIMIT_EXCEEDED','IDEMPOTENCY_CONFLICT','PLAN_STALE']));
  if(wire.error!==null)throw new CoreHttpError(502);
  const value=await preparationValue(wire.data,kind==='post'?(payload as PrepareBody).draft:undefined);
  guard();

@@ -86,3 +86,29 @@ CF028 추가 진단은 fixture에만 public DOM 상태를 남긴다. pending/pla
 최종 동결 source의 조율 측 실제 Chrome 검증에서 세 고정 programmatic mounted GET case(stored, 503 오류 뒤 200 명시 retry, deleted)가 모두 수집됐다. held 상태의 pending/disabled와 session +1/core +0, disabled DOM click의 추가 HTTP 0, settlement의 재활성·session +3/core +1 및 오류 해제를 확인했다. 각 case의 POST/DELETE는 0이며, deleted는 원문·계획·결과를 숨겼다. 이 결과는 production handler를 직접 호출한 시험이 아니다.
 
 별도 native 1440/390의 Return → heading → 첫 실제 control, 390 동의 순서와 활성 실행 버튼 접근·레이아웃, 지연 중 사용자 Tab 이동의 focus 보존도 확인됐다. 실제 Flow 실행·폰/Safari/screen reader·Backend/provider 수용은 아니다. 마지막 GET 회차의 completed receipt와 parent 0·정리를 확인했으나 receipt ACK는 not_observed이며 commit ACK를 주장하지 않는다. 과거 timeout/focus 실패와 최종 동일 source 성공은 작업 기록에서 구분한다.
+
+## CF046 오류와 작업별 대기 안내
+
+검증된 오류 envelope와 HTTP status가 함께 맞는 `USAGE_LIMIT_EXCEEDED/429`,
+`FEATURE_UNAVAILABLE/403`, `DEADLINE_EXCEEDED/504`만 유한한 한국어 문구로 구분한다.
+일반 403/auth 오류를 기능 비활성으로 표시하지 않으며 raw message/code·내부 ID·설정/credential 정보를
+문구로 출력하지 않는다. 한도 숫자·초기화 시각·미실행/무료를 추정하지 않는다. 시간 초과는 처리·취소·비용
+여부의 확정이 아니다.
+
+화면용 operation은 실제 준비 POST, 준비 ID의 GET, child 준비 POST, 확정 POST 응답 대기,
+검증/요청 GET, 준비 원문 DELETE를 구분한다. 확정 POST 대기는 접수/분석 시작의 증거가 아니며,
+서버 `outcome.flow.state==='running'`일 때만 Flow 분석 실행 중 안내를 표시한다.
+GET 대기는 ‘새 분석 실행 없음 · GET만’이며 이미 시작된 분석이 계속 running일 수 있다.
+준비 DELETE는 이미 실행된 분석의 취소를 뜻하지 않는다. TTL은 첫 채택 기한이며 예상 완료시간이 아니다.
+
+오류 뒤 서버 ID가 있으면 같은 ID의 상태 조회를 안내한다. ID 없는 불명 POST는 고정 입력·키를 보존한
+기존 명시적 같은 요청 확인을 안내하고, GET으로 접수를 찾을 수 있다고 약속하지 않는다.
+새 버튼/자동 재시도/새 key·기한·진행률·delay timer를 만들지 않는다. 기존 409 미채택 pending 정리,
+동의·재인증·owner/URL/visibility/세대·취소·focus·관측 종료 경계는 그대로다.
+
+생산 함수/JSX와 가짜 시계 회귀는 통과했으며, 이 결과는 mounted React click/visual 증거가 아니다.
+최초 전용 프로필 inventory 부재를 보존하고, 이후 조율 측이 확인한 기존 `Supervisor test` 창에서
+동일 소스의 보호 fixture 한 회차를 실행했다. 생산 화면 AX·합성 control과 Responsive1440×844 설정은
+확인했으나 native `noWindowsAvailable`/입력 불안정으로 오류·지연·명시 복구·390 overflow와 키보드
+수용은 미완료다. completed receipt/parent0·소유 정리를 확인했고 receipt ACK는 not_observed다.
+운영 한도 설정·실제 로그인/Backend/BFF/provider·Flow 전체 인수도 이번 UI 변경의 완료 범위가 아니다.

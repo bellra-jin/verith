@@ -347,3 +347,63 @@ def test_all_KIS_explicit_errors_are_fixed_literals():
     raises=[n.exc for n in ast.walk(tree) if isinstance(n,ast.Raise) and isinstance(n.exc,ast.Call) and isinstance(n.exc.func,ast.Name) and n.exc.func.id=='KisError']
     assert len(raises)==11
     assert all(len(n.args)==1 and isinstance(n.args[0],ast.Constant) and isinstance(n.args[0].value,str) and not n.keywords for n in raises)
+
+
+PRODUCTION_KIS='https://openapi.koreainvestment.com:9443'
+BAD_KIS_ORIGINS=[
+    'https://openapivts.koreainvestment.com:29443',
+    'http://openapi.koreainvestment.com:9443',
+    'https://openapi.koreainvestment.com',
+    'https://openapi.koreainvestment.com:443',
+    'https://openapi.koreainvestment.com:99999',
+    'https://openapi.koreainvestment.com.evil.invalid:9443',
+    'https://evil.invalid:9443',
+    'https://'+SECRET+'@openapi.koreainvestment.com:9443',
+    'https://user:'+SECRET+'@openapi.koreainvestment.com:9443',
+    PRODUCTION_KIS+'/uapi/domestic-stock',PRODUCTION_KIS+'//',
+    PRODUCTION_KIS+'?'+SECRET,PRODUCTION_KIS+'?',PRODUCTION_KIS+'#'+SECRET,
+    ' '+PRODUCTION_KIS,PRODUCTION_KIS+'\n',
+    'https://openapi.koreainvestment.com.:9443',
+    'https://openapi.koreainvestment.com%2eevil.invalid:9443',
+    'https://oрenapi.koreainvestment.com:9443',
+]
+
+
+def credential_boundary(base_url):
+    from urllib.parse import urlsplit
+    client=Mock(side_effect=AssertionError('No HTTP client before valid configuration'))
+    token=Mock(side_effect=AssertionError('No token/cache before valid configuration'))
+    load=Mock()
+    values=dict(KIS_API_KEY=SECRET,KIS_API_SECRET=SECRET,KIS_BASE_URL=base_url)
+    code=extract('ai/src/agents/flow/infrastructure/kis_client.py',
+                 {'KisError','KisConfigurationError','_production_base_url','_load_credentials','fetch_supply_demand','fetch_daily_quotes'},
+                 dict(urlsplit=urlsplit,load_dotenv=load,os=NS(getenv=values.get),_ENV_FILE=Path('/synthetic/ai/.env'),httpx=NS(Client=client),date=date,_TIMEOUT=15.,_get_token=token))
+    return code,client,token,load
+
+
+@pytest.mark.parametrize('base_url',BAD_KIS_ORIGINS)
+@pytest.mark.parametrize('function',['fetch_supply_demand','fetch_daily_quotes'])
+def test_real_only_KIS_origin_declined_before_client_token_cache_or_provider(base_url,function,capsys,caplog):
+    code,client,token,load=credential_boundary(base_url);context=NS(check=Mock())
+    with pytest.raises(code['KisConfigurationError']) as caught:
+        code[function](date(2026,11,6),'000720',execution_context=context)
+    assert isinstance(caught.value,code['KisError']) and caught.value.code=='KIS_CONFIGURATION_INVALID'
+    assert caught.value.__cause__ is None and SECRET not in str(caught.value) and base_url not in str(caught.value)
+    client.assert_not_called();token.assert_not_called();context.check.assert_called_once_with('kis_credentials')
+    load.assert_called_once_with(dotenv_path=Path('/synthetic/ai/.env'),override=False)
+    capture=capsys.readouterr();assert SECRET not in capture.out+capture.err+caplog.text
+
+
+@pytest.mark.parametrize('base_url',[PRODUCTION_KIS,PRODUCTION_KIS+'/',PRODUCTION_KIS.upper()+'/'])
+def test_production_KIS_origin_preserves_credential_and_normalization_contract(base_url):
+    code,client,token,load=credential_boundary(base_url)
+    assert code['_load_credentials']()==(SECRET,SECRET,base_url.rstrip('/'))
+    client.assert_not_called();token.assert_not_called()
+
+
+@pytest.mark.parametrize('base_url',[None,False,42,[],{},'',b'https://openapi.koreainvestment.com:9443'])
+def test_KIS_origin_parser_rejects_non_string_and_empty_without_input_echo(base_url):
+    code,client,token,_=credential_boundary(PRODUCTION_KIS)
+    with pytest.raises(code['KisConfigurationError']) as caught:code['_production_base_url'](base_url)
+    assert str(caught.value)=='KIS 실전 조회 서버 설정이 올바르지 않습니다.'
+    client.assert_not_called();token.assert_not_called()

@@ -11,11 +11,23 @@ from __future__ import annotations
 
 import httpx
 import asyncio
+from dataclasses import dataclass
 
 _ANALYZE_PATH = "/internal/technical/analyze"
 _FUNDAMENTAL_ANALYZE_PATH = "/internal/fundamental/analyze"
 _INDUSTRY_ANALYZE_PATH = "/internal/industry/analyze"
 _INDUSTRY_RENDER_PATH = "/internal/industry/render"
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class _TechnicalBoundaryConfiguration:
+    base_url:str
+    token:bytes
+    transport:object
+
+    def same(self,other):
+        return (type(other) is _TechnicalBoundaryConfiguration and self.base_url==other.base_url
+                and self.token==other.token and self.transport is other.transport)
 
 
 class AIClientError(Exception):
@@ -183,22 +195,34 @@ class AIClient:
         """Legacy unauthenticated execution is closed before transport."""
         raise AIUnavailableError('Technical execution unavailable')
 
-    async def technical_boundary(self,payload:dict)->dict:
-        """Fixed synthetic typed boundary; no retry, proxy, redirect or production engine."""
+    def _technical_boundary_configuration(self):
+        """Pure private snapshot; no settings/env/DNS/client or HTTP side effects."""
         from urllib.parse import urlsplit
-        from src.modules.technical.domain.execution_boundary import REQUEST_LIMIT,RESPONSE_LIMIT,WAIT_SECONDS,parse_request,canonical,decode,BoundaryInvalid
         try:
-            url=urlsplit(self._base_url);httpx.URL(self._base_url);token=self._flow_token.encode('ascii')
+            base=self._base_url;transport=self._transport;raw_token=self._flow_token
+            if type(base) is not str or type(raw_token) is not str:raise ValueError()
+            url=urlsplit(base);httpx.URL(base);token=raw_token.encode('ascii')
             if url.scheme not in {'http','https'} or not url.hostname or url.port==0 or url.username or url.password or url.path not in {'','/'} or url.query or url.fragment or len(token)<32 or any(c<32 or c>126 for c in token):raise ValueError()
-        except (ValueError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
+            if transport is not None and not isinstance(transport,httpx.AsyncBaseTransport):raise ValueError()
+            return _TechnicalBoundaryConfiguration(base,token,transport)
+        except (ValueError,TypeError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
+
+    async def technical_boundary(self,payload:dict,*,_configuration=None)->dict:
+        """Fixed synthetic typed boundary; no retry, proxy, redirect or production engine."""
+        from src.modules.technical.domain.execution_boundary import REQUEST_LIMIT,RESPONSE_LIMIT,WAIT_SECONDS,parse_request,canonical,decode,BoundaryInvalid
+        captured=self._technical_boundary_configuration()
+        if _configuration is not None:
+            if type(_configuration) is not _TechnicalBoundaryConfiguration or not captured.same(_configuration):
+                raise AIUnavailableError('Technical boundary unavailable')
+            captured=_configuration
         try:
             parse_request(payload);body=canonical(payload).encode('utf8')
             if len(body)>REQUEST_LIMIT:raise BoundaryInvalid()
         except (ValueError,TypeError,UnicodeError,RecursionError):raise AIValidationError('Technical boundary input invalid') from None
         try:
             async with asyncio.timeout(WAIT_SECONDS):
-                async with httpx.AsyncClient(timeout=WAIT_SECONDS,transport=self._transport,trust_env=False,follow_redirects=False) as client:
-                    async with client.stream('POST',self._base_url+'/internal/technical/boundary',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Technical-Service-Token':token.decode('ascii')}) as response:
+                async with httpx.AsyncClient(timeout=WAIT_SECONDS,transport=captured.transport,trust_env=False,follow_redirects=False) as client:
+                    async with client.stream('POST',captured.base_url+'/internal/technical/boundary',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Technical-Service-Token':captured.token.decode('ascii')}) as response:
                         if response.status_code==504:raise AITimeoutError('Technical boundary deadline exceeded')
                         if response.status_code!=200:raise AIUnavailableError('Technical boundary unavailable')
                         if response.headers.get('content-encoding','identity').lower()!='identity':raise AIContractError('Technical boundary result invalid')

@@ -843,6 +843,20 @@ class CF023Boundary(unittest.TestCase):
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 class CF048Boundary(unittest.TestCase):
+    def test_CF052_exact_runtime_source_and_default_off_actual_body(self):
+        import asyncio
+        from scripts import check_safe as c
+        from tests.unit import test_cf048_technical_admission as unit
+        from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+        path='backend/src/modules/technical/application/execution_runtime.py'
+        self.assertIn(path,c.CF048_SOURCES)
+        session=unit.Session()
+        runtime=TechnicalExecutionRuntime(session,principal=unit.principal())
+        with self.assertRaises(unit.D.TechnicalCompletionError):
+            asyncio.run(runtime.execute_admitted_once(None,None))
+        session.commit.assert_not_awaited()
+        self.assertFalse(any('technical-execution' in name for name in c.MODES))
+
     def test_CF050_receive_only_sources_and_exact_owned_completion_flag(self):
         from scripts import check_safe as c
         root=Path(__file__).resolve().parents[3]

@@ -853,7 +853,104 @@ async def _verify_completion(proof):
     else:check(False,'CF050 populated completion downgrade must reject')
     check(await scalar('SELECT version_num FROM alembic_version')==heads[0] and await totals()==before,'CF050 populated downgrade retained')
     mark('new_completion_populated_downgrade_refused_old_ledger_unchanged')
-    return dict(status='passed',groups=groups,receiving_only=True,new_admission_or_claim_in_completion=0,
+    # CF052: keep CF050's already-claimed baseline above; these new fixtures
+    # begin admitted-only and exercise the concrete runtime and real AIClient.
+    import httpx
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    runtime_groups=[];synthetic_boundary_invocations=[]
+    async def admitted_only(owner):
+        key='cf052-'+str(uuid4())
+        async with owned_session(proof) as s:first=await Admission(s,principal=owner,policy=policy).admit(key,intent)
+        check(first.newly_admitted and first.run.state=='admitted','CF052 admit-only setup')
+        async with owned_session(proof) as s:
+            row=await CR.owned(s,first.run.analysis_id,owner.user_id);binding=E.binding_from_sql(row)
+        _,frozen=storage_fixture(owner.user_id,binding=binding)
+        return dict(first=first,binding=binding,frozen=frozen,response=json.loads(frozen.result_json))
+    def fixed_client(item,*,mode='ok'):
+        async def app(scope,receive,send):
+            check(scope['type']=='http' and scope['method']=='POST' and scope['path']=='/internal/technical/boundary' and not scope.get('query_string'),'CF052 exact synthetic ASGI path')
+            check(dict(scope['headers']).get(b'x-technical-service-token')==b't'*32,'CF052 synthetic service authentication')
+            raw=bytearray()
+            while True:
+                message=await receive();raw.extend(message.get('body',b''))
+                if not message.get('more_body'):break
+            check(json.loads(raw)==json.loads(item['binding'].boundary.input_json),'CF052 unchanged B IDs and as_of')
+            synthetic_boundary_invocations.append(True)
+            if mode=='cancel':raise asyncio.CancelledError()
+            if mode=='race_ready':
+                owner=item['owner']
+                async with owned_session(proof) as s:
+                    row=await CR.owned(s,item['first'].run.analysis_id,owner.user_id);claimed=E.run_receipt(row)
+                with patch.object(E.TechnicalCompletionAdapter,'stage',unavailable_stage):
+                    async with owned_session(proof) as s:
+                        await expect_error(coord(s,owner).receive(claimed,item['first'].claim_token,item['response']),{'SERVICE_UNAVAILABLE'})
+            status=504 if mode=='timeout' else 503 if mode in {'fail','race_ready'} else 200
+            body=json.dumps(item['response']).encode() if status==200 else b'{}'
+            await send({'type':'http.response.start','status':status,'headers':[(b'content-type',b'application/json'),(b'content-length',str(len(body)).encode())]})
+            await send({'type':'http.response.body','body':body})
+        return AIClient('http://technical.synthetic',3,transport=httpx.ASGITransport(app=app),service_token='t'*32)
+    def runtime(s,owner,client):return TechnicalExecutionRuntime(s,principal=owner,client=client,policy=policy,enabled=True)
+    async def run_once(owner,item,client):
+        async with owned_session(proof) as s:return await runtime(s,owner,client).execute_admitted_once(item['first'].run,item['first'].claim_token)
+    async def runtime_reconcile(owner,item):
+        async with owned_session(proof) as s:return await E.reconcile_completion(s,principal=owner,analysis_id=item['first'].run.analysis_id)
+    async def runtime_publish(owner,item):
+        async with owned_session(proof) as s:return await coord(s,owner,None).publish(item['first'].run.analysis_id)
+    async def runtime_report(owner,item):
+        async with owned_session(proof) as s:return await E.TechnicalOwnedReportService(s,principal=owner).read(item['first'].run.report_id)
+    def runtime_mark(label):runtime_groups.append(label);mark('CF052_'+label)
+
+    owner,owner_a2=await user();item=await admitted_only(owner);before=await totals();initial=len(synthetic_boundary_invocations)
+    client=fixed_client(item)
+    results=await asyncio.gather(run_once(owner,item,client),run_once(owner,item,client))
+    check(len(synthetic_boundary_invocations)-initial==1 and any(v.run.state=='stored' for v in results),'CF052 actual SQL claim winner sends once')
+    check((await runtime_reconcile(owner_a2,item)).run.state=='stored' and (await runtime_report(owner_a2,item)).frozen==item['frozen'],'CF052 A2 complete report lossless')
+    check((await run_once(owner,item,client)).run.state=='stored' and len(synthetic_boundary_invocations)-initial==1 and await totals()==before,'CF052 replay no second call or reserve')
+    async with owned_session(proof) as s:
+        spent=runtime(s,owner,client)
+        await spent.execute_admitted_once(item['first'].run,item['first'].claim_token)
+        await expect_error(spent.execute_admitted_once(item['first'].run,item['first'].claim_token),{'SERVICE_UNAVAILABLE'})
+    runtime_mark('admit_only_actual_runtime_client_ASGI_CF050_CF035_A2_claim_winner1')
+
+    for phase in (1,3,4):
+        item=await admitted_only(owner);client=fixed_client(item);before=await totals();initial=len(synthetic_boundary_invocations)
+        async with owned_session(proof) as s:
+            original=s.commit;commits=[]
+            async def lost_runtime_ACK():
+                commits.append(True);await original()
+                if len(commits)==phase:raise OSError('fixed synthetic runtime ACK loss')
+            with patch.object(s,'commit',lost_runtime_ACK):
+                await expect_error(runtime(s,owner,client).execute_admitted_once(item['first'].run,item['first'].claim_token),{'ACK_UNKNOWN','SERVICE_UNAVAILABLE'})
+        current=await runtime_reconcile(owner_a2,item)
+        expected='claimed' if phase==1 else 'result_ready' if phase==3 else 'stored'
+        check(current.run.state==expected and len(synthetic_boundary_invocations)-initial==(0 if phase==1 else 1),'CF052 phase-specific real commit ACK recovery')
+        if phase==3:check((await runtime_publish(owner_a2,item)).run.state=='stored','CF052 accepted snapshot publishes without rerun')
+        if phase!=1:check((await run_once(owner,item,client)).run.state=='stored','CF052 stored ACK recovery returns stored')
+        check(await totals()==before and len(synthetic_boundary_invocations)-initial==(0 if phase==1 else 1),'CF052 ACK uncertainty never resets hold or resends')
+    runtime_mark('claim_receive_publish_actual_commit_ACK_wrappers_preserve_once_and_hold')
+
+    for mode in ('fail','timeout','cancel','receive_cancel','race_ready'):
+        item=await admitted_only(owner);item['owner']=owner;client=fixed_client(item,mode=mode);before=await totals();initial=len(synthetic_boundary_invocations)
+        if mode=='receive_cancel':
+            async def cancel_receive(*args):raise asyncio.CancelledError()
+            with patch.object(E.TechnicalCompletionAdapter,'stage',cancel_receive):
+                try:await run_once(owner,item,client)
+                except asyncio.CancelledError:pass
+                else:check(False,'CF052 receive cancellation must propagate')
+        elif mode=='cancel':
+            try:await run_once(owner,item,client)
+            except asyncio.CancelledError:pass
+            else:check(False,'CF052 client cancellation must propagate')
+        else:await run_once(owner,item,client)
+        current=await runtime_reconcile(owner_a2,item)
+        expected='unknown' if mode in {'fail','timeout'} else 'claimed' if mode=='cancel' else 'result_ready'
+        check(current.run.state==expected and current.run.held_nano==10000,'CF052 failure phase preserves accepted state/full hold')
+        if mode in {'receive_cancel','race_ready'}:check((await runtime_publish(owner_a2,item)).run.state=='stored','CF052 ready cancellation/error recovery no client')
+        check(len(synthetic_boundary_invocations)-initial==1 and await totals()==before,'CF052 client vs receive failure no new reserve or retry')
+    runtime_mark('client_failure_cancel_receive_cancel_ready_race_fence_preserve_raw_snapshot_hold')
+    return dict(status='passed',groups=groups,receiving_only=False,baseline_receiving_only=True,
+        runtime_groups=runtime_groups,synthetic_boundary_invocations=len(synthetic_boundary_invocations),new_admission_or_claim_in_completion=0,
         provider_calls=0,engine_dispatch=0,usage_settlement=False,hold_refund=0,
         concurrency='actual two SQL sessions',ACK_loss='wrapper simulation around actual PG commits',
         expiry='actual DB clock',dirty_session='rejected before ORM refresh',fixture='synthetic CF031; no actual engine')

@@ -817,6 +817,10 @@ async def test_cf042_direct_absolute_service_still_caps_at75(monkeypatch):
 @pytest.mark.parametrize('kind', ['nonfinite', 'future_start', 'missing_start_expired_admission', 'bad_admission'])
 async def test_cf042_invalid_direct_route_context_cannot_grant_longer_time(monkeypatch, kind):
     h = await cf042_public(monkeypatch, middleware=False)
+    # Invalid-state rejection must not depend on the accelerated clock's 10ms
+    # real-time window between scope construction and the actual route guard.
+    # Keep a future start genuinely future; real timeout tests retain the clock.
+    monkeypatch.setattr(h.clock, 'time', lambda: h.clock.anchor)
     def state(clock):
         now = clock.time()
         if kind == 'nonfinite': return {'core_deadline': float('inf')}

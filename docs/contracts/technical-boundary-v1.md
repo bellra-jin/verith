@@ -173,3 +173,13 @@ CF039/CF040 위의 후속 고정 검사는 검토된 별도 64-wheel site와 정
 내부 `TechnicalOwnedReportService.stage`는 fresh Principal 검증과 root 잠금 뒤 이미 존재하는 ID를 검사한다. 동일 owner의 root·snapshot·정확 한 index·저장 당시 session 및 모든 child projection을 기존 read로 다시 검증하고, 저장된 FrozenAnalysisResult 전체가 caller의 검증 결과와 정확히 같을 때만 기존 StagedReportReference를 반환한다. 원 TEXT/세션/행을 변경하거나 flush·commit·AI 호출을 하지 않는다. 다른 유효 입력/결과, 타인·legacy·손상·누락·중복 index는 충돌로 닫는다.
 
 이는 이미 저장된 결과의 재요청만 지원한다. 아직 없는 동일 ID의 동시 최초 저장은 기존 PK 충돌이 가능하며, caller commit 책임과 ACK 불명 뒤 GET-only 복구는 그대로다. 새 실행 identity/admission·멱등 실행·Technical 사용량 정책·운영 활성화 또는 commit 성공 보증이 아니다. [제품 변경과 검증](../work/technical-owned-stage-replay.md)을 따른다.
+
+## CF048 Technical 전용 접수와 로컬 claim
+
+`TechnicalAdmissionService`는 아직 router/coordinator에 등록되지 않은 내부 SQL 컴포넌트다. 기존 Principal·등록 Stock 검증 뒤 Technical 단일 관점과 고정 3m/1y/5y intent를 깊게 고정한다. 새 접수에는 operation/ticker·사용자/서비스 일일 횟수·예산/예약·기한·model/tier·가격 근거·token/byte/call cap이 모두 명시된 정책이 필요하다. 정책 부재/오류/당일 drift는 새 접수와 새 claim만 닫는다. 합성 가격/hash를 운영 근거로 승격하지 않는다.
+
+인증→원 period→run 순서의 잠금 아래 owner/key의 같은 입력은 원 identity를 복구하고 다른 입력은 conflict다. 새 run·횟수·예약은 한 commit이며 ACK 뒤에만 최초 private claim token을 반환한다. 다른 정상 owner 세션 A2의 GET/replay는 원 admission session을 바꾸지 않고 새 token을 발급하지 않는다. `dispatch_claim`은 원 세션/token·고정 context/input/spec/policy·Stock·DB 기한을 다시 대조하고 최초 commit ACK 뒤에만 `newly_claimed=True`를 준다. 지연된 ACK는 원 기한을 늘리지 않는다.
+
+ACK 불명 복구는 caller가 아는 key의 readonly/no-autoflush 조회이며 새 claim 권위가 없다. 취소/timeout/만료/원문 삭제/불확실 송신은 unknown 및 원 예약/횟수를 보존한다. get/claim/close_unknown에서 만료를 처리할 때 intent를 실제 NULL로 만들며 자동 sweeper/정산/환급은 없다. owner/run/period 삭제나 새 날짜로 원 key·hold를 초기화하지 않는다.
+
+E는 admission intent hash, B는 기존 strict boundary wire/fingerprint, S는 기존 owned-stage wrapper/hash다. 이를 같은 hash로 취급하지 않는다. 후속 공통 coordinator가 admission/claim SQL과 commit/ACK의 유일한 소유자가 되어 한 번만 수행해야 한다. 이 서비스를 먼저 호출한 뒤 coordinator.post로 다시 접수·예약하는 방식은 금지다. 이번에는 adapter/hook·엔진/owned writer·Supervisor 확정 dispatch·실제 provider 송신/요금 정산·운영 정책을 연결하지 않는다. [검증과 미완료](../work/CF-048-technical-admission.md)를 따른다.

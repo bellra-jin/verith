@@ -507,7 +507,26 @@ def graph_dependency_snapshot(site):
     return result
 
 
-def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False, controller_only=False, technical_boundary_only=False, technical_read_only=False, technical_owned_only=False, technical_owned_read_only=False, technical_runtime_only=False, technical_graph_only=False):
+CF048_SOURCES = frozenset({
+    "backend/db/models/technical/execution_admission.py",
+    "backend/db/models/registry.py",
+    "backend/db/migrations/versions/20261112_c48001a7e0001_technical_execution_admission.py",
+    "backend/src/modules/technical/domain/execution_admission.py",
+    "backend/src/modules/technical/infrastructure/execution_admission_repository.py",
+    "backend/src/modules/technical/application/execution_admission_service.py",
+    "backend/tests/unit/test_cf048_technical_admission.py",
+    "backend/scripts/cf035_technical_owned_check.py",
+    ".github/workflows/pr-ci.yml",
+})
+CF048_TESTS = ("tests/unit/test_cf048_technical_admission.py",)
+CF048_INPUTS = {p:CF035_INPUTS[p] for p in (
+    "backend/src/modules/auth/application/session_service.py",
+    "backend/db/models/auth/models.py", "backend/db/models/common/stock.py")}
+CF048_COMPAT = dict(CF035_COMPAT)  # Existing worker Flow-origin sentinel, six pure files.
+NEW.update(CF048_SOURCES)
+
+
+def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False, controller_only=False, technical_boundary_only=False, technical_read_only=False, technical_owned_only=False, technical_owned_read_only=False, technical_runtime_only=False, technical_graph_only=False, technical_admission_only=False):
     if technical_graph_only:
         return sorted(set(GRAPH_INPUTS) | GRAPH_SOURCES)
     raw = subprocess.check_output(["/usr/bin/git", "ls-files", "--stage", "-z"], cwd=repo,
@@ -545,6 +564,10 @@ def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_e
         result = {p for p in result if not p.startswith(('ai/', 'frontend/')) or p in CF035_INPUTS or p in CF035_COMPAT or technical_owned_read_only and p in CF036_SOURCES}
         result.discard('backend/scripts/cf026_supervisor_live_controller.py')
         result.discard('backend/tests/unit/test_cf026_supervisor_live_controller.py')
+    if technical_admission_only:
+        result = {p for p in result if not p.startswith(('ai/', 'frontend/')) or p in CF048_COMPAT}
+        result.discard('backend/scripts/cf026_supervisor_live_controller.py')
+        result.discard('backend/tests/unit/test_cf026_supervisor_live_controller.py')
     if technical_runtime_only:
         result = {p for p in result if not p.startswith(('ai/', 'frontend/')) or p in CF040_INPUTS or p in CF040_COMPAT}
         result.discard('backend/scripts/cf026_supervisor_live_controller.py')
@@ -552,7 +575,7 @@ def selected_sources(repo, *, quality_only=False, fundamental_only=False, flow_e
     return sorted(result)
 
 
-def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False, controller_only=False, technical_boundary_only=False, technical_read_only=False, technical_owned_only=False, technical_owned_read_only=False, technical_runtime_only=False, technical_graph_only=False):
+def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=False, quality_only=False, fundamental_only=False, flow_errors_only=False, usage_only=False, display_only=False, supervisor_only=False, core_only=False, meaning_only=False, assembly_only=False, controller_only=False, technical_boundary_only=False, technical_read_only=False, technical_owned_only=False, technical_owned_read_only=False, technical_runtime_only=False, technical_graph_only=False, technical_admission_only=False):
     if not sys.flags.isolated or not sys.flags.no_site:
         raise UnsafeCheck("use the documented clean env -i Python -I -S launch")
     if set(os.environ) - {"LANG", "TZ", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}:
@@ -577,9 +600,9 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
         policy = prove_os_boundary(owned, executable, sandbox_profile(owned.path, runtime, site, executable), children)
         checkout = owned.path / "checkout"
         fingerprints = {}
-        for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only, display_only=display_only, supervisor_only=supervisor_only,core_only=core_only,meaning_only=meaning_only,assembly_only=assembly_only,controller_only=controller_only,technical_boundary_only=technical_boundary_only,technical_read_only=technical_read_only,technical_owned_only=technical_owned_only,technical_owned_read_only=technical_owned_read_only,technical_runtime_only=technical_runtime_only,technical_graph_only=technical_graph_only):
+        for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only, display_only=display_only, supervisor_only=supervisor_only,core_only=core_only,meaning_only=meaning_only,assembly_only=assembly_only,controller_only=controller_only,technical_boundary_only=technical_boundary_only,technical_read_only=technical_read_only,technical_owned_only=technical_owned_only,technical_owned_read_only=technical_owned_read_only,technical_runtime_only=technical_runtime_only,technical_graph_only=technical_graph_only,technical_admission_only=technical_admission_only):
             data = regular_bytes(repo, p)
-            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS | CF047_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS | CF047_INPUTS)[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS | CF047_INPUTS | CF048_INPUTS | CF048_COMPAT) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS | CF047_INPUTS | CF048_INPUTS | CF048_COMPAT)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             if technical_graph_only and p in GRAPH_INPUTS and hashlib.sha256(data).hexdigest() != GRAPH_INPUTS[p]:
                 raise UnsafeCheck("reviewed graph source changed")
@@ -595,7 +618,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
             cap = {"root": str(owned.path), "source": str(checkout / "backend"),
                    "site": str(site), "runtime": str(runtime), "mode": mode,
                    "parent_pid": os.getpid(), "lifetime": 90 if mode == "self-test" else 300,
-                   "tests": list(GRAPH_TESTS if technical_graph_only else CF040_TESTS if technical_runtime_only else CF036_TESTS if technical_owned_read_only else CF035_TESTS if technical_owned_only else CF031_TESTS if technical_read_only else CF021_TESTS if technical_boundary_only else CF026_TESTS if controller_only else CF024_TESTS if assembly_only else CF023_TESTS if meaning_only else CF022_TESTS if core_only else CF020_TESTS if supervisor_only else CF019_TESTS if display_only else CF018_TESTS if usage_only else CF017_TESTS if flow_errors_only else CF015_TESTS if fundamental_only else CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only, "cf015_self_only":fundamental_only, "cf017_self_only":flow_errors_only, "cf018_self_only":usage_only, "cf019_self_only":display_only,"cf020_self_only":supervisor_only,"cf022_self_only":core_only,"cf023_self_only":meaning_only,"cf024_self_only":assembly_only,"cf026_self_only":controller_only,"cf021_self_only":technical_boundary_only,"cf031_self_only":technical_read_only,"cf035_self_only":technical_owned_only,"cf036_self_only":technical_owned_read_only,"cf040_self_only":technical_runtime_only,"technical_graph_self_only":technical_graph_only}
+                   "tests": list(CF048_TESTS if technical_admission_only else GRAPH_TESTS if technical_graph_only else CF040_TESTS if technical_runtime_only else CF036_TESTS if technical_owned_read_only else CF035_TESTS if technical_owned_only else CF031_TESTS if technical_read_only else CF021_TESTS if technical_boundary_only else CF026_TESTS if controller_only else CF024_TESTS if assembly_only else CF023_TESTS if meaning_only else CF022_TESTS if core_only else CF020_TESTS if supervisor_only else CF019_TESTS if display_only else CF018_TESTS if usage_only else CF017_TESTS if flow_errors_only else CF015_TESTS if fundamental_only else CF014_TESTS if quality_only else CF013_TESTS if adapter_only else OWNED_TESTS if owned_only else CF012_TESTS if analysis_only else UNIT), "cf012_self_only": analysis_only, "cf013_self_only": adapter_only, "cf014_self_only": quality_only, "cf015_self_only":fundamental_only, "cf017_self_only":flow_errors_only, "cf018_self_only":usage_only, "cf019_self_only":display_only,"cf020_self_only":supervisor_only,"cf022_self_only":core_only,"cf023_self_only":meaning_only,"cf024_self_only":assembly_only,"cf026_self_only":controller_only,"cf021_self_only":technical_boundary_only,"cf031_self_only":technical_read_only,"cf035_self_only":technical_owned_only,"cf036_self_only":technical_owned_read_only,"cf040_self_only":technical_runtime_only,"technical_graph_self_only":technical_graph_only,"cf048_self_only":technical_admission_only}
             capfile = owned.path / "capability.json"
             capfile.write_text(json.dumps(cap))
             worker = checkout / "backend/scripts/safe_checks_bootstrap.py"
@@ -623,15 +646,18 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit", "fundamental-self", "fundamental-unit", "flow-errors-self", "flow-errors-unit", "usage-self", "usage-unit", "display-self", "display-unit", "supervisor-self", "supervisor-unit", "core-self", "core-unit", "meaning-self", "meaning-unit", "meaning-assembly-self", "meaning-assembly-unit", "live-controller-self", "live-controller-unit", "technical-boundary-self", "technical-boundary-unit", "technical-read-self", "technical-read-unit", "technical-owned-self", "technical-owned-unit", "technical-owned-read-self", "technical-owned-read-unit", "technical-runtime-self", "technical-runtime-unit", "technical-graph-self", "technical-graph-unit"))
+    parser.add_argument("mode", nargs="?", choices=("list", *MODES, "analysis-self", "analysis-unit", "owned-unit", "adapter-self", "adapter-unit", "quality-self", "quality-unit", "fundamental-self", "fundamental-unit", "flow-errors-self", "flow-errors-unit", "usage-self", "usage-unit", "display-self", "display-unit", "supervisor-self", "supervisor-unit", "core-self", "core-unit", "meaning-self", "meaning-unit", "meaning-assembly-self", "meaning-assembly-unit", "live-controller-self", "live-controller-unit", "technical-boundary-self", "technical-boundary-unit", "technical-read-self", "technical-read-unit", "technical-owned-self", "technical-owned-unit", "technical-owned-read-self", "technical-owned-read-unit", "technical-runtime-self", "technical-runtime-unit", "technical-graph-self", "technical-graph-unit", "technical-admission-self", "technical-admission-unit"))
     values = list(sys.argv[1:] if argv is None else argv)
-    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"], ["fundamental-self"], ["fundamental-unit"], ["flow-errors-self"], ["flow-errors-unit"], ["usage-self"], ["usage-unit"], ["display-self"], ["display-unit"], ["supervisor-self"], ["supervisor-unit"], ["core-self"], ["core-unit"], ["meaning-self"], ["meaning-unit"], ["meaning-assembly-self"], ["meaning-assembly-unit"], ["live-controller-self"], ["live-controller-unit"], ["technical-boundary-self"], ["technical-boundary-unit"], ["technical-read-self"], ["technical-read-unit"], ["technical-owned-self"], ["technical-owned-unit"], ["technical-owned-read-self"], ["technical-owned-read-unit"], ["technical-runtime-self"], ["technical-runtime-unit"], ["technical-graph-self"], ["technical-graph-unit"]]:
+    if values not in [[], ["--help"], ["list"], ["self-test"], ["unit"], ["analysis-self"], ["analysis-unit"], ["owned-unit"], ["adapter-self"], ["adapter-unit"], ["quality-self"], ["quality-unit"], ["fundamental-self"], ["fundamental-unit"], ["flow-errors-self"], ["flow-errors-unit"], ["usage-self"], ["usage-unit"], ["display-self"], ["display-unit"], ["supervisor-self"], ["supervisor-unit"], ["core-self"], ["core-unit"], ["meaning-self"], ["meaning-unit"], ["meaning-assembly-self"], ["meaning-assembly-unit"], ["live-controller-self"], ["live-controller-unit"], ["technical-boundary-self"], ["technical-boundary-unit"], ["technical-read-self"], ["technical-read-unit"], ["technical-owned-self"], ["technical-owned-unit"], ["technical-owned-read-self"], ["technical-owned-read-unit"], ["technical-runtime-self"], ["technical-runtime-unit"], ["technical-graph-self"], ["technical-graph-unit"], ["technical-admission-self"], ["technical-admission-unit"]]:
         parser.error("unsupported mode or extra arguments")
     args = parser.parse_args(values)
     if args.mode == "list":
         print("self-test: synthetic guards only\nunit: fixed six complete files plus audited pure stock/technical files (no DB/external)")
         return 0
     try:
+        if args.mode in {"technical-admission-self", "technical-admission-unit"}:
+            execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode.endswith("self") else "unit",), technical_admission_only=True)
+            return 0
         if args.mode in {"technical-graph-self", "technical-graph-unit"}:
             execute(Path(__file__).resolve().parents[2], ("self-test" if args.mode.endswith("self") else "unit",), technical_graph_only=True)
             return 0

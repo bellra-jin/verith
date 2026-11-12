@@ -193,6 +193,11 @@ jobs:
       - name: Technical read protected unit
         run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-read-unit
 
+      - name: Technical admission protected self
+        run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-admission-self
+      - name: Technical admission protected unit
+        run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-admission-unit
+
       - name: Technical owned storage protected self
         run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-owned-self
       - name: Technical owned storage protected unit

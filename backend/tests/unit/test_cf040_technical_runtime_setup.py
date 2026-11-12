@@ -5,19 +5,25 @@ imported/read. Every config case is a fresh independent module, never a repair o
 an already imported pipeline or a reload of its copied settings.
 """
 import ast
+import asyncio
 import builtins
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, dataclass, fields, replace
+from datetime import UTC, datetime, timedelta
 import hashlib
 import importlib.machinery
 import importlib.util
 from itertools import count
 from pathlib import Path
+import json
+import math
+import re
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -390,19 +396,70 @@ def test_selected_body_alias_and_graph_import_boundary_are_explicit():
 # client factory, config loader, graph or provider module is imported.
 def usage_adapter():
     tree=ast.parse((ROOT/LLM_PATH).read_text())
-    names={'_extract_usage','_extract_text','OpenAiLlmClient'}
+    names={'_extract_usage','_extract_text','OpenAiLlmClient','_StrictLlmFailure',
+           '_strict_json','_strict_sha','_strict_int','_strict_hash','_strict_same_callable',
+           'TechnicalLlmPolicy','TechnicalTokenCount','TechnicalLlmEvidence',
+           'TechnicalRequestLlmBudget','default_openai_client'}
     nodes=[node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names]
     assert {node.name for node in nodes}==names
-    module=ast.Module(body=[ast.ImportFrom(module='__future__',names=[ast.alias(name='annotations')],level=0),*nodes],type_ignores=[])
+    constants={'_STRICT_MAX','_COUNT_MAPPING','_STRICT_POLICY_FIELDS','_STRICT_REASONS'}
+    assignments=[node for node in tree.body if isinstance(node,ast.Assign)
+                 and any(isinstance(t,ast.Name) and t.id in constants for t in node.targets)]
+    assert len(assignments)==4
+    module=ast.Module(body=[ast.ImportFrom(module='__future__',names=[ast.alias(name='annotations')],level=0),*assignments,*nodes],type_ignores=[])
     class SDKError(Exception):pass
     class CallError(Exception):pass
     values={name:getattr(COLLECTION_CONFIG,name) for name in (
-        'OPENAI_TEMPERATURE','OPENAI_MAX_OUTPUT_TOKENS','OPENAI_TIMEOUT_SECONDS','OPENAI_STORE')}
-    values.update(time=SimpleNamespace(perf_counter=lambda:1.0),openai=SimpleNamespace(OpenAIError=SDKError),
+        'OPENAI_TEMPERATURE','OPENAI_MAX_OUTPUT_TOKENS','OPENAI_TIMEOUT_SECONDS','OPENAI_STORE','OPENAI_MAX_RETRIES')}
+    selected=ModuleType('_cf049_selected_adapter_'+str(next(SERIAL)));sys.modules[selected.__name__]=selected
+    selected.__dict__.update(values);values=selected.__dict__
+    values.update(time=SimpleNamespace(perf_counter=lambda:1.0,monotonic=lambda:1.0),openai=SimpleNamespace(OpenAIError=SDKError),
+                  asyncio=asyncio,dataclass=dataclass,fields=fields,replace=replace,datetime=datetime,UTC=UTC,
+                  hashlib=hashlib,json=json,math=math,re=re,threading=threading,UUID=UUID,
                   logger=SimpleNamespace(warning=lambda *a,**kw:None),
                   DeadlineExceeded=DEADLINE.DeadlineExceeded,LlmCallError=CallError)
     exec(compile(ast.fix_missing_locations(module),str(ROOT/LLM_PATH),'exec'),values)
     return values
+
+
+def strict_adapter(*,counter=True,calls=4,create=None):
+    a=usage_adapter();clock=SimpleNamespace(value=0.0)
+    started=datetime(2026,11,12,12,tzinfo=UTC)
+    policy=dict(operation='technical.analysis.v1',enabled=True,currency='USD',supported_tickers=['000720'],
+        user_daily_limit=3,service_daily_limit=10,daily_budget_nano=100000,attempt_reserve_nano=10000,
+        deadline_seconds=60,model='synthetic-model',service_tier='default',price_id='cf049.synthetic.v1',
+        price_evidence_sha256='a'*64,input_nano_per_token=10,output_nano_per_token=20,
+        input_token_cap=100,output_token_cap=50,input_byte_cap=1000,output_byte_cap=500,max_calls=calls)
+    raw=a['_strict_json'](policy)
+    projection={f.name:policy[f.name] for f in fields(a['TechnicalLlmPolicy']) if f.name not in {'policy_json','policy_sha256'}}
+    bound=a['TechnicalLlmPolicy'](policy_json=raw,policy_sha256=a['_strict_sha'](raw),**projection)
+    class Counter:
+        # Synthetic only: identity-authenticated receipts from this one fake
+        # issuer are not evidence of any real tokenizer/count transport.
+        mapping=a['_COUNT_MAPPING'];version='synthetic.v1';provenance_sha256='b'*64
+        def __init__(self):self.issued=[];self.calls=[];self.after=None
+        def count(self,**request):
+            self.calls.append(request.copy())
+            evidence=a['TechnicalTokenCount'](12,request['model'],request['mapping'],'synthetic.v1','b'*64,
+                request['prompt_sha256'],request['projection_sha256'],request['request_sha256'],object())
+            self.issued.append((evidence,request.copy()))
+            if self.after:self.after()
+            return evidence
+        def verify(self,evidence,**request):return any(evidence is issued and expected==request for issued,expected in self.issued)
+    issuer=Counter() if counter else None
+    budget=a['TechnicalRequestLlmBudget'](policy=bound,analysis_id=uuid4(),attempt_id=uuid4(),
+        reserved_nano=10000,started_at=started,deadline_at=started+timedelta(seconds=60),counter=issuer,
+        clock=lambda:clock.value,utcnow=lambda:started+timedelta(seconds=clock.value))
+    dispatched=[]
+    def response(**request):
+        dispatched.append(request)
+        return SimpleNamespace(status='completed',output_text=' synthetic result ',
+            usage=SimpleNamespace(input_tokens=12,output_tokens=3,total_tokens=15))
+    sdk=SimpleNamespace(max_retries=0,responses=SimpleNamespace(create=create or response))
+    client=a['OpenAiLlmClient'](sdk,model='synthetic-model',temperature=None,max_output_tokens=50,
+        timeout=30,store=False,strict=True,request_budget=budget)
+    return SimpleNamespace(a=a,clock=clock,policy=bound,budget=budget,counter=issuer,sdk=sdk,client=client,
+        dispatched=dispatched,response=response,started=started)
 
 
 @pytest.mark.parametrize('values',[
@@ -441,3 +498,378 @@ def test_actual_complete_does_not_carry_or_invent_usage_and_keeps_text():
     assert client.complete('synthetic-question')=='second' and client.last_usage is None
     assert client.complete('synthetic-question')=='third' and client.last_usage is None
     assert len(calls)==3 and 'openai' not in sys.modules
+
+
+def test_strict_selection_missing_budget_is_not_legacy_fallback():
+    a=usage_adapter();calls=[]
+    with pytest.raises(a['LlmCallError'],match='^TECHNICAL_LLM_POLICY_INVALID$'):
+        a['OpenAiLlmClient'](SimpleNamespace(responses=SimpleNamespace(create=lambda **v:calls.append(v))),
+            model='synthetic-model',strict=True)
+    assert not calls
+
+
+def test_missing_strict_factory_budget_cannot_read_settings_or_construct_SDK():
+    a=usage_adapter();calls=[]
+    def unavailable():calls.append(True);raise AssertionError('No settings allowed')
+    a['load_openai_settings']=unavailable
+    a['openai'].OpenAI=lambda **v:calls.append(True)
+    with pytest.raises(a['LlmCallError']):a['default_openai_client'](strict=True)
+    assert not calls
+
+
+def test_legacy_and_explicit_factory_injection_are_preserved():
+    h=strict_adapter();calls=[]
+    h.a['load_openai_settings']=lambda:SimpleNamespace(api_key=PRIVATE,model='synthetic-model')
+    def sdk(**values):calls.append(values);return h.sdk
+    h.a['openai'].OpenAI=sdk
+    client=h.a['default_openai_client'](strict=True,request_budget=h.budget,temperature=None,max_output_tokens=50)
+    assert client._request_budget is h.budget and calls[0]['max_retries']==0
+    assert client.complete('synthetic')=='synthetic result'
+    legacy=h.a['default_openai_client']()
+    assert legacy._strict is False and legacy._request_budget is None
+
+
+@pytest.mark.parametrize('bad',[True,-1,101,2**63,'12',1.2,None])
+def test_bad_or_over_cap_count_closes_before_reservation(bad):
+    h=strict_adapter();original=h.counter.count
+    def altered(**request):
+        issued=original(**request);changed=replace(issued,input_tokens=bad)
+        h.counter.issued.append((changed,request.copy()));return changed
+    h.counter.count=altered
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.dispatched and not h.budget.snapshot()
+
+
+@pytest.mark.parametrize('field,value',[
+    ('mapping','unreviewed'),('version',''),('provenance_sha256','c'*64),
+    ('prompt_sha256','d'*64),('projection_sha256','d'*64),('request_sha256','d'*64),('receipt',True)])
+def test_count_shape_mapping_and_authentication_are_bound_to_exact_request(field,value):
+    h=strict_adapter();original=h.counter.count
+    def altered(**request):
+        issued=replace(original(**request),**{field:value})
+        h.counter.issued.append((issued,request.copy()));return issued
+    h.counter.count=altered
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.dispatched and not h.budget.snapshot()
+
+
+@pytest.mark.parametrize('remaining',[0,-1,float('nan'),float('inf'),True])
+def test_expired_or_unknown_narrower_deadline_cannot_authorize_SDK(remaining):
+    h=strict_adapter();h.client._deadline=SimpleNamespace(remaining_seconds=lambda:remaining)
+    with pytest.raises(h.a['LlmCallError'],match='DEADLINE_EXCEEDED'):h.client.complete('synthetic')
+    record,=h.budget.snapshot();assert not record.entered and record.held_nano==2000 and not h.dispatched
+
+
+def test_already_expired_request_has_no_count_or_SDK():
+    h=strict_adapter();h.clock.value=61
+    with pytest.raises(h.a['LlmCallError'],match='DEADLINE_EXCEEDED'):h.client.complete('synthetic')
+    assert not h.counter.calls and not h.dispatched and not h.budget.snapshot()
+
+
+def test_clock_conversion_cannot_extend_original_duration_when_UTC_lags():
+    h=strict_adapter()
+    with pytest.raises(h.a['_StrictLlmFailure'],match='^CLOCK_INVALID$'):
+        h.a['TechnicalRequestLlmBudget'](policy=h.policy,analysis_id=uuid4(),attempt_id=uuid4(),
+            reserved_nano=10000,started_at=h.started,deadline_at=h.started+timedelta(seconds=60),
+            counter=h.counter,clock=lambda:0,utcnow=lambda:h.started-timedelta(seconds=60))
+    assert not h.dispatched and not h.counter.calls
+
+
+def test_clock_conversion_observation_delay_and_later_wall_rollback_do_not_extend():
+    h=strict_adapter();clock=[0]
+    def now():clock[0]=5;return h.started+timedelta(seconds=20)
+    budget=h.a['TechnicalRequestLlmBudget'](policy=h.policy,analysis_id=uuid4(),attempt_id=uuid4(),
+        reserved_nano=10000,started_at=h.started,deadline_at=h.started+timedelta(seconds=60),
+        counter=h.counter,clock=lambda:clock[0],utcnow=now)
+    assert budget._remaining()==35
+    budget._utcnow=lambda:h.started-timedelta(seconds=60);clock[0]=39
+    assert budget._remaining()==1
+    clock[0]=41
+    with pytest.raises(h.a['_StrictLlmFailure'],match='DEADLINE_EXCEEDED'):budget._remaining()
+
+
+def test_caller_policy_reference_mutation_does_not_rebind_frozen_budget():
+    h=strict_adapter();object.__setattr__(h.policy,'model','mutated')
+    assert h.client.complete('synthetic')=='synthetic result'
+    assert h.budget.snapshot()[0].model=='synthetic-model'
+    object.__setattr__(h.budget._policy,'model','mutated')
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert len(h.dispatched)==1
+
+
+@pytest.mark.parametrize('change',[
+    {'input_token_cap':True},{'output_token_cap':0},{'max_calls':5},{'input_nano_per_token':1.2},
+    {'output_nano_per_token':-1},{'attempt_reserve_nano':2**63},{'service_tier':'priority'},
+    {'policy_sha256':'f'*64},{'model':PRIVATE},{'price_evidence_sha256':'unverified'},
+])
+def test_strict_full_policy_and_projection_must_match(change):
+    h=strict_adapter()
+    altered=replace(h.policy,**change)
+    with pytest.raises(h.a['_StrictLlmFailure']):altered.validated()
+    assert not h.dispatched
+
+
+@pytest.mark.parametrize('bad',[None,True,12,{'input_tokens':12}])
+def test_bare_count_value_or_unverified_receipt_cannot_authorize(bad):
+    h=strict_adapter();h.counter.count=lambda **v:bad
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.dispatched and not h.budget.snapshot() and h.budget.closed_reason
+
+
+def test_default_missing_counter_and_forged_receipt_are_closed():
+    h=strict_adapter(counter=False)
+    with pytest.raises(h.a['LlmCallError'],match='COUNT_UNAVAILABLE'):h.client.complete('synthetic')
+    assert not h.dispatched and not h.budget.snapshot()
+    h=strict_adapter();original=h.counter.count
+    def forged(**request):return replace(original(**request),receipt=object())
+    h.counter.count=forged
+    with pytest.raises(h.a['LlmCallError'],match='COUNT_INVALID'):h.client.complete('synthetic')
+    assert not h.dispatched
+
+
+@pytest.mark.parametrize('field,value',[
+    ('model','other'),('_max_output_tokens',51),('_max_output_tokens',True),('_store',True),
+    ('_timeout',float('nan')),('_timeout',0),('_temperature',True),
+])
+def test_strict_SDK_arguments_do_not_drift(field,value):
+    h=strict_adapter();setattr(h.client,field,value)
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.dispatched
+
+
+@pytest.mark.parametrize('retry',[None,True,1,'0'])
+def test_retry_zero_requires_exact_SDK_evidence(retry):
+    h=strict_adapter();h.sdk.max_retries=retry
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.dispatched
+
+
+@pytest.mark.parametrize('prompt',[None,12,'','x'*1001,'\ud800'])
+def test_invalid_prompt_never_enters_count_or_SDK(prompt):
+    h=strict_adapter()
+    with pytest.raises(h.a['LlmCallError']):h.client.complete(prompt)
+    assert not h.dispatched and not h.counter.calls
+
+
+def test_successful_calls_keep_all_evidence_and_N_plus_one_has_no_refund():
+    h=strict_adapter(calls=2)
+    for _ in range(2):assert h.client.complete('synthetic')=='synthetic result'
+    with pytest.raises(h.a['LlmCallError'],match='BUDGET_EXCEEDED'):h.client.complete('synthetic')
+    records=h.budget.snapshot()
+    assert len(records)==len(h.dispatched)==2 and sum(v.held_nano for v in records)==4000
+    assert all(v.entered and v.response_received and v.text_accepted and v.usage==(12,3,15) and v.estimated_nano==180 for v in records)
+    with pytest.raises(FrozenInstanceError):records[0].held_nano=0
+    object.__setattr__(records[0],'held_nano',0)
+    assert h.budget.snapshot()[0].held_nano==2000
+    assert PRIVATE not in repr(records) and not any('synthetic' in repr(v) for v in records)
+
+
+def test_snapshot_UUIDs_are_copies_even_for_unsafe_consumer_mutation():
+    h=strict_adapter();h.client.complete('synthetic')
+    original=h.budget.snapshot()[0];first=h.budget.snapshot()[0]
+    object.__setattr__(first.analysis_id,'int',uuid4().int)
+    object.__setattr__(first.attempt_id,'int',uuid4().int)
+    assert h.budget.snapshot()[0]==original
+
+
+def test_all_adapter_instances_must_share_the_same_request_budget():
+    h=strict_adapter(calls=2)
+    second=h.a['OpenAiLlmClient'](h.sdk,model='synthetic-model',temperature=None,max_output_tokens=50,
+        timeout=30,store=False,strict=True,request_budget=h.budget)
+    assert h.client.complete('first')=='synthetic result'
+    assert second.complete('second')=='synthetic result'
+    with pytest.raises(h.a['LlmCallError']):second.complete('third')
+    assert len(h.dispatched)==2 and [r.ordinal for r in h.budget.snapshot()]==[1,2]
+
+
+def test_post_count_semantic_mutation_is_not_transport_recalculation():
+    h=strict_adapter();reserve=h.budget._reserve
+    def tamper(adapter,request,*args):
+        ordinal=reserve(adapter,request,*args);request['input']='different';return ordinal
+    h.budget._reserve=tamper
+    with pytest.raises(h.a['LlmCallError'],match='COUNT_INVALID'):h.client.complete('synthetic')
+    record,=h.budget.snapshot();assert not record.entered and record.held_nano==2000 and not h.dispatched
+
+
+def test_evidence_and_errors_never_contain_prompt_or_raw_provider_metadata():
+    h=strict_adapter();h.client.complete(PRIVATE)
+    record,=h.budget.snapshot()
+    assert all(PRIVATE not in str(getattr(record,field.name)) for field in fields(record))
+    assert record.prompt_sha256==h.a['_strict_sha'](PRIVATE)
+
+
+@pytest.mark.parametrize('status',['incomplete','failed',None,'unknown'])
+@pytest.mark.parametrize('text',['valid-looking',''])
+def test_usage_survives_rejected_response_status_and_text(status,text):
+    h=strict_adapter()
+    h.sdk.responses.create=lambda **v:SimpleNamespace(status=status,output_text=text,
+        usage=SimpleNamespace(input_tokens=12,output_tokens=3,total_tokens=15))
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert record.entered and record.response_received and record.usage==(12,3,15)
+    assert not record.text_accepted and record.reason=='RESPONSE_NOT_COMPLETED' and h.client.last_usage is None
+
+
+@pytest.mark.parametrize('kind',['missing','invalid','count','output_cap','empty','bytes','refusal','metadata'])
+def test_observed_usage_and_unknown_are_distinct_and_sticky_closed(kind):
+    h=strict_adapter();response=h.response()
+    if kind=='missing':response.usage=None
+    if kind=='invalid':response.usage.input_tokens=True
+    if kind=='count':response.usage=SimpleNamespace(input_tokens=11,output_tokens=3,total_tokens=14)
+    if kind=='output_cap':response.usage=SimpleNamespace(input_tokens=12,output_tokens=51,total_tokens=63)
+    if kind=='empty':response.output_text=' '
+    if kind=='bytes':response.output_text='가'*167
+    if kind=='refusal':response.output=[SimpleNamespace(content=[SimpleNamespace(type='refusal')])]
+    if kind=='metadata':response.model=PRIVATE
+    h.sdk.responses.create=lambda **v:response
+    with pytest.raises(h.a['LlmCallError']) as error:h.client.complete('synthetic')
+    record,=h.budget.snapshot();counted=len(h.counter.calls)
+    assert (record.usage is None)==(kind in {'missing','invalid'})
+    assert record.held_nano==2000 and not record.text_accepted and PRIVATE not in str(error.value)
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert len(h.budget.snapshot())==1 and len(h.counter.calls)==counted
+
+
+@pytest.mark.parametrize('failure',[RuntimeError(PRIVATE),asyncio.CancelledError(PRIVATE),KeyboardInterrupt(PRIVATE)])
+def test_SDK_failure_keeps_consumed_hold_and_propagates_safe_cancellation(failure):
+    h=strict_adapter()
+    def fail(**v):raise failure
+    h.sdk.responses.create=fail
+    expected=asyncio.CancelledError if isinstance(failure,asyncio.CancelledError) else KeyboardInterrupt if isinstance(failure,KeyboardInterrupt) else h.a['LlmCallError']
+    with pytest.raises(expected) as error:h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert record.entered and not record.response_received and record.usage is None and record.held_nano==2000
+    assert record.reason=='SDK_UNKNOWN' and PRIVATE not in str(error.value) and error.value.__suppress_context__
+
+
+def test_counted_semantics_survive_smaller_transport_timeout_but_not_meaning_drift():
+    h=strict_adapter();h.counter.after=lambda:setattr(h.clock,'value',40)
+    assert h.client.complete('synthetic')=='synthetic result'
+    assert h.dispatched[0]['timeout']==20 and 'timeout' not in h.counter.calls[0]
+    assert h.counter.calls[0]['projection_sha256']==h.a['_strict_sha'](h.a['_strict_json']({'model':'synthetic-model','input':'synthetic'}))
+    h=strict_adapter();h.counter.after=lambda:setattr(h.client,'model','drift')
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.dispatched
+
+
+@pytest.mark.parametrize('drift',['SDK','responses','create','captured_retry'])
+def test_count_wait_cannot_replace_actual_dispatch_identity(drift):
+    h=strict_adapter();old=h.sdk
+    def change():
+        if drift=='SDK':h.client._client=SimpleNamespace(max_retries=0,responses=SimpleNamespace(create=h.response))
+        elif drift=='responses':old.responses=SimpleNamespace(create=h.response)
+        elif drift=='create':old.responses.create=lambda **request:h.response(**request)
+        else:
+            old.max_retries=1
+            h.client._client=SimpleNamespace(max_retries=0,responses=SimpleNamespace(create=h.response))
+    h.counter.after=change
+    with pytest.raises(h.a['LlmCallError'],match='SDK_POLICY_INVALID'):h.client.complete('synthetic')
+    assert not h.dispatched and not h.budget.snapshot()
+
+
+def test_bound_SDK_method_identity_is_checked_without_false_rejection():
+    h=strict_adapter()
+    class Responses:
+        def create(self,**request):return h.response(**request)
+    h.sdk.responses=Responses()
+    assert h.client.complete('synthetic')=='synthetic result'
+
+
+@pytest.mark.parametrize('phase',['counter','SDK'])
+def test_exact_internal_exception_cannot_inject_arbitrary_reason(phase):
+    h=strict_adapter()
+    def fail(**request):
+        error=h.a['_StrictLlmFailure']('COUNT_INVALID');error.args=(PRIVATE,)
+        raise error
+    if phase=='counter':h.counter.count=fail
+    else:h.sdk.responses.create=fail
+    with pytest.raises(h.a['LlmCallError']) as error:h.client.complete('synthetic')
+    assert PRIVATE not in str(error.value) and PRIVATE not in str(h.budget.closed_reason)
+    assert all(record.reason in h.a['_STRICT_REASONS'] for record in h.budget.snapshot())
+
+
+def test_expiry_after_consumption_keeps_ordinal_without_SDK_entry_or_refund():
+    h=strict_adapter();enter=h.budget._enter
+    def expire(*args):h.clock.value=61;return enter(*args)
+    h.budget._enter=expire
+    with pytest.raises(h.a['LlmCallError'],match='DEADLINE_EXCEEDED'):h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert not h.dispatched and not record.entered and record.held_nano==2000
+
+
+@pytest.mark.parametrize('clock_kind',['monotonic','UTC','adapter'])
+def test_late_completed_response_keeps_usage_but_never_accepts_text(clock_kind):
+    h=strict_adapter();remaining=[1.0]
+    if clock_kind=='adapter':h.client._deadline=SimpleNamespace(remaining_seconds=lambda:remaining[0])
+    def late(**request):
+        result=h.response(**request)
+        if clock_kind=='monotonic':h.budget._clock=lambda:61
+        elif clock_kind=='UTC':h.budget._utcnow=lambda:h.started+timedelta(seconds=61)
+        else:remaining[0]=0
+        return result
+    h.sdk.responses.create=late
+    with pytest.raises(h.a['LlmCallError'],match='DEADLINE_EXCEEDED'):h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert record.entered and record.response_received and record.usage==(12,3,15)
+    assert not record.text_accepted and record.held_nano==2000 and h.client.last_usage is None
+    assert h.budget.closed_reason=='DEADLINE_EXCEEDED'
+
+
+def test_shared_budget_concurrent_cap_and_request_isolation():
+    h=strict_adapter(calls=2)
+    def call(_):
+        try:return h.client.complete('synthetic')
+        except h.a['LlmCallError']:return None
+    with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(call,range(4)))
+    assert len(h.dispatched)<=2 and len(h.budget.snapshot())<=2
+    assert [r.ordinal for r in h.budget.snapshot()]==list(range(1,len(h.budget.snapshot())+1))
+    other=strict_adapter(calls=1);assert other.client.complete('synthetic')=='synthetic result'
+    assert other.budget.snapshot()[0].request_sha256!=h.budget.snapshot()[0].request_sha256
+
+
+@pytest.mark.parametrize('entered_first',[False,True])
+def test_closed_linearization_separates_consumed_and_entered_calls(entered_first):
+    h=strict_adapter();paused=threading.Event();release=threading.Event();original=h.budget._enter
+    def gated(ordinal,*args):
+        if ordinal==1:
+            if entered_first:
+                timeout=original(ordinal,*args);paused.set();assert release.wait(2);return timeout
+            paused.set();assert release.wait(2)
+        return original(ordinal,*args)
+    h.budget._enter=gated
+    def dispatch(**request):
+        h.dispatched.append(request)
+        if threading.current_thread().name.startswith('cf049-A'):return h.response()
+        return SimpleNamespace(status='completed',output_text='x',usage=None)
+    h.sdk.responses.create=dispatch
+    errors=[]
+    def first():
+        try:h.client.complete('A')
+        except h.a['LlmCallError']:errors.append(True)
+    worker=threading.Thread(target=first,name='cf049-A');worker.start()
+    try:
+        assert paused.wait(2)
+        with pytest.raises(h.a['LlmCallError']):h.client.complete('B')
+    finally:release.set();worker.join(2)
+    assert not worker.is_alive()
+    a,b=h.budget.snapshot()
+    assert a.entered is entered_first and b.entered and b.reason=='USAGE_UNKNOWN'
+    assert a.held_nano==b.held_nano==2000 and len(h.budget.snapshot())==2
+    assert a.text_accepted is entered_first and bool(errors) is not entered_first
+
+
+def test_reverse_response_order_keeps_usage_on_original_ordinal():
+    h=strict_adapter();paused=threading.Event();release=threading.Event()
+    def dispatch(**request):
+        if request['input']=='A':paused.set();assert release.wait(2)
+        n=3 if request['input']=='A' else 4
+        return SimpleNamespace(status='completed',output_text='ok',usage=SimpleNamespace(input_tokens=12,output_tokens=n,total_tokens=12+n))
+    h.sdk.responses.create=dispatch;errors=[]
+    def first():
+        try:h.client.complete('A')
+        except BaseException:errors.append(True)
+    worker=threading.Thread(target=first);worker.start()
+    try:assert paused.wait(2);assert h.client.complete('B')=='ok'
+    finally:release.set();worker.join(2)
+    assert not worker.is_alive() and not errors
+    a,b=h.budget.snapshot();assert a.usage==(12,3,15) and b.usage==(12,4,16)

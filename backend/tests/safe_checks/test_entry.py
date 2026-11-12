@@ -1192,6 +1192,17 @@ class CF036Boundary(unittest.TestCase):
             self.assertNotIn(name,sys.modules)
 
 class CF040Boundary(unittest.TestCase):
+    def test_opt_in_budget_uses_actual_selected_AST_and_stays_closed_without_counter(self):
+        import sys
+        from tests.unit import test_cf040_technical_runtime_setup as unit
+        h=unit.strict_adapter(counter=False)
+        with self.assertRaises(h.a['LlmCallError']):h.client.complete('synthetic')
+        self.assertFalse(h.dispatched)
+        self.assertEqual(h.budget.snapshot(),())
+        self.assertEqual(h.budget.closed_reason,'COUNT_UNAVAILABLE')
+        for name in ('openai','redis','langgraph','src.api.dependencies'):
+            self.assertNotIn(name,sys.modules)
+
     def test_exact_five_inputs_six_origins_and_single_collection(self):
         import hashlib
         from unittest.mock import patch

@@ -3297,3 +3297,187 @@ async def test_actual_preparation_strict_gate_rejects_driver_subtype_before_auth
     assert validate.await_count==(0 if raw_driver else 1)
     assert admit.await_count==client.plan_supervisor_core.await_count==session.commit.await_count==session.flush.await_count==0
     assert session.rollback.await_count==(1 if raw_driver else 2)
+
+
+def recovery_claim_fixture(tmp_path):
+    """Only synthetic namespace files; no historical or private execution input."""
+    base=tmp_path.resolve();base.chmod(0o700)
+    root=base/'.cf026-openai-test-budget'/'synthetic-recovery-namespace'
+    root.mkdir(parents=True,mode=0o700);root.parent.chmod(0o700)
+    write(root/'header.json',{});write(root/'execution.lock',{})
+    d=dict(namespace=C.digest(root.name),predecessor_bootstrap='b'*64,invocation='c'*64,
+           request=dict(draft_sha256='d'*64,request_sha256='e'*64,projection_sha256='f'*64),semantic_sha256='1'*64,price_sha256='2'*64,
+           retry=dict(ordinal=4,recovery=dict(claim=None,consumer_source_sha256='3'*64,
+               evidence={k:dict(sha256='4'*64) for k in ['state','readback','terminal']},
+               allocation_reference_sha256='5'*64,claim_parent_before=S.claim_parent_stamp(root),
+               canonical_lock=dict(path=str(root/'execution.lock'),identity=C.regular(root/'execution.lock',0o600)))))
+    scope=S.Scope(C.canonical(d),(S.Artifact('header',root/'header.json','',''),))
+    return scope,root
+
+
+def test_closed_recovery_once_cannot_change_with_source_nonce_folder_or_consent(tmp_path):
+    scope,_=recovery_claim_fixture(tmp_path);expected=S.recovery_once(scope);d=scope.data
+    d.update(invocation='9'*64,source={'anything':'different'},consent_at='2099-01-01T00:00:00Z')
+    d['retry']['recovery'].update(consumer_source_sha256='8'*64,consent_message_id='different',private_folder='different')
+    assert S.recovery_once(S.Scope(C.canonical(d),scope.artifacts))==expected
+
+
+def test_closed_recovery_claim_is_fixed_exclusive_fsynced_and_bound(tmp_path):
+    scope,root=recovery_claim_fixture(tmp_path);fd=os.open(root/'execution.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        with patch.object(S,'_RECOVERY_CLAIMED',set()),patch.object(C,'fsync_directory',wraps=C.fsync_directory) as sync:
+            pin=S.create_recovery_claim(scope,fd);assert sync.call_count==1
+            assert pin['path']==str(root/'poststart-provider0-recovery1.json')
+            assert C.regular(Path(pin['path']),0o600)['nlink']==1
+            d=scope.data;d['retry']['recovery']['claim']=pin;bound=S.Scope(C.canonical(d),scope.artifacts)
+            S.check_recovery_claim(bound,required=True)
+            context=S.recovery_context(bound)
+            assert context['new_reserve_nano']==0 and context['nominal_allocation_nano']==50000000
+            assert context['carried_reserved_nano']==context['total_reserved_nano']==400000000
+            with pytest.raises(S.Closed):S.create_recovery_claim(scope,fd)
+    finally:os.close(fd)
+
+
+def test_closed_recovery_claim_deleted_after_crash_cannot_be_recreated_with_same_inputs(tmp_path):
+    scope,root=recovery_claim_fixture(tmp_path);fd=os.open(root/'execution.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        with patch.object(S,'_RECOVERY_CLAIMED',set()):pin=S.create_recovery_claim(scope,fd)
+        Path(pin['path']).unlink()
+        # New process memory and absent claim are insufficient: immutable parent
+        # before-stamp includes ctime_ns and mtime_ns; deletion never resets it.
+        with patch.object(S,'_RECOVERY_CLAIMED',set()),pytest.raises(S.Closed):S.create_recovery_claim(scope,fd)
+    finally:os.close(fd)
+
+
+@pytest.mark.parametrize('fault',['fsync','changed_lock','symlink','parent_drift'])
+def test_closed_recovery_claim_uncertainty_never_becomes_available(tmp_path,fault):
+    scope,root=recovery_claim_fixture(tmp_path);fd=os.open(root/'execution.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        with patch.object(S,'_RECOVERY_CLAIMED',set()):
+            if fault=='changed_lock':
+                (root/'execution.lock').unlink();write(root/'execution.lock',{})
+            elif fault=='symlink':(root/'poststart-provider0-recovery1.json').symlink_to(root/'header.json')
+            elif fault=='parent_drift':write(root/'unrelated.json',{})
+            if fault=='fsync':
+                with patch.object(C,'fsync_directory',side_effect=OSError('SYNTHETIC_FSYNC')):
+                    with pytest.raises(OSError):S.create_recovery_claim(scope,fd)
+                with pytest.raises(S.Closed):S.create_recovery_claim(scope,fd)
+                assert (root/'poststart-provider0-recovery1.json').is_file()
+            else:
+                with pytest.raises((S.Closed,C.ControllerError)):S.create_recovery_claim(scope,fd)
+    finally:os.close(fd)
+
+
+def test_closed_recovery_two_competitors_have_one_exclusive_winner(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    scope,root=recovery_claim_fixture(tmp_path);fd=os.open(root/'execution.lock',os.O_RDWR|os.O_NOFOLLOW)
+    def claim():
+        try:S.create_recovery_claim(scope,fd);return True
+        except (S.Closed,OSError):return False
+    try:
+        with patch.object(S,'_RECOVERY_CLAIMED',set()),ThreadPoolExecutor(max_workers=2) as pool:
+            assert sum(pool.map(lambda _:claim(),range(2)))==1
+    finally:os.close(fd)
+
+
+@pytest.mark.parametrize('fault',['schema','ordinal','consent','history','historical_hash'])
+def test_closed_recovery_scope_drift_rejected_before_any_history_read(tmp_path,fault):
+    scope,_=recovery_claim_fixture(tmp_path);d=scope.data
+    r=d['retry']['recovery'];r.update(schema='cf037.ordinal4.closed-provider0-recovery-input.v1',ordinal=1,
+        evidence={},historical_code={},consumer_source={},consent_message_id='Sentinel_ecdb1aed91dc819193954bd64d788aa0',consent_at='2026-11-12T01:33:50.213277+00:00')
+    if fault=='schema':r['schema']='other'
+    elif fault=='ordinal':r['ordinal']=2
+    elif fault=='consent':r['consent_message_id']='Sentinel_'+'f'*32
+    elif fault=='historical_hash':r['evidence']={n:dict(path=str(tmp_path/'.cf037-ordinal4-preaccept-replacement-20261112'/rel),stamp_json='{}',sha256='f'*64) for n,(rel,_) in S.RECOVERY_HISTORY.items()}
+    with patch.object(S.Artifact,'verify',side_effect=AssertionError('HISTORY_READ')) as read:
+        with pytest.raises(S.Closed):S.check_closed_provider0_recovery(d,tmp_path)
+    assert read.call_count==0
+
+
+def test_closed_recovery_session_phase_ACKs_keep_external_delta_zero(tmp_path):
+    scope,root=recovery_claim_fixture(tmp_path);d=scope.data
+    d.update(consent_at='2026-11-12T00:47:33Z',mode='synthetic',predecessor_sha256='8'*64)
+    d['retry'].update(record_body_sha256='9'*64);d['retry']['recovery']['consent_at']='2026-11-12T01:33:50.213277+00:00'
+    d['retry']['recovery']['claim']={'sha256':'a'*64}
+    scope=S.Scope(C.canonical(d),scope.artifacts);clock=SuccessorClock();witness=SuccessorWitness(clock)
+    journal=NS(reload=lambda:None,state={'status':'claimed'})
+    session=S.Session(scope,None,witness.capability(),journal,True,clock)
+    async def phases():
+        with patch.object(S.Scope,'check',return_value=d):
+            for phase in ['reserve','issue','start','count','generation']:
+                await session.call(phase,consuming=True)
+                assert witness.ack['additional_reserve_nano']==witness.ack['new_reserve_nano']==0
+                assert witness.ack['nominal_allocation_nano']==50000000
+                assert witness.ack['total_reserved_nano']==witness.ack['carried_reserved_nano']==400000000
+                assert witness.ack['recovery_once']==S.recovery_once(scope)
+    asyncio.run(phases())
+
+
+def test_closed_recovery_actual_run_DI_claim_journal_phases_accounting_cleanup(tmp_path):
+    scope,source,witness,journal,clock=retry4_inputs(tmp_path)
+    d=scope.data;header=next(a.path for a in scope.artifacts if a.name=='header');root=header.parent
+    r=dict(claim=None,consumer_source_sha256='3'*64,evidence={k:dict(sha256='4'*64) for k in ['state','readback','terminal']},
+           allocation_reference_sha256='5'*64,claim_parent_before=S.claim_parent_stamp(root),
+           canonical_lock=dict(path=str(root/'execution.lock'),identity=C.regular(root/'execution.lock',0o600)),
+           consent_at=(clock.wall()-timedelta(seconds=1)).isoformat())
+    d['retry']['recovery']=r;scope=S.Scope(C.canonical(d),scope.artifacts)
+    fd=os.open(root/'execution.lock',os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        with patch.object(S,'_RECOVERY_CLAIMED',set()):r['claim']=S.create_recovery_claim(scope,fd)
+        d['retry']['recovery']=r;scope=S.Scope(C.canonical(d),scope.artifacts)
+        state_path=journal.path/'state.json';state=C.decode(state_path.read_bytes());state['scope_sha256']=scope.sha256;write(state_path,state)
+        journal=S.Journal(journal.path,dict(identity=C.regular(state_path,0o600),sha256=C.hashlib.sha256(state_path.read_bytes()).hexdigest()),journal.lock_pin,scope.sha256)
+        hooks=SuccessorHooks();item=d['request'];hooks.snapshot_value=dict(count=1,generation=1,reserved=50000000,blocked=False,active=None,
+            attempts={str(uuid4()):dict(request_sha256=item['request_sha256'],projection_sha256=item['projection_sha256'],observation=dict(state='observed',estimated_nano=120000))})
+        # Historical closed artifacts are synthetic DI only here. The separately
+        # audited input preparation exercises the exact real pinned-history gate;
+        # this test executes actual Scope ordinary lineage, claim, _run and phases.
+        def synthetic_closed_gate(value,base):S.check_recovery_claim(S.Scope(C.canonical(value),scope.artifacts))
+        with patch.object(S,'check_closed_provider0_recovery',synthetic_closed_gate),patch.object(V,'verify_live',successor_verifier_spy):
+            result=asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,synthetic=True,hooks=hooks,clock=clock))
+            with pytest.raises(S.Closed):asyncio.run(S.run(scope,source=source,authority=witness.capability(),journal=journal,synthetic=True,hooks=hooks,clock=clock))
+        assert result['status']=='finished' and result['total_reserved_nano']==400000000
+        assert hooks.created==hooks.cleaned==1 and hooks.preserved==0
+        assert journal.state['status']=='closed' and journal.state['rights']==dict(count=1,generation=1)
+        assert witness.calls.count('count')==witness.calls.count('generation')==1
+        assert witness.ack['additional_reserve_nano']==witness.ack['new_reserve_nano']==0
+        assert witness.ack['total_reserved_nano']==400000000
+        for event in journal.state['journal']:
+            assert event['recovery_once']==S.recovery_once(scope)
+            assert event['new_reserve_nano']==0 and event['nominal_allocation_nano']==50000000
+            assert event['total_reserved_nano']==event['carried_reserved_nano']==400000000
+    finally:os.close(fd)
+
+
+def closed_provider0_state_fixture():
+    diagnostic=dict(supplier_stages=[],segment='before_supplier',generation_authority_verified=False,verifier_returned=False)
+    account=dict(phase='final_accounting',ledger=dict(attempts=[],blocked=False,count=0,generation=0,reserved=0),diagnostic=diagnostic,quality=None,gateway_diagnostic=None)
+    return dict(state=dict(status='closed',rights=dict(count=0,generation=0),preparation=None,
+           journal=[account,dict(phase='closing',external_accounting_ACK=True),dict(phase='cleanup_confirmed')]),
+           phases=dict(sequence=4,phases=['reserve','issue','start','accounting']),
+           postflight=dict(closing_ACK=True,cleanup_journal=True,canonical_lock_released=True,exact_owned_container_absent=True,source_copies_absent=True,preserved_reserved_nano=400000000),
+           terminal=dict(exit_code=1,output='SUCCESSOR_FAILED\r\nCF037_ENTRY_RESTORED_FALSE\r\n'))
+
+
+def test_closed_provider0_state_positive_fixed_shape():
+    S.validate_closed_provider0_state(closed_provider0_state_fixture())
+
+
+@pytest.mark.parametrize('fault',['count','generation','reserved','attempt','supplier','authority','verifier','segment',
+                                  'cleanup','closing','postflight','rights','phases','other_failure','quality','gateway'])
+def test_closed_provider0_state_unknown_usage_or_ACK_cleanup_never_recovers(fault):
+    value=closed_provider0_state_fixture();state=value['state'];account=state['journal'][0]
+    if fault in {'count','generation','reserved'}:account['ledger'][fault]=1
+    elif fault=='attempt':account['ledger']['attempts']=[dict(state='unknown')]
+    elif fault=='supplier':account['diagnostic']['supplier_stages']=['source_read_returned']
+    elif fault=='authority':account['diagnostic']['generation_authority_verified']=True
+    elif fault=='verifier':account['diagnostic']['verifier_returned']=True
+    elif fault=='segment':account['diagnostic']['segment']='unknown'
+    elif fault=='cleanup':state['journal'][-1]['phase']='cleanup_unknown'
+    elif fault=='closing':state['journal'][1]['external_accounting_ACK']=False
+    elif fault=='postflight':value['postflight']['exact_owned_container_absent']=False
+    elif fault=='rights':state['rights']['count']=1
+    elif fault=='phases':value['phases']['phases'].insert(3,'count')
+    elif fault=='other_failure':value['terminal']['output']='DIFFERENT_FAILURE\r\nCF037_ENTRY_RESTORED_FALSE\r\n'
+    else:account['gateway_diagnostic' if fault=='gateway' else fault]=dict(state='unknown')
+    with pytest.raises(S.Closed):S.validate_closed_provider0_state(value)

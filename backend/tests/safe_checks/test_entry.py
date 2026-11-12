@@ -754,6 +754,23 @@ class CF022Boundary(unittest.TestCase):
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 class CF023Boundary(unittest.TestCase):
+    def test_ai_lifespan_uses_explicit_default_off_runtime_without_import_time_configuration(self):
+        import ast
+        root=Path(__file__).resolve().parents[3]
+        tree=ast.parse((root/'ai/src/main.py').read_text())
+        lifecycle=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='lifespan')
+        text=ast.unparse(lifecycle)
+        self.assertIn('startup_options(os.environ)',text)
+        self.assertIn('install_supervisor_meaning_runtime(options)',text)
+        self.assertIn('finally:',text)
+        app=next(n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='app' for t in n.targets))
+        self.assertEqual(next(v.value.id for v in app.keywords if v.arg=='lifespan'),'lifespan')
+        factory=(root/'ai/src/supervisor/application/meaning_gateway_factory.py').read_text()
+        imports=[n.module for n in ast.walk(ast.parse(factory)) if isinstance(n,ast.ImportFrom)]
+        imports += [alias.name for n in ast.walk(ast.parse(factory)) if isinstance(n,ast.Import) for alias in n.names]
+        self.assertFalse(any(name and name.startswith('dotenv') for name in imports))
+        self.assertNotIn('getenv',factory)
+
     def test_preparation_public_deadline_source_and_existing_pin(self):
         import hashlib
         from scripts import check_safe as c

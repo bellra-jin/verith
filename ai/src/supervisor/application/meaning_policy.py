@@ -357,6 +357,44 @@ class Grounding:
         return Assessment(frame, tuple(remainder), needs, hard)
 
 
+def narrow_period_flow_evidence(draft, item, sources):
+    """Only a unique positive PERIOD + whitespace + Flow term; consume no text.
+
+    The ordinary full-source scan still records the period/other conditions.
+    Invalid composites remain unchanged and fail the existing view validator.
+    """
+    evidence = item['evidence']
+    if item['view'] != 'flow' or item['negation'] is not None:
+        return evidence
+    words = '|'.join(re.escape(word) for word in sorted(VIEW_WORDS['flow'], key=len, reverse=True))
+    match = re.fullmatch(r'(?P<period>.+?)[ \t]+(?P<view>' + words + r')', evidence['text'], re.I)
+    if match is None:
+        return evidence
+    period, word = match['period'], match['view']
+    if period != period.strip() or PERIOD.fullmatch(period) is None:
+        return evidence
+    source = sources[(evidence['source_kind'], evidence['answer_id'])]
+    start, end = evidence['start'], evidence['end']
+    if (start and NAME_CHARACTER.fullmatch(source[start - 1])) or (end < len(source) and NAME_CHARACTER.fullmatch(source[end])):
+        return evidence
+    period_end = start + len(period)
+    periods = list(PERIOD.finditer(source))
+    if len(periods) != 1 or periods[0].end() != period_end or periods[0].group().strip() != period:
+        return evidence
+    word_start = start + match.start('view')
+    occurrences = list(re.finditer(re.escape(word), source, re.I))
+    if len(occurrences) != 1 or occurrences[0].span() != (word_start, end):
+        return evidence
+    grounding = Grounding(draft)
+    period_evidence = Evidence.model_validate(evidence | {'end': period_end, 'text': period})
+    if grounding.parsed_condition(period_evidence) != ('flow', 'period', period):
+        return evidence
+    narrowed = evidence | {'start': word_start, 'text': word}
+    if grounding.positive_and_negation(Evidence.model_validate(narrowed))[1] is not None:
+        return evidence
+    return narrowed
+
+
 def align_model_proposal(draft, proposal):
     """Anchor model text only to its unique exact occurrence in the named source.
 
@@ -382,6 +420,8 @@ def align_model_proposal(draft, proposal):
                 if start < 0 or text.find(evidence['text'], start + 1) >= 0:
                     raise CoreInvalid()
                 evidence['start'], evidence['end'] = start, start + len(evidence['text'])
+    for item in data['views']:
+        item['evidence'] = narrow_period_flow_evidence(draft, item, sources)
     return MeaningProposal.model_validate(data)
 
 

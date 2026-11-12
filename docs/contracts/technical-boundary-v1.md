@@ -167,3 +167,9 @@ CF039/CF040 위의 후속 고정 검사는 검토된 별도 64-wheel site와 정
 기존 `OpenAiLlmClient.last_usage`는 명시된 input/output/total 세 값이 모두 비음수 exact integer이며 input+output==total일 때만 보존한다. 누락·None·bool·문자열·소수·음수·합계 불일치는 None이며 0으로 채우거나 정수로 강제 변환하지 않는다. 분석 텍스트는 유지하고 추가 호출하지 않는다.
 
 이는 마지막 호출의 선택적 증거이며 누적 사용량·가격 검증·비용 승인·예약/정산·청구 확정을 대신하지 않는다. None을 미사용/무료로 간주하지 않는다. [수정과 보호 회귀](../work/technical-usage-evidence.md)는 실제 어댑터의 선택 AST body와 fake SDK 객체를 사용하는 무키 검사이며 운영 SDK/실제 provider 검증은 아니다.
+
+## 이미 저장된 Technical 결과의 정확한 stage 재요청
+
+내부 `TechnicalOwnedReportService.stage`는 fresh Principal 검증과 root 잠금 뒤 이미 존재하는 ID를 검사한다. 동일 owner의 root·snapshot·정확 한 index·저장 당시 session 및 모든 child projection을 기존 read로 다시 검증하고, 저장된 FrozenAnalysisResult 전체가 caller의 검증 결과와 정확히 같을 때만 기존 StagedReportReference를 반환한다. 원 TEXT/세션/행을 변경하거나 flush·commit·AI 호출을 하지 않는다. 다른 유효 입력/결과, 타인·legacy·손상·누락·중복 index는 충돌로 닫는다.
+
+이는 이미 저장된 결과의 재요청만 지원한다. 아직 없는 동일 ID의 동시 최초 저장은 기존 PK 충돌이 가능하며, caller commit 책임과 ACK 불명 뒤 GET-only 복구는 그대로다. 새 실행 identity/admission·멱등 실행·Technical 사용량 정책·운영 활성화 또는 commit 성공 보증이 아니다. [제품 변경과 검증](../work/technical-owned-stage-replay.md)을 따른다.

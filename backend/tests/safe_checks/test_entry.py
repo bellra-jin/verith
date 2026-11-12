@@ -1208,6 +1208,20 @@ class CF036Boundary(unittest.TestCase):
             self.assertNotIn(name,sys.modules)
 
 class CF040Boundary(unittest.TestCase):
+    def test_CF051_owned_transport_executes_selected_product_and_blocks_direct_send(self):
+        from tests.unit import test_cf040_technical_runtime_setup as unit
+        h=unit.official_adapter(calls=1)
+        try:
+            self.assertEqual(h.client.complete('synthetic'),'official result')
+            record,=h.budget.snapshot()
+            self.assertTrue(record.count_entered and record.count_response_received and record.count_validated and record.entered)
+            self.assertEqual(len(h.sent),2)
+            with self.assertRaises(h.a['_StrictLlmFailure']):
+                h.sdk.responses.create(model='synthetic-model',input='synthetic',timeout=1)
+            self.assertEqual(len(h.sent),2)
+        finally:h.client.close()
+        self.assertEqual(h.closed.count('transport'),1)
+
     def test_opt_in_budget_uses_actual_selected_AST_and_stays_closed_without_counter(self):
         import sys
         from tests.unit import test_cf040_technical_runtime_setup as unit

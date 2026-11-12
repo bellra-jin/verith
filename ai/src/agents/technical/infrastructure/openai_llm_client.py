@@ -26,6 +26,7 @@ runtime wiring은 이 브랜치 범위 밖 — `run_technical_agent`는 자동�
 from __future__ import annotations
 
 import logging
+import os
 import time
 import asyncio
 from dataclasses import dataclass, fields, replace
@@ -39,6 +40,7 @@ from typing import Any
 from uuid import UUID
 
 import openai
+import httpx
 
 from ..config import OPENAI_MAX_OUTPUT_TOKENS, OPENAI_MAX_RETRIES, OPENAI_STORE, OPENAI_TEMPERATURE, OPENAI_TIMEOUT_SECONDS, load_openai_settings
 from .llm.utils import LlmCallError
@@ -51,7 +53,8 @@ _COUNT_MAPPING = 'technical.responses.model-input.v1'
 _STRICT_REASONS = frozenset({'POLICY_INVALID','DEADLINE_EXCEEDED','SDK_POLICY_INVALID',
     'COUNT_UNAVAILABLE','COUNT_INVALID','CLOSED','BUDGET_EXCEEDED','PROMPT_INVALID',
     'SDK_UNKNOWN','COUNT_FAILED','USAGE_UNKNOWN','USAGE_LIMIT_MISMATCH',
-    'RESPONSE_METADATA_MISMATCH','RESPONSE_NOT_COMPLETED','TEXT_INVALID','CLOCK_INVALID'})
+    'RESPONSE_METADATA_MISMATCH','RESPONSE_NOT_COMPLETED','TEXT_INVALID','CLOCK_INVALID',
+    'HTTP_INVALID','RESPONSE_LIMIT'})
 _STRICT_POLICY_FIELDS = frozenset({'operation','enabled','currency','supported_tickers',
     'user_daily_limit','service_daily_limit','daily_budget_nano','attempt_reserve_nano',
     'deadline_seconds','model','service_tier','price_id','price_evidence_sha256',
@@ -158,8 +161,8 @@ class TechnicalLlmPolicy:
 class TechnicalTokenCount:
     """An opaque receipt must also be authenticated by the trusted count DI.
 
-    Constructing these integers/hashes is insufficient. No production Technical
-    count implementation is supplied here; missing DI remains unavailable.
+    Constructing these integers/hashes is insufficient. Only explicit reviewed
+    DI or the owned official-count factory supplies one; default DI is absent.
     """
     input_tokens: int
     model: str
@@ -170,6 +173,7 @@ class TechnicalTokenCount:
     projection_sha256: str
     request_sha256: str
     receipt: Any
+    ordinal: int=0
 
 
 @dataclass(frozen=True,slots=True,repr=False)
@@ -195,6 +199,10 @@ class TechnicalLlmEvidence:
     text_accepted: bool=False
     reason: str | None=None
     elapsed_ms: int=0
+    count_entered: bool=False
+    count_response_received: bool=False
+    count_validated: bool=False
+    counted_input_tokens: int | None=None
 
 
 class TechnicalRequestLlmBudget:
@@ -237,6 +245,7 @@ class TechnicalRequestLlmBudget:
         self._counter=counter
         self._counter_binding=None if counter is None else tuple(getattr(counter,k,None) for k in ('mapping','version','provenance_sha256'))
         self._lock=threading.Lock();self._records=();self._closed=None
+        self._official_bundle=None
 
     def snapshot(self):
         with self._lock:
@@ -263,6 +272,7 @@ class TechnicalRequestLlmBudget:
 
     def _request_check(self,adapter,request,dispatch=None):
         self._policy_check();p=self._policy
+        if self._official_bundle is not None:self._official_bundle.check()
         if dispatch is not None:
             sdk,responses,create=dispatch
             if (adapter._client is not sdk or sdk.responses is not responses
@@ -284,16 +294,19 @@ class TechnicalRequestLlmBudget:
     def _request_sha(self,request):
         return _strict_sha(_strict_json({'request_identity':self._identity,'generation':request}))
 
-    def _count(self,request,prompt_sha,projection_sha,request_sha):
-        with self._lock:
-            if self._closed is not None:raise _StrictLlmFailure('CLOSED')
-            self._remaining()
-            if len(self._records)>=self._policy.max_calls:raise _StrictLlmFailure('BUDGET_EXCEEDED')
+    def _count(self,ordinal,adapter,request,prompt_sha,projection_sha,request_sha,dispatch):
         counter=self._counter
-        if counter is None:raise _StrictLlmFailure('COUNT_UNAVAILABLE')
-        # No lock during the injected counting/receipt verification operation.
+        if self._official_bundle is None:
+            self._enter_count(ordinal,adapter,request,request_sha,dispatch)
+        # Official counter enters only inside the owned transport immediately
+        # before forwarding; creating an SDK streaming context sends nothing.
         evidence=counter.count(model=request['model'],input=request['input'],mapping=_COUNT_MAPPING,
-            prompt_sha256=prompt_sha,projection_sha256=projection_sha,request_sha256=request_sha)
+            prompt_sha256=prompt_sha,projection_sha256=projection_sha,request_sha256=request_sha,
+            ordinal=ordinal)
+        with self._lock:
+            record=self._records[ordinal-1]
+            self._records=self._records[:ordinal-1]+(replace(record,count_response_received=True),)+self._records[ordinal:]
+            self._remaining()
         if type(evidence) is not TechnicalTokenCount:raise _StrictLlmFailure('COUNT_INVALID')
         _strict_int(evidence.input_tokens,zero=True)
         _strict_hash(evidence.provenance_sha256)
@@ -306,16 +319,27 @@ class TechnicalRequestLlmBudget:
                 or self._counter_binding!=tuple(getattr(counter,k,None) for k in ('mapping','version','provenance_sha256'))
                 or evidence.prompt_sha256!=prompt_sha or evidence.projection_sha256!=projection_sha
                 or evidence.request_sha256!=request_sha or evidence.receipt is None
+                or type(evidence.ordinal) is not int or evidence.ordinal!=ordinal
                 or type(evidence.receipt) in (bool,int,float)
                 or counter.verify(evidence,model=request['model'],input=request['input'],mapping=_COUNT_MAPPING,
-                    prompt_sha256=prompt_sha,projection_sha256=projection_sha,request_sha256=request_sha) is not True):
+                    prompt_sha256=prompt_sha,projection_sha256=projection_sha,request_sha256=request_sha,
+                    ordinal=ordinal) is not True):
             raise _StrictLlmFailure('COUNT_INVALID')
+        with self._lock:
+            record=self._records[ordinal-1]
+            if not record.count_entered or record.count_validated:raise _StrictLlmFailure('COUNT_INVALID')
+            self._records=self._records[:ordinal-1]+(replace(record,count_validated=True,
+                counted_input_tokens=evidence.input_tokens),)+self._records[ordinal:]
         return evidence.input_tokens
 
     def _reserve(self,adapter,request,prompt_sha,projection_sha,request_sha,dispatch):
         with self._lock:
             if self._closed is not None:raise _StrictLlmFailure('CLOSED')
             self._request_check(adapter,request,dispatch)
+            if self._counter is None:raise _StrictLlmFailure('COUNT_UNAVAILABLE')
+            if not callable(getattr(self._counter,'count',None)) or not callable(getattr(self._counter,'verify',None)):
+                raise _StrictLlmFailure('COUNT_UNAVAILABLE')
+            self._timeout_for(adapter)
             if self._request_sha(request)!=request_sha:raise _StrictLlmFailure('COUNT_INVALID')
             hold=self._policy.input_token_cap*self._policy.input_nano_per_token+self._policy.output_token_cap*self._policy.output_nano_per_token
             if (len(self._records)>=self._policy.max_calls
@@ -327,20 +351,35 @@ class TechnicalRequestLlmBudget:
                 self._policy.input_token_cap,self._policy.output_token_cap,hold),)
             return ordinal
 
-    def _enter(self,ordinal,adapter,request,request_sha,dispatch):
+    def _timeout_for(self,adapter):
+        remaining=min(float(adapter._timeout),self._remaining())
+        if adapter._deadline is not None:
+            narrower=adapter._deadline.remaining_seconds()
+            if type(narrower) not in (int,float) or not math.isfinite(narrower) or narrower<=0:
+                raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+            remaining=min(remaining,narrower)
+        if not math.isfinite(remaining) or remaining<=0:raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+        return remaining
+
+    def _enter_count(self,ordinal,adapter,request,request_sha,dispatch):
         with self._lock:
             record=self._records[ordinal-1]
-            if self._closed is not None or record.entered or record.request_sha256!=request_sha:
+            if self._closed is not None or record.count_entered or record.request_sha256!=request_sha:
                 raise _StrictLlmFailure('CLOSED')
             self._request_check(adapter,request,dispatch)
             if self._request_sha(request)!=request_sha:raise _StrictLlmFailure('COUNT_INVALID')
-            remaining=min(float(adapter._timeout),self._remaining())
-            if adapter._deadline is not None:
-                narrower=adapter._deadline.remaining_seconds()
-                if type(narrower) not in (int,float) or not math.isfinite(narrower) or narrower<=0:
-                    raise _StrictLlmFailure('DEADLINE_EXCEEDED')
-                remaining=min(remaining,narrower)
-            if not math.isfinite(remaining) or remaining<=0:raise _StrictLlmFailure('DEADLINE_EXCEEDED')
+            timeout=self._timeout_for(adapter)
+            self._records=self._records[:ordinal-1]+(replace(record,count_entered=True),)+self._records[ordinal:]
+            return timeout
+
+    def _enter(self,ordinal,adapter,request,request_sha,dispatch):
+        with self._lock:
+            record=self._records[ordinal-1]
+            if self._closed is not None or record.entered or not record.count_validated or record.request_sha256!=request_sha:
+                raise _StrictLlmFailure('CLOSED')
+            self._request_check(adapter,request,dispatch)
+            if self._request_sha(request)!=request_sha:raise _StrictLlmFailure('COUNT_INVALID')
+            remaining=self._timeout_for(adapter)
             self._records=self._records[:ordinal-1]+(replace(record,entered=True),)+self._records[ordinal:]
             return remaining
 
@@ -457,13 +496,25 @@ class OpenAiLlmClient:
             sdk=self._client;responses=sdk.responses;create=responses.create
             dispatch=(sdk,responses,create)
             if not callable(create):raise _StrictLlmFailure('SDK_POLICY_INVALID')
-            phase='COUNT'
-            count=budget._count(request,prompt_sha,projection_sha,request_sha)
-            phase='VALIDATION'
             ordinal=budget._reserve(self,request,prompt_sha,projection_sha,request_sha,dispatch)
-            timeout=budget._enter(ordinal,self,request,request_sha,dispatch)
-            phase='SDK'
-            response=create(**request,timeout=timeout)
+            bundle=budget._official_bundle
+            phase='COUNT'
+            if bundle is None:
+                count=budget._count(ordinal,self,request,prompt_sha,projection_sha,request_sha,dispatch)
+            else:
+                with bundle.phase(ordinal,'count',self,request,dispatch):
+                    count=budget._count(ordinal,self,request,prompt_sha,projection_sha,request_sha,dispatch)
+            phase='VALIDATION'
+            if bundle is None:
+                timeout=budget._enter(ordinal,self,request,request_sha,dispatch)
+                phase='SDK'
+                response=create(**request,timeout=timeout)
+            else:
+                with bundle.phase(ordinal,'generation',self,request,dispatch):
+                    timeout=budget._timeout_for(self)
+                    bundle._local.scope.timeout=timeout
+                    phase='SDK'
+                    response=create(**request,stream=False,timeout=timeout)
             received=True
             observed=_extract_usage(response)
             if observed is not None and all(value<=_STRICT_MAX for value in observed.values()):
@@ -509,6 +560,331 @@ class OpenAiLlmClient:
             if isinstance(error,KeyboardInterrupt):raise KeyboardInterrupt() from None
             if isinstance(error,SystemExit):raise SystemExit(1) from None
             raise LlmCallError('TECHNICAL_LLM_'+reason) from None
+
+    def close(self):
+        """Close only this request's owned bundle, after its physical work ends."""
+        if self._strict and self._request_budget._official_bundle is not None:
+            self._request_budget._official_bundle.close()
+
+
+def _count_wire_json(raw):
+    def unique(pairs):
+        result={}
+        for key,value in pairs:
+            if key in result:raise _StrictLlmFailure('COUNT_INVALID')
+            result[key]=value
+        return result
+    try:
+        return json.loads(raw.decode('utf-8'),object_pairs_hook=unique,
+            parse_constant=lambda _:(_ for _ in ()).throw(_StrictLlmFailure('COUNT_INVALID')))
+    except (ValueError,UnicodeError,RecursionError,OverflowError):
+        raise _StrictLlmFailure('COUNT_INVALID') from None
+
+
+class _TechnicalResponseStream(httpx.SyncByteStream):
+    """Bound reads underneath both SDK eager parsing and count iteration."""
+    def __init__(self,response,bundle,scope,cap,length):
+        self._response,self._bundle,self._scope=response,bundle,scope
+        self._cap,self._length=cap,length;self._closed=False
+
+    def __iter__(self):
+        size=0
+        try:
+            for part in self._response.stream:
+                self._bundle.remaining(self._scope)
+                if type(part) is not bytes:raise _StrictLlmFailure('HTTP_INVALID')
+                size+=len(part)
+                if size>self._cap or (self._length is not None and size>self._length):
+                    raise _StrictLlmFailure('RESPONSE_LIMIT')
+                yield part
+            self._bundle.remaining(self._scope)
+            if self._length is not None and size!=self._length:raise _StrictLlmFailure('RESPONSE_LIMIT')
+        except BaseException:
+            try:self.close()
+            except BaseException:pass
+            raise
+        else:self.close()
+
+    def close(self):
+        if not self._closed:
+            self._closed=True
+            try:self._response.close()
+            except Exception:raise _StrictLlmFailure('HTTP_INVALID') from None
+
+
+class _TechnicalPhase:
+    def __init__(self,bundle,ordinal,phase,adapter,request,dispatch):
+        self.bundle=bundle;self.ordinal=ordinal;self.phase=phase;self.adapter=adapter
+        self.request=json.loads(_strict_json(request));self.dispatch=dispatch
+        self.request_sha=bundle.budget._request_sha(request);self.forwarded=False;self.timeout=None
+
+    def __enter__(self):
+        b=self.bundle
+        with b._lifetime_lock:
+            if b._closing or getattr(b._local,'scope',None) is not None:raise _StrictLlmFailure('CLOSED')
+            if self.adapter._client is not b.sdk or self.dispatch[0] is not b.sdk:
+                raise _StrictLlmFailure('SDK_POLICY_INVALID')
+            b.check();b.budget._request_check(self.adapter,self.request,self.dispatch)
+            b.remaining(self);b._active+=1;b._local.scope=self
+        return self
+
+    def __exit__(self,*args):
+        b=self.bundle
+        with b._lifetime_lock:
+            b._local.scope=None;b._active-=1
+            if b._closing and b._active==0:
+                try:b._dispose()
+                except BaseException:
+                    # Preserve the original phase error/cancellation.
+                    if not args or args[0] is None:raise _StrictLlmFailure('HTTP_INVALID') from None
+
+
+class _TechnicalOwnedTransport(httpx.BaseTransport):
+    def __init__(self,inner):self._inner=inner;self._original=inner;self.bundle=None;self._closed=False
+
+    def handle_request(self,request):
+        b=self.bundle;scope=None if b is None else getattr(b._local,'scope',None)
+        if scope is None:raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        b.check();b.remaining(scope)
+        if self._inner is not self._original:raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        url=request.url
+        path=b'/v1/responses/input_tokens' if scope.phase=='count' else b'/v1/responses'
+        if (request.method!='POST' or url.scheme!='https' or url.host!='api.openai.com'
+                or url.port not in (None,443) or url.raw_path!=path or url.query
+                or url.username or url.password or url.fragment):raise _StrictLlmFailure('HTTP_INVALID')
+        body=request.content
+        if type(body) is not bytes or not body or len(body)>b.request_cap:raise _StrictLlmFailure('HTTP_INVALID')
+        expected=({'model':scope.request['model'],'input':scope.request['input']} if scope.phase=='count'
+                  else dict(scope.request,stream=False))
+        parsed=_count_wire_json(body)
+        if _strict_json(parsed)!=_strict_json(expected):raise _StrictLlmFailure('HTTP_INVALID')
+        headers={};allowed={'authorization','host','accept','accept-encoding','connection','content-type',
+            'content-length','user-agent','x-stainless-lang','x-stainless-package-version','x-stainless-os',
+            'x-stainless-arch','x-stainless-runtime','x-stainless-runtime-version','x-stainless-async',
+            'x-stainless-retry-count','x-stainless-read-timeout','x-stainless-raw-response'}
+        for name,value in request.headers.multi_items():
+            name=name.lower()
+            if name not in allowed or name in headers or '\r' in value or '\n' in value:
+                raise _StrictLlmFailure('HTTP_INVALID')
+            headers[name]=value
+            if name in b._metadata and value!=b._metadata[name]:raise _StrictLlmFailure('HTTP_INVALID')
+            if ((name.startswith('x-stainless-') and name not in {
+                    'x-stainless-retry-count','x-stainless-read-timeout','x-stainless-raw-response'})
+                    or name in {'user-agent','accept'}) and value!=b._metadata.get(name):
+                raise _StrictLlmFailure('HTTP_INVALID')
+            if name=='connection' and value!='keep-alive':raise _StrictLlmFailure('HTTP_INVALID')
+        if (headers.get('authorization')!='Bearer '+b._credential
+                or headers.get('host') not in ('api.openai.com','api.openai.com:443')
+                or headers.get('content-type')!='application/json'
+                or headers.get('accept-encoding')!='identity'
+                or headers.get('x-stainless-retry-count')!='0'
+                or headers.get('content-length')!=str(len(body))
+                or headers.get('x-stainless-raw-response') not in (None,'stream')
+                or (scope.phase!='count' and 'x-stainless-raw-response' in headers)):
+            raise _StrictLlmFailure('HTTP_INVALID')
+        read_timeout=headers.get('x-stainless-read-timeout')
+        if read_timeout is not None:
+            try:value=float(read_timeout)
+            except ValueError:raise _StrictLlmFailure('HTTP_INVALID') from None
+            if not math.isfinite(value) or value<=0 or scope.timeout is None or value>scope.timeout:
+                raise _StrictLlmFailure('HTTP_INVALID')
+        timeouts=request.extensions.get('timeout')
+        if type(timeouts) is not dict or set(timeouts)!={'connect','read','write','pool'}:
+            raise _StrictLlmFailure('HTTP_INVALID')
+        remaining=b.remaining(scope)
+        for key,value in timeouts.items():
+            if type(value) not in (int,float) or not math.isfinite(value) or value<=0 or scope.timeout is None or value>scope.timeout:
+                raise _StrictLlmFailure('HTTP_INVALID')
+            timeouts[key]=min(value,remaining)
+        # A scope is bound to one physical phase. Consume only after every
+        # outgoing check, immediately before forwarding, never around I/O.
+        enter=b.budget._enter_count if scope.phase=='count' else b.budget._enter
+        with b._lifetime_lock:
+            if b._closing or scope.forwarded:raise _StrictLlmFailure('CLOSED')
+            latest=enter(scope.ordinal,scope.adapter,scope.request,scope.request_sha,scope.dispatch)
+            scope.forwarded=True
+        for key in timeouts:timeouts[key]=min(timeouts[key],latest)
+        response=None
+        try:
+            response=self._inner.handle_request(request)
+            if scope.phase=='count':
+                with b.budget._lock:
+                    record=b.budget._records[scope.ordinal-1]
+                    b.budget._records=b.budget._records[:scope.ordinal-1]+(replace(record,count_response_received=True),)+b.budget._records[scope.ordinal:]
+            b.remaining(scope)
+            if response.status_code!=200:raise _StrictLlmFailure('HTTP_INVALID')
+            encoding=response.headers.get('content-encoding','identity')
+            if encoding!='identity':raise _StrictLlmFailure('HTTP_INVALID')
+            cap=b.count_cap if scope.phase=='count' else b.generation_cap
+            lengths=response.headers.get_list('content-length')
+            if len(lengths)>1:raise _StrictLlmFailure('RESPONSE_LIMIT')
+            length=None
+            if lengths:
+                if re.fullmatch('[0-9]{1,10}',lengths[0]) is None:raise _StrictLlmFailure('RESPONSE_LIMIT')
+                length=int(lengths[0])
+                if length>cap:raise _StrictLlmFailure('RESPONSE_LIMIT')
+            return httpx.Response(200,headers=response.headers,request=request,extensions=response.extensions,
+                stream=_TechnicalResponseStream(response,b,scope,cap,length))
+        except BaseException:
+            if response is not None:
+                try:response.close()
+                except BaseException:pass
+            raise
+
+    def close(self):
+        if not self._closed:
+            self._closed=True
+            try:self._original.close()
+            except Exception:raise _StrictLlmFailure('HTTP_INVALID') from None
+
+
+class _TechnicalOfficialCounter:
+    mapping=_COUNT_MAPPING
+    def __init__(self,bundle,version,provenance):
+        self.bundle=bundle;self.version=version;self.provenance_sha256=provenance;self._receipts={}
+
+    def count(self,**values):
+        b=self.bundle;scope=getattr(b._local,'scope',None)
+        if (scope is None or scope.phase!='count' or values.get('ordinal')!=scope.ordinal
+                or values.get('request_sha256')!=scope.request_sha):raise _StrictLlmFailure('COUNT_INVALID')
+        b.check();timeout=b.remaining(scope);scope.timeout=timeout
+        with b.count_method(model=values['model'],input=values['input'],timeout=timeout) as response:
+            # iter_bytes is bounded below the SDK; do not call parse/json.
+            raw=b''.join(response.iter_bytes())
+        b.remaining(scope)
+        value=_count_wire_json(raw)
+        if (type(value) is not dict or set(value)!={'object','input_tokens'}
+                or value['object']!='response.input_tokens' or type(value['input_tokens']) is not int
+                or not 0<=value['input_tokens']<=b.budget._policy.input_token_cap):
+            raise _StrictLlmFailure('COUNT_INVALID')
+        receipt=object()
+        result=TechnicalTokenCount(value['input_tokens'],values['model'],self.mapping,self.version,
+            self.provenance_sha256,values['prompt_sha256'],values['projection_sha256'],values['request_sha256'],
+            receipt,scope.ordinal)
+        with b.budget._lock:
+            record=b.budget._records[scope.ordinal-1]
+            if not record.count_entered or scope.ordinal in self._receipts:raise _StrictLlmFailure('COUNT_INVALID')
+            self._receipts[scope.ordinal]=(result,{k:v for k,v in values.items() if k!='input'})
+        return result
+
+    def verify(self,evidence,**values):
+        text=values.get('input')
+        if (type(text) is not str or _strict_sha(text)!=values.get('prompt_sha256')
+                or _strict_sha(_strict_json({'model':values.get('model'),'input':text}))!=values.get('projection_sha256')):
+            return False
+        with self.bundle.budget._lock:
+            original=self._receipts.get(values.get('ordinal'))
+            return original is not None and original[0] is evidence and original[1]=={k:v for k,v in values.items() if k!='input'}
+
+
+class _TechnicalOwnedBundle:
+    def __init__(self,budget,credential,request_cap,count_cap,generation_cap):
+        self.budget=budget;self._credential=credential
+        self.request_cap,self.count_cap,self.generation_cap=request_cap,count_cap,generation_cap
+        self._local=threading.local();self._lifetime_lock=threading.RLock()
+        self._active=0;self._closing=False;self._disposed=False
+        self.sdk=self.client=self.transport=self.inner=None
+
+    def check(self):
+        if ('OPENAI_CUSTOM_HEADERS' in os.environ or any(logging.getLogger(name).isEnabledFor(logging.DEBUG)
+                for name in ('openai','openai._base_client','openai._client'))):
+            raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        s=self.sdk;c=self.client
+        if (s is None or s._client is not c or c._transport is not self.transport
+                or c._trust_env is not False or c.follow_redirects is not False or c._mounts
+                or any(c._event_hooks.values()) or self.transport._inner is not self.inner
+                or type(s.max_retries) is not int or s.max_retries!=0
+                or str(s.base_url)!='https://api.openai.com/v1/' or s.api_key!=self._credential
+                or s.responses is not self.responses
+                or not _strict_same_callable(s.responses.create,self.create_method)
+                or s.responses.input_tokens is not self.tokens
+                or self.tokens.with_streaming_response is not self.streaming
+                or not _strict_same_callable(self.streaming.count,self.count_method)
+                or self.budget._official_bundle is not self or self.budget._counter is not self.counter):
+            raise _StrictLlmFailure('SDK_POLICY_INVALID')
+
+    def remaining(self,scope):return self.budget._timeout_for(scope.adapter)
+
+    def phase(self,*args):return _TechnicalPhase(self,*args)
+
+    def _dispose(self):
+        if self._disposed:return
+        self._disposed=True
+        # SDK.close() delegates to its mutable _client. Close the captured
+        # owned HTTP resources directly; never a substituted client/mount.
+        failed=False
+        try:
+            if self.client is not None and self.client._transport is self.transport and not self.client._mounts:
+                self.client.close()
+        except BaseException:failed=True
+        try:
+            if self.transport is not None:self.transport.close()
+            elif self.inner is not None:self.inner.close()
+        except BaseException:failed=True
+        if failed:raise _StrictLlmFailure('HTTP_INVALID') from None
+
+    def close(self):
+        with self._lifetime_lock:
+            self._closing=True
+            if self._active==0:self._dispose()
+
+
+def official_count_openai_client(*,request_budget,api_key,request_wire_cap,count_wire_cap,
+        generation_wire_cap,count_version,count_provenance_sha256,timeout,temperature=None,deadline=None):
+    """Explicit opt-in only. No settings/env-file/key discovery or real authority.
+
+    The caller supplies reviewed free-count mapping/provenance and one run's
+    budget. This factory owns fresh SDK/HTTP resources until client.close().
+    """
+    bundle=None
+    try:
+        if type(request_budget) is not TechnicalRequestLlmBudget:raise _StrictLlmFailure('POLICY_INVALID')
+        p=request_budget._policy;request_budget._policy_check();request_budget._remaining()
+        if (type(api_key) is not str or not api_key or not api_key.isascii()
+                or any(ord(c)<=32 or ord(c)>=127 for c in api_key)
+                or type(timeout) not in (int,float) or not math.isfinite(timeout) or timeout<=0
+                or type(count_version) is not str or re.fullmatch('[A-Za-z0-9_.:-]{1,128}',count_version) is None):
+            raise _StrictLlmFailure('POLICY_INVALID')
+        for cap in (request_wire_cap,count_wire_cap,generation_wire_cap):
+            if type(cap) is not int or not 0<cap<=2*1024*1024:raise _StrictLlmFailure('POLICY_INVALID')
+        _strict_hash(count_provenance_sha256)
+        if ('OPENAI_CUSTOM_HEADERS' in os.environ or any(logging.getLogger(name).isEnabledFor(logging.DEBUG)
+                for name in ('openai','openai._base_client','openai._client'))):
+            raise _StrictLlmFailure('SDK_POLICY_INVALID')
+        with request_budget._lock:
+            if request_budget._official_bundle is not None or request_budget._counter is not None or request_budget._records or request_budget._closed:
+                raise _StrictLlmFailure('POLICY_INVALID')
+            # A failed construction cannot be rebound to another SDK or caller.
+            bundle=_TechnicalOwnedBundle(request_budget,api_key,request_wire_cap,count_wire_cap,generation_wire_cap)
+            request_budget._official_bundle=bundle
+        bundle.inner=httpx.HTTPTransport(verify=True,trust_env=False,proxy=None,retries=0)
+        bundle.transport=_TechnicalOwnedTransport(bundle.inner);bundle.transport.bundle=bundle
+        bundle.client=httpx.Client(transport=bundle.transport,trust_env=False,follow_redirects=False,
+            proxy=None,mounts=None,event_hooks=None,timeout=timeout)
+        bundle.sdk=openai.OpenAI(api_key=api_key,admin_api_key='',organization='',project='',webhook_secret='',
+            base_url='https://api.openai.com/v1/',max_retries=0,timeout=timeout,http_client=bundle.client,
+            default_headers={'Accept-Encoding':'identity','OpenAI-Organization':openai.omit,'OpenAI-Project':openai.omit},
+            default_query={})
+        bundle._metadata={str(k).lower():v for k,v in bundle.sdk.default_headers.items()
+            if type(v) is str and str(k).lower() not in {'authorization','content-length'}}
+        bundle.responses=bundle.sdk.responses;bundle.create_method=bundle.responses.create
+        bundle.tokens=bundle.responses.input_tokens;bundle.streaming=bundle.tokens.with_streaming_response
+        bundle.count_method=bundle.streaming.count
+        bundle.counter=_TechnicalOfficialCounter(bundle,count_version,count_provenance_sha256)
+        request_budget._counter=bundle.counter
+        request_budget._counter_binding=(bundle.counter.mapping,count_version,count_provenance_sha256)
+        bundle.check()
+        return OpenAiLlmClient(bundle.sdk,model=p.model,temperature=temperature,max_output_tokens=p.output_token_cap,
+            timeout=timeout,store=False,deadline=deadline,strict=True,request_budget=request_budget)
+    except BaseException as error:
+        if bundle is not None:
+            request_budget._close('SDK_POLICY_INVALID')
+            try:bundle.close()
+            except BaseException:pass  # Preserve original error/cancellation, never cleanup text.
+        if isinstance(error,asyncio.CancelledError):raise asyncio.CancelledError() from None
+        if isinstance(error,KeyboardInterrupt):raise KeyboardInterrupt() from None
+        if isinstance(error,SystemExit):raise SystemExit(1) from None
+        raise LlmCallError('TECHNICAL_LLM_SDK_POLICY_INVALID') from None
 
 
 def _extract_text(response: Any) -> str:

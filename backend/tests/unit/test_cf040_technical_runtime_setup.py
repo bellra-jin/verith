@@ -12,6 +12,8 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
 import hashlib
+import logging
+import httpx
 import importlib.machinery
 import importlib.util
 from itertools import count
@@ -399,7 +401,9 @@ def usage_adapter():
     names={'_extract_usage','_extract_text','OpenAiLlmClient','_StrictLlmFailure',
            '_strict_json','_strict_sha','_strict_int','_strict_hash','_strict_same_callable',
            'TechnicalLlmPolicy','TechnicalTokenCount','TechnicalLlmEvidence',
-           'TechnicalRequestLlmBudget','default_openai_client'}
+           'TechnicalRequestLlmBudget','default_openai_client','_count_wire_json',
+           '_TechnicalResponseStream','_TechnicalPhase','_TechnicalOwnedTransport',
+           '_TechnicalOfficialCounter','_TechnicalOwnedBundle','official_count_openai_client'}
     nodes=[node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names]
     assert {node.name for node in nodes}==names
     constants={'_STRICT_MAX','_COUNT_MAPPING','_STRICT_POLICY_FIELDS','_STRICT_REASONS'}
@@ -416,6 +420,8 @@ def usage_adapter():
     values.update(time=SimpleNamespace(perf_counter=lambda:1.0,monotonic=lambda:1.0),openai=SimpleNamespace(OpenAIError=SDKError),
                   asyncio=asyncio,dataclass=dataclass,fields=fields,replace=replace,datetime=datetime,UTC=UTC,
                   hashlib=hashlib,json=json,math=math,re=re,threading=threading,UUID=UUID,
+                  httpx=SimpleNamespace(BaseTransport=httpx.BaseTransport,SyncByteStream=httpx.SyncByteStream,Response=httpx.Response),
+                  os=SimpleNamespace(environ={}),logging=SimpleNamespace(DEBUG=logging.DEBUG,getLogger=lambda _:SimpleNamespace(isEnabledFor=lambda _:False)),
                   logger=SimpleNamespace(warning=lambda *a,**kw:None),
                   DeadlineExceeded=DEADLINE.DeadlineExceeded,LlmCallError=CallError)
     exec(compile(ast.fix_missing_locations(module),str(ROOT/LLM_PATH),'exec'),values)
@@ -441,7 +447,7 @@ def strict_adapter(*,counter=True,calls=4,create=None):
         def count(self,**request):
             self.calls.append(request.copy())
             evidence=a['TechnicalTokenCount'](12,request['model'],request['mapping'],'synthetic.v1','b'*64,
-                request['prompt_sha256'],request['projection_sha256'],request['request_sha256'],object())
+                request['prompt_sha256'],request['projection_sha256'],request['request_sha256'],object(),request['ordinal'])
             self.issued.append((evidence,request.copy()))
             if self.after:self.after()
             return evidence
@@ -530,14 +536,14 @@ def test_legacy_and_explicit_factory_injection_are_preserved():
 
 
 @pytest.mark.parametrize('bad',[True,-1,101,2**63,'12',1.2,None])
-def test_bad_or_over_cap_count_closes_before_reservation(bad):
+def test_bad_or_over_cap_count_keeps_pair_hold_and_closes(bad):
     h=strict_adapter();original=h.counter.count
     def altered(**request):
         issued=original(**request);changed=replace(issued,input_tokens=bad)
         h.counter.issued.append((changed,request.copy()));return changed
     h.counter.count=altered
     with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
-    assert not h.dispatched and not h.budget.snapshot()
+    assert not h.dispatched and len(h.budget.snapshot())==1 and h.budget.snapshot()[0].held_nano==2000
 
 
 @pytest.mark.parametrize('field,value',[
@@ -550,14 +556,14 @@ def test_count_shape_mapping_and_authentication_are_bound_to_exact_request(field
         h.counter.issued.append((issued,request.copy()));return issued
     h.counter.count=altered
     with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
-    assert not h.dispatched and not h.budget.snapshot()
+    assert not h.dispatched and len(h.budget.snapshot())==1
 
 
 @pytest.mark.parametrize('remaining',[0,-1,float('nan'),float('inf'),True])
 def test_expired_or_unknown_narrower_deadline_cannot_authorize_SDK(remaining):
     h=strict_adapter();h.client._deadline=SimpleNamespace(remaining_seconds=lambda:remaining)
     with pytest.raises(h.a['LlmCallError'],match='DEADLINE_EXCEEDED'):h.client.complete('synthetic')
-    record,=h.budget.snapshot();assert not record.entered and record.held_nano==2000 and not h.dispatched
+    assert not h.budget.snapshot() and not h.counter.calls and not h.dispatched
 
 
 def test_already_expired_request_has_no_count_or_SDK():
@@ -613,7 +619,7 @@ def test_strict_full_policy_and_projection_must_match(change):
 def test_bare_count_value_or_unverified_receipt_cannot_authorize(bad):
     h=strict_adapter();h.counter.count=lambda **v:bad
     with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
-    assert not h.dispatched and not h.budget.snapshot() and h.budget.closed_reason
+    assert not h.dispatched and len(h.budget.snapshot())==1 and h.budget.closed_reason
 
 
 def test_default_missing_counter_and_forged_receipt_are_closed():
@@ -746,6 +752,7 @@ def test_counted_semantics_survive_smaller_transport_timeout_but_not_meaning_dri
     h=strict_adapter();h.counter.after=lambda:setattr(h.clock,'value',40)
     assert h.client.complete('synthetic')=='synthetic result'
     assert h.dispatched[0]['timeout']==20 and 'timeout' not in h.counter.calls[0]
+    assert h.counter.calls[0]['ordinal']==1
     assert h.counter.calls[0]['projection_sha256']==h.a['_strict_sha'](h.a['_strict_json']({'model':'synthetic-model','input':'synthetic'}))
     h=strict_adapter();h.counter.after=lambda:setattr(h.client,'model','drift')
     with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
@@ -764,7 +771,7 @@ def test_count_wait_cannot_replace_actual_dispatch_identity(drift):
             h.client._client=SimpleNamespace(max_retries=0,responses=SimpleNamespace(create=h.response))
     h.counter.after=change
     with pytest.raises(h.a['LlmCallError'],match='SDK_POLICY_INVALID'):h.client.complete('synthetic')
-    assert not h.dispatched and not h.budget.snapshot()
+    assert not h.dispatched and len(h.budget.snapshot())==1
 
 
 def test_bound_SDK_method_identity_is_checked_without_false_rejection():
@@ -873,3 +880,414 @@ def test_reverse_response_order_keeps_usage_on_original_ordinal():
     finally:release.set();worker.join(2)
     assert not worker.is_alive() and not errors
     a,b=h.budget.snapshot();assert a.usage==(12,3,15) and b.usage==(12,4,16)
+
+
+# CF051 uses real Request/Response/stream protocol objects but synthetic SDK,
+# HTTP client/transport constructors and bytes. No SDK import or socket exists.
+def official_adapter(*,calls=4,count_body=None,status=200,chunks=None,headers=None,
+                     request_change=None,inner=None,constructor_failure=None,**limits):
+    h=strict_adapter(counter=False,calls=calls);events=[];sent=[];closed=[];read=[]
+    a=h.a
+    class Parts(httpx.SyncByteStream):
+        def __init__(self,parts):self.parts=parts;self.closed=False
+        def __iter__(self):
+            for part in self.parts:read.append(len(part));yield part
+        def close(self):self.closed=True;closed.append('response')
+    class Transport:
+        def __init__(self,**kwargs):
+            events.append(('transport',kwargs));self.closed=False
+            if constructor_failure=='transport':raise RuntimeError(PRIVATE)
+        def handle_request(self,request):
+            sent.append(request)
+            if inner:return inner(request,Parts)
+            body=(b'{"object":"response.input_tokens","input_tokens":12}' if count_body is None else count_body) if request.url.path.endswith('input_tokens') else json.dumps(dict(status='completed',output_text=' official result ',usage=dict(input_tokens=12,output_tokens=3,total_tokens=15))).encode()
+            parts=chunks if chunks is not None else [body[:7],body[7:]]
+            hs={'Content-Type':'application/json','Content-Length':str(sum(map(len,parts)))}
+            hs.update(headers or {})
+            return httpx.Response(status,headers=hs,stream=Parts(parts))
+        def close(self):self.closed=True;closed.append('transport')
+    class Client:
+        def __init__(self,**kwargs):
+            events.append(('client',kwargs))
+            if constructor_failure=='client':raise RuntimeError(PRIVATE)
+            self._transport=kwargs['transport'];self._trust_env=kwargs['trust_env']
+            self.follow_redirects=kwargs['follow_redirects'];self._mounts={};self._event_hooks={'request':[],'response':[]}
+        def close(self):closed.append('client');self._transport.close()
+    def send(sdk,path,request,timeout,streaming=False):
+        values=dict(sdk.default_headers);values={k:v for k,v in values.items() if type(v) is str}
+        values.update(Authorization='Bearer '+sdk.api_key,Host='api.openai.com',
+            **{'Content-Type':'application/json','X-Stainless-Retry-Count':'0','X-Stainless-Read-Timeout':str(timeout)})
+        if streaming:values['X-Stainless-Raw-Response']='stream'
+        raw=json.dumps(request,ensure_ascii=False).encode()
+        values['Content-Length']=str(len(raw))
+        req=httpx.Request('POST','https://api.openai.com/v1/'+path,content=raw,headers=values,
+            extensions={'timeout':dict.fromkeys(('connect','read','write','pool'),timeout)})
+        if request_change:request_change(req)
+        return sdk._client._transport.handle_request(req)
+    class CountContext:
+        def __init__(self,sdk,request,timeout):self.sdk=sdk;self.request=request;self.timeout=timeout;events.append(('context-created',None))
+        def __enter__(self):
+            events.append(('context-entered',None));self.response=send(self.sdk,'responses/input_tokens',self.request,self.timeout,True)
+            return self
+        def iter_bytes(self):return self.response.iter_bytes()
+        def __exit__(self,*args):self.response.close()
+    class SDK:
+        def __init__(self,**kwargs):
+            events.append(('sdk',kwargs))
+            if constructor_failure=='sdk':raise RuntimeError(PRIVATE)
+            self._client=kwargs['http_client'];self.max_retries=kwargs['max_retries'];self.base_url=kwargs['base_url'];self.api_key=kwargs['api_key']
+            self.default_headers={'Accept':'application/json','User-Agent':'OpenAI/Python synthetic',**kwargs['default_headers']}
+            sdk=self
+            class Responses:
+                def create(self,**request):
+                    timeout=request.pop('timeout');response=send(sdk,'responses',request,timeout)
+                    try:v=json.loads(response.read())
+                    finally:response.close()
+                    v['usage']=SimpleNamespace(**v['usage']);return SimpleNamespace(**v)
+            self.responses=Responses()
+            self.responses.input_tokens=SimpleNamespace(with_streaming_response=SimpleNamespace(
+                count=lambda **request:CountContext(self,{k:v for k,v in request.items() if k!='timeout'},request['timeout'])))
+        def close(self):closed.append('sdk');self._client.close()
+    a['httpx']=SimpleNamespace(HTTPTransport=Transport,Client=Client,Response=httpx.Response)
+    a['openai'].OpenAI=SDK;a['openai'].omit=object()
+    opts=dict(request_wire_cap=4096,count_wire_cap=1024,generation_wire_cap=4096,count_version='official.synthetic.v1',
+        count_provenance_sha256='c'*64,timeout=30)
+    opts.update(limits)
+    h.official_options=opts;h.events=events;h.sent=sent;h.closed=closed;h.read=read
+    def factory():return a['official_count_openai_client'](request_budget=h.budget,api_key=PRIVATE,**opts)
+    h.factory=factory
+    if constructor_failure:h.client=None
+    else:h.client=factory();h.sdk=h.client._client
+    return h
+
+
+def test_official_count_actual_transport_and_complete_share_owned_bundle():
+    h=official_adapter(calls=2)
+    assert h.events[0]==('transport',dict(verify=True,trust_env=False,proxy=None,retries=0))
+    assert h.events[1][1]['trust_env'] is False and h.events[1][1]['follow_redirects'] is False
+    assert all(h.events[1][1][k] is None for k in ('proxy','mounts','event_hooks'))
+    config=h.events[2][1]
+    assert all(config[k] is not None for k in ('api_key','base_url','admin_api_key','organization','project','webhook_secret'))
+    assert config['max_retries']==0 and config['default_query']=={}
+    for _ in range(2):assert h.client.complete('synthetic')=='official result'
+    assert [r.url.path for r in h.sent]==['/v1/responses/input_tokens','/v1/responses']*2
+    assert all(v.count_entered and v.count_response_received and v.count_validated and v.entered and v.counted_input_tokens==12 for v in h.budget.snapshot())
+    assert 'sdk' not in h.closed and 'client' not in h.closed
+    h.client.close();h.client.close();assert h.closed.count('client')==h.closed.count('transport')==1
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert len(h.sent)==4
+
+
+def test_official_context_creation_is_not_send_and_direct_phase_calls_are_closed():
+    h=official_adapter();b=h.budget._official_bundle
+    ctx=b.count_method(model='synthetic-model',input='synthetic',timeout=1)
+    assert not h.sent and h.events[-1][0]=='context-created'
+    with pytest.raises(h.a['_StrictLlmFailure']):ctx.__enter__()
+    with pytest.raises(h.a['_StrictLlmFailure']):h.sdk.responses.create(model='synthetic-model',input='synthetic',timeout=1)
+    with pytest.raises(h.a['_StrictLlmFailure']):b.counter.count(ordinal=1)
+    assert not h.sent;h.client.close()
+
+
+@pytest.mark.parametrize('body',[
+    b'{"object":"response.input_tokens","input_tokens":true}',
+    b'{"object":"response.input_tokens","input_tokens":12.0}',
+    b'{"object":"response.input_tokens","input_tokens":"12"}',
+    b'{"object":"response.input_tokens","input_tokens":-1}',
+    b'{"object":"response.input_tokens","input_tokens":101}',
+    b'{"object":"response.input_tokens","input_tokens":12,"input_tokens":13}',
+    b'{"object":"response.input_tokens","input_tokens":NaN}',
+    b'{"object":"wrong","input_tokens":12}',b'{"object":"response.input_tokens","input_tokens":12,"extra":"private"}',
+    b'[]',b'null',b'\xff',b'{'])
+def test_official_count_strict_raw_wire_failure_preserves_pair_hold(body):
+    h=official_adapter(count_body=body)
+    with pytest.raises(h.a['LlmCallError']) as error:h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert record.count_entered and record.count_response_received and not record.count_validated and not record.entered
+    assert record.held_nano==2000 and len(h.sent)==1 and h.budget.closed_reason and PRIVATE not in str(error.value)
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('again')
+    assert len(h.sent)==1;h.client.close()
+
+
+@pytest.mark.parametrize('status',[201,301,400,429,500])
+def test_transport_closes_non200_before_SDK_can_read_error_body(status):
+    h=official_adapter(status=status,chunks=[PRIVATE.encode()])
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.read and 'response' in h.closed and len(h.sent)==1
+    assert h.budget.snapshot()[0].count_entered;h.client.close()
+
+
+@pytest.mark.parametrize('headers,chunks',[
+    ({'Content-Encoding':'gzip'},[b'x']),({'Content-Length':'99999'},[b'x']),
+    ({'Content-Length':'1'},[b'xx']),({'Content-Length':'9'},[b'x']),
+    ({'Content-Length':'-1'},[b'x']),({'Content-Length':'1, 1'},[b'x']),
+    ({},[b'x'*600,b'y'*600]),
+])
+def test_owned_stream_cap_encoding_length_and_chunk_aggregate(headers,chunks):
+    h=official_adapter(headers=headers,chunks=chunks)
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert 'response' in h.closed and len(h.sent)==1 and not h.budget.snapshot()[0].entered;h.client.close()
+
+
+@pytest.mark.parametrize('change',[
+    lambda r:setattr(r,'url',httpx.URL('http://api.openai.com/v1/responses/input_tokens')),
+    lambda r:setattr(r,'url',httpx.URL('https://api.openai.com.evil/v1/responses/input_tokens')),
+    lambda r:setattr(r,'url',httpx.URL('https://x@api.openai.com/v1/responses/input_tokens')),
+    lambda r:setattr(r,'url',httpx.URL('https://api.openai.com:444/v1/responses/input_tokens')),
+    lambda r:setattr(r,'url',httpx.URL('https://api.openai.com/v1/responses/input_tokens?q=1')),
+    lambda r:setattr(r,'url',httpx.URL('https://api.openai.com/v1/%72esponses/input_tokens')),
+    lambda r:setattr(r,'method','GET'),lambda r:r.headers.update({'Cookie':PRIVATE}),
+    lambda r:r.headers.update({'Proxy-Authorization':PRIVATE}),lambda r:r.headers.update({'X-Other':PRIVATE}),
+    lambda r:r.headers.update({'User-Agent':PRIVATE}),lambda r:r.headers.update({'X-Stainless-Arch':PRIVATE}),
+    lambda r:r.headers.update({'X-Stainless-Retry-Count':'1'}),
+    lambda r:r.headers.update({'Accept-Encoding':'gzip'}),lambda r:r.extensions.update(timeout=dict.fromkeys(('connect','read','write','pool'),99)),
+    lambda r:setattr(r,'_content',b'{"model":"other","input":"private"}'),
+])
+def test_official_outgoing_url_header_query_body_and_timeout_drift_has_inner0(change):
+    h=official_adapter(request_change=change)
+    with pytest.raises(h.a['LlmCallError']) as error:h.client.complete('synthetic')
+    assert not h.sent and not h.budget.snapshot()[0].count_entered and PRIVATE not in str(error.value);h.client.close()
+
+
+@pytest.mark.parametrize('field', ['SDK','HTTP','transport','mount','hooks','retry','count_method','generation_method','base'])
+def test_official_captured_identity_drift_has_no_forward(field):
+    h=official_adapter();b=h.budget._official_bundle
+    if field=='SDK':h.client._client=SimpleNamespace(max_retries=0,responses=h.sdk.responses)
+    elif field=='HTTP':h.sdk._client=object()
+    elif field=='transport':b.client._transport=object()
+    elif field=='mount':b.client._mounts['anything']=object()
+    elif field=='hooks':b.client._event_hooks['request'].append(object())
+    elif field=='retry':h.sdk.max_retries=1
+    elif field=='count_method':b.streaming.count=lambda **v:None
+    elif field=='generation_method':b.responses.create=lambda **v:None
+    else:h.sdk.base_url='https://other/'
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.sent
+    # Restore owned cleanup target instead of invoking injected fake objects.
+    h.sdk._client=b.client;b.client._transport=b.transport;h.client.close()
+
+
+@pytest.mark.parametrize('where',['custom_headers','debug'])
+def test_official_presence_and_current_effective_DEBUG_close_before_send(where):
+    h=official_adapter()
+    if where=='custom_headers':h.a['os'].environ['OPENAI_CUSTOM_HEADERS']=PRIVATE
+    else:h.a['logging'].getLogger=lambda _:SimpleNamespace(isEnabledFor=lambda _:True)
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('synthetic')
+    assert not h.sent;h.client.close()
+
+
+def test_explicit_instance_ignores_unrelated_SDK_environment_and_module_client_settings():
+    h=official_adapter();h.a['os'].environ.update(OPENAI_API_KEY=PRIVATE,OPENAI_BASE_URL=PRIVATE,OPENAI_ORG_ID=PRIVATE,OPENAI_PROJECT_ID=PRIVATE,OPENAI_LOG='info')
+    h.a['openai'].api_key=PRIVATE;h.a['openai'].base_url=PRIVATE;h.a['openai'].api_type='azure'
+    assert h.client.complete('synthetic')=='official result';h.client.close()
+
+
+@pytest.mark.parametrize('stage',['transport','client','sdk'])
+def test_owned_partial_constructor_failure_only_closes_own_resources(stage):
+    h=official_adapter(constructor_failure=stage)
+    with pytest.raises(h.a['LlmCallError']) as error:h.factory()
+    assert not h.sent and PRIVATE not in str(error.value)
+    if stage=='client':assert h.closed==['transport']
+    if stage=='sdk':assert h.closed==['client','transport']
+    with pytest.raises(h.a['LlmCallError']):h.factory()
+    assert h.budget.closed_reason
+
+
+@pytest.mark.parametrize('cap',[None,True,0,-1,2*1024*1024+1])
+def test_official_wire_caps_are_explicit_and_bounded(cap):
+    h=strict_adapter(counter=False)
+    with pytest.raises(h.a['LlmCallError']):h.a['official_count_openai_client'](request_budget=h.budget,api_key=PRIVATE,
+        request_wire_cap=cap,count_wire_cap=100,generation_wire_cap=100,count_version='synthetic.v1',count_provenance_sha256='a'*64,timeout=1)
+    assert not h.budget.snapshot() and h.budget._official_bundle is None
+
+
+def test_failed_count_consumes_last_pair_before_count_IO_and_never_refunds():
+    h=strict_adapter(calls=1);paused=threading.Event();release=threading.Event();original=h.counter.count
+    def count(**values):paused.set();assert release.wait(2);return original(**values)
+    h.counter.count=count;errors=[]
+    def first():
+        try:h.client.complete('first')
+        except h.a['LlmCallError']:errors.append(True)
+    thread=threading.Thread(target=first);thread.start()
+    try:
+        assert paused.wait(2)
+        record,=h.budget.snapshot();assert record.count_entered and record.held_nano==2000
+        with pytest.raises(h.a['LlmCallError']):h.client.complete('second')
+    finally:release.set();thread.join(2)
+    assert not thread.is_alive() and len(h.counter.calls)==1 and not h.dispatched and errors
+    assert len(h.budget.snapshot())==1 and h.budget.snapshot()[0].held_nano==2000
+
+
+def test_count_receipt_same_prompt_from_previous_ordinal_cannot_be_replayed():
+    h=strict_adapter();assert h.client.complete('same')=='synthetic result'
+    evidence=h.counter.issued[0][0]
+    h.counter.count=lambda **v:evidence
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('same')
+    assert len(h.dispatched)==1 and len(h.budget.snapshot())==2 and not h.budget.snapshot()[1].count_validated
+
+
+def test_transport_recomputes_timeout_after_SDK_request_construction():
+    clock=[]
+    def delay(request):
+        if request.url.path.endswith('input_tokens'):h.clock.value=45
+    h=official_adapter(request_change=delay)
+    assert h.client.complete('synthetic')=='official result'
+    assert all(0<v<=15 for r in h.sent for v in r.extensions['timeout'].values())
+    assert h.budget.snapshot()[0].count_validated;h.client.close()
+
+
+def test_late_count_stream_closes_without_generation_or_refund():
+    def response(request,parts):
+        class Late(parts):
+            def __iter__(self):
+                yield b'{"object":"response.input_tokens",'
+                h.clock.value=61
+                yield b'"input_tokens":12}'
+        return httpx.Response(200,stream=Late([]))
+    h=official_adapter(inner=response)
+    with pytest.raises(h.a['LlmCallError'],match='DEADLINE_EXCEEDED'):h.client.complete('synthetic')
+    v,=h.budget.snapshot();assert v.count_entered and v.count_response_received and not v.count_validated and not v.entered and v.held_nano==2000
+    assert len(h.sent)==1 and 'response' in h.closed;h.client.close()
+
+
+@pytest.mark.parametrize('phase',['count','generation'])
+def test_split_no_length_stream_is_bounded_under_eager_SDK_read(phase):
+    def response(request,parts):
+        is_count=request.url.path.endswith('input_tokens')
+        if is_count and phase=='generation':return httpx.Response(200,stream=parts([b'{"object":"response.input_tokens","input_tokens":12}']))
+        return httpx.Response(200,stream=parts([b'x'*600,b'y'*600]))
+    h=official_adapter(inner=response,generation_wire_cap=1024)
+    with pytest.raises(h.a['LlmCallError'],match='RESPONSE_LIMIT'):h.client.complete('synthetic')
+    v,=h.budget.snapshot();assert v.entered is (phase=='generation') and not v.text_accepted and v.held_nano==2000
+    assert len(h.sent)==(2 if phase=='generation' else 1) and 'response' in h.closed;h.client.close()
+
+
+def test_actual_owned_count_race_consumes_only_one_last_pair_and_IO_holds_no_lock():
+    paused=threading.Event();release=threading.Event()
+    def response(request,parts):
+        assert h.budget._lock.acquire(blocking=False);h.budget._lock.release()
+        if request.url.path.endswith('input_tokens'):
+            paused.set();assert release.wait(2)
+            return httpx.Response(200,stream=parts([b'{"object":"response.input_tokens","input_tokens":12}']))
+        raise AssertionError('closed generation must not dispatch')
+    h=official_adapter(calls=1,inner=response);errors=[]
+    def first():
+        try:h.client.complete('first')
+        except h.a['LlmCallError']:errors.append(True)
+    thread=threading.Thread(target=first);thread.start()
+    try:
+        assert paused.wait(2)
+        with pytest.raises(h.a['LlmCallError']):h.client.complete('second')
+    finally:release.set();thread.join(2)
+    assert not thread.is_alive() and len(h.sent)==1 and errors
+    v,=h.budget.snapshot();assert v.held_nano==2000 and v.count_validated and not v.entered;h.client.close()
+
+
+def test_bundle_close_defers_owned_disposal_until_physical_count_finishes():
+    paused=threading.Event();release=threading.Event()
+    def response(request,parts):
+        paused.set();assert release.wait(2)
+        assert 'sdk' not in h.closed
+        return httpx.Response(200,stream=parts([b'{"object":"response.input_tokens","input_tokens":12}']))
+    h=official_adapter(inner=response);errors=[]
+    def run():
+        try:h.client.complete('synthetic')
+        except h.a['LlmCallError']:errors.append(True)
+    thread=threading.Thread(target=run);thread.start()
+    try:
+        assert paused.wait(2);h.client.close();assert 'sdk' not in h.closed
+    finally:release.set();thread.join(2)
+    assert not thread.is_alive() and errors and len(h.sent)==1
+    assert h.closed.count('client')==1 and h.closed.count('transport')==1
+
+
+def test_owned_generation_usage_is_preserved_when_text_rejected():
+    def response(request,parts):
+        if request.url.path.endswith('input_tokens'):raw=b'{"object":"response.input_tokens","input_tokens":12}'
+        else:raw=b'{"status":"completed","output_text":"","usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15}}'
+        return httpx.Response(200,stream=parts([raw]))
+    h=official_adapter(inner=response)
+    with pytest.raises(h.a['LlmCallError'],match='TEXT_INVALID'):h.client.complete('synthetic')
+    v,=h.budget.snapshot();assert v.count_validated and v.entered and v.response_received and v.usage==(12,3,15) and v.estimated_nano==180 and not v.text_accepted
+    h.client.close()
+
+
+@pytest.mark.parametrize('phase',['count','generation'])
+def test_bundle_close_before_real_transport_entry_forbids_new_phase(phase):
+    def close_before_send(request):
+        is_count=request.url.path.endswith('input_tokens')
+        if is_count==(phase=='count'):h.client.close()
+    h=official_adapter(request_change=close_before_send)
+    with pytest.raises(h.a['LlmCallError'],match='CLOSED'):h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert record.count_entered is (phase=='generation') and not record.entered and record.held_nano==2000
+    assert len(h.sent)==(1 if phase=='generation' else 0) and h.closed.count('transport')==1
+
+
+def test_partial_creation_cleanup_exception_remains_fixed_and_foreign_client_not_closed():
+    h=official_adapter(constructor_failure='client')
+    transport=h.a['httpx'].HTTPTransport
+    class BadClose(transport):
+        def close(self):h.closed.append('bad-close');raise RuntimeError(PRIVATE)
+    h.a['httpx'].HTTPTransport=BadClose
+    with pytest.raises(h.a['LlmCallError']) as error:h.factory()
+    assert str(error.value)=='TECHNICAL_LLM_SDK_POLICY_INVALID' and PRIVATE not in str(error.value)
+    assert h.closed==['bad-close']
+    other=official_adapter();foreign=[];other.sdk._client=SimpleNamespace(close=lambda:foreign.append(True))
+    other.client.close()
+    assert not foreign and other.closed.count('client')==1 and other.closed.count('transport')==1
+
+
+@pytest.mark.parametrize('failure',[RuntimeError(PRIVATE),asyncio.CancelledError(PRIVATE),KeyboardInterrupt(PRIVATE)])
+def test_count_failure_preserves_consumed_pair_and_safe_exception(failure):
+    h=strict_adapter()
+    def fail(**values):raise failure
+    h.counter.count=fail
+    expected=asyncio.CancelledError if isinstance(failure,asyncio.CancelledError) else KeyboardInterrupt if isinstance(failure,KeyboardInterrupt) else h.a['LlmCallError']
+    with pytest.raises(expected) as error:h.client.complete('synthetic')
+    v,=h.budget.snapshot();assert v.count_entered and not v.count_validated and not v.entered and v.held_nano==2000 and v.reason=='COUNT_FAILED'
+    assert not h.dispatched and PRIVATE not in str(error.value)
+
+
+@pytest.mark.parametrize('failure',[RuntimeError(PRIVATE),asyncio.CancelledError(PRIVATE)])
+def test_deferred_cleanup_failure_does_not_mask_original_error_or_cancellation(failure):
+    def response(request,parts):
+        h.client.close()
+        h.budget._official_bundle.client.close=lambda:(_ for _ in ()).throw(RuntimeError(PRIVATE))
+        raise failure
+    h=official_adapter(inner=response)
+    expected=asyncio.CancelledError if isinstance(failure,asyncio.CancelledError) else h.a['LlmCallError']
+    with pytest.raises(expected) as error:h.client.complete('synthetic')
+    assert PRIVATE not in str(error.value) and error.value.__suppress_context__
+    v,=h.budget.snapshot();assert v.count_entered and not v.entered and v.held_nano==2000
+    assert h.closed.count('transport')==1
+
+
+def test_factory_cancel_preserves_cancel_when_owned_cleanup_also_fails():
+    h=official_adapter(constructor_failure='client');transport=h.a['httpx'].HTTPTransport
+    class BadClose(transport):
+        def close(self):raise RuntimeError(PRIVATE)
+    def fail(**values):raise asyncio.CancelledError(PRIVATE)
+    h.a['httpx'].HTTPTransport=BadClose;h.a['httpx'].Client=fail
+    with pytest.raises(asyncio.CancelledError) as error:h.factory()
+    assert PRIVATE not in str(error.value) and error.value.__suppress_context__ and not h.sent
+
+
+def test_stream_cancel_survives_response_close_failure():
+    def response(request,parts):
+        class Cancelled(parts):
+            def __iter__(self):raise asyncio.CancelledError(PRIVATE);yield b''
+            def close(self):h.closed.append('response');raise RuntimeError(PRIVATE)
+        return httpx.Response(200,stream=Cancelled([]))
+    h=official_adapter(inner=response)
+    with pytest.raises(asyncio.CancelledError) as error:h.client.complete('synthetic')
+    assert PRIVATE not in str(error.value) and error.value.__suppress_context__
+    v,=h.budget.snapshot();assert v.count_entered and not v.entered and v.held_nano==2000
+    h.client.close()
+
+
+def test_official_opaque_receipt_keeps_hash_binding_without_retaining_prompt():
+    h=official_adapter();assert h.client.complete(PRIVATE)=='official result'
+    receipts=h.budget._official_bundle.counter._receipts
+    assert PRIVATE not in repr(receipts) and all('input' not in binding for _,binding in receipts.values())
+    assert all(PRIVATE not in str(getattr(r,f.name)) for r in h.budget.snapshot() for f in fields(r))
+    h.client.close()

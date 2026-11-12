@@ -874,3 +874,15 @@ async def test_runtime_delayed_fresh_ACK_cannot_extend_original_deadline(monkeyp
     h.session.commit=AsyncMock(side_effect=delayed)
     with pytest.raises(D.TechnicalCompletionError):await h.runtime().execute_admitted_once(h.first.run,h.first.claim_token)
     assert not h.sent and h.store.row.state=='claimed' and h.store.row.held_nano==10000
+
+
+async def test_runtime_late_client_return_cannot_escape_shorter_waiter_deadline(monkeypatch):
+    import httpx
+    clock=[0.0]
+    async def late(request):
+        clock[0]=4.0  # model a delayed timeout callback while synchronous work returns
+        return httpx.Response(200,json=h.response)
+    h=await runtime_setup(monkeypatch,handler=late)
+    result=await h.runtime(clock=lambda:clock[0]).execute_admitted_once(h.first.run,h.first.claim_token)
+    assert result.run.state=='unknown' and result.run.unknown_reason=='TIMEOUT'
+    assert h.ledger.root is None and h.store.row.held_nano==10000 and len(h.sent)==1

@@ -149,12 +149,18 @@ class TechnicalExecutionRuntime:
         request,view,deadline=await self._fresh_request(run,token,principal,profile,deadline)
         if view is not None:return view
         self._configuration_unchanged(client,dispatch,configuration)
+        wait_started=self._clock()
         remaining=min(WAIT_SECONDS,self._remaining(run,deadline))
+        waiter_deadline=min(deadline,wait_started+remaining)
         # Only the client wait belongs to this failure closure. receive errors
         # may already have accepted/published and must never close_unknown.
         try:
             async with asyncio.timeout(remaining):
                 response=await dispatch(decode(request),_configuration=configuration)
+            # An event-loop timeout callback may run late while synchronous
+            # work is returning. Never adopt beyond the shorter waiter bound.
+            try:self._remaining(run,waiter_deadline)
+            except TechnicalCompletionError:raise AITimeoutError('Technical boundary deadline exceeded') from None
         except asyncio.CancelledError:
             # Consumed claim/hold remain; no SQL cleanup on a cancelling task.
             raise
@@ -162,5 +168,4 @@ class TechnicalExecutionRuntime:
             return await self._client_failed(run,token,principal,policy,profile,'TIMEOUT')
         except Exception:
             return await self._client_failed(run,token,principal,policy,profile,'DISPATCH_UNCERTAIN')
-        self._remaining(run,deadline)
         return await coordinator.receive(run,token,response)

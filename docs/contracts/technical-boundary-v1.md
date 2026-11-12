@@ -210,7 +210,7 @@ count 응답 close는 bundle을 닫지 않는다. caller의 run 종료 close는 
 
 기본 비활성 `TechnicalExecutionRuntime.execute_admitted_once(expected,token)`은 기존 CF048 run만 받는다. 명시 enable/정책/실제 AIClient의 순수 URL·token·transport/method 구성 검증 뒤 첫 await 전에 invocation latch를 소비한다. runtime이 직접 dispatch_claim한 이번 commit ACK/newly_claimed=True만 호출권을 주며 외부 ClaimReceipt·재접수/coordinator.post·완료 task 재사용은 없다. False/ACK 불명은 client0이며 원 claim·hold를 되돌리지 않는다.
 
-fresh auth→원 period→run 잠금에서 원 세션/claim·정책/Stock/spec·원 기한과 claimed/unaccepted를 확인하고 SQL E/B/S로 고정 request를 만든다. transaction 종료 ACK 뒤 캡처한 실제 method와 private config snapshot으로 기존 3초 synthetic boundary를1회 호출한다. 같은 원 UTC/한 번 환산해 좁힌 monotonic 잔여 중 짧은 waiter 기한만 적용하며 원 ID/as_of를 바꾸지 않는다. 이는 전송 직전 관측이며 commit 후 상태 변화까지 원자적으로 봉쇄하거나 AI physical worker에 CF048 권위를 전달하는 보장은 아니다.
+fresh auth→원 period→run 잠금에서 원 세션/claim·정책/Stock/spec·원 기한과 claimed/unaccepted를 확인하고 SQL E/B/S로 고정 request를 만든다. transaction 종료 ACK 뒤 캡처한 실제 method와 private config snapshot으로 기존 3초 synthetic boundary를1회 호출한다. 같은 원 UTC/한 번 환산해 좁힌 monotonic 잔여 중 짧은 waiter 절대기한을 고정하고 반환 뒤에도 재확인하며 원 ID/as_of를 바꾸지 않는다. 이는 전송 직전 관측이며 commit 후 상태 변화까지 원자적으로 봉쇄하거나 AI physical worker에 CF048 권위를 전달하는 보장은 아니다.
 
 응답은 이번 claim.run/token으로 CF050 receive/CF035 writer에 전달한다. client 정상 오류/timeout만 같은 잠금 transaction의 claimed/unaccepted fence 아래 원 close_unknown을 사용한다. 외부 취소에는 runner의 추가 SQL·재시도·detached 정리가 없고 claim/hold를 남긴다. receive 시작 뒤 실패·취소·ACK 불명에는 이 closure를 적용하지 않으며 기존 GET/readonly reconcile/명시 publish로 ready/stored를 복구한다. CF050의 기존 transaction rollback 책임은 그대로다.
 

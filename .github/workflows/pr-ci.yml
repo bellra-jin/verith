@@ -207,3 +207,8 @@ jobs:
         run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-runtime-self
       - name: Technical runtime setup protected unit
         run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-runtime-unit
+
+      - name: Technical compiled graph collection self
+        # Actual compiled graph unit uses the separately approved 64-wheel site;
+        # CI adds no AI install and verifies only this fixed intake/dispatch.
+        run: env -i LANG=en_US.UTF-8 TZ=UTC "$GITHUB_WORKSPACE/backend/.venv/bin/python" -I -S -B "$GITHUB_WORKSPACE/backend/scripts/check_safe.py" technical-graph-self

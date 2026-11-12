@@ -1180,6 +1180,50 @@ class CF040Boundary(unittest.TestCase):
         self.assertNotIn('tests.unit.test_cf021_technical_boundary',sys.modules)
         for name in unit.LATE:self.assertNotIn(name,sys.modules)
 
+
+import hashlib
+
+class TechnicalGraphBoundary(unittest.TestCase):
+    def test_exact_sources_and_modes_do_not_expand_cf021(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        root=Path(__file__).resolve().parents[3]
+        selected=c.selected_sources(root,technical_graph_only=True)
+        self.assertEqual(set(selected),set(c.GRAPH_INPUTS)|c.GRAPH_SOURCES)
+        self.assertEqual(c.GRAPH_TESTS,('tests/unit/test_technical_compiled_bridge.py',))
+        self.assertEqual(len(c.GRAPH_DISTRIBUTIONS),64)
+        self.assertNotIn('ai/src/agents/technical/application/orchestration/pipeline_steps.py',c.CF021_INPUTS)
+        for mode in ('technical-graph-self','technical-graph-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertEqual(run.call_args.kwargs,{'technical_graph_only':True})
+        for name,digest in c.GRAPH_INPUTS.items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+
+    def test_dependency_change_and_escape_rejected(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory() as name:
+            site=Path(name)
+            with patch.object(c,'GRAPH_DISTRIBUTIONS',{}):
+                (site/'module.py').write_text('one')
+                first=c.graph_dependency_snapshot(site)
+                (site/'module.py').write_text('two')
+                self.assertNotEqual(first,c.graph_dependency_snapshot(site))
+                (site/'module.pyc').write_bytes(b'cache-one')
+                previous=c.graph_dependency_snapshot(site)
+                (site/'module.pyc').write_bytes(b'cache-two')
+                self.assertNotEqual(previous,c.graph_dependency_snapshot(site))
+                metadata=site/'x.dist-info';metadata.mkdir()
+                (metadata/'METADATA').symlink_to('/unapproved-original')
+                with patch.object(c,'graph_dependency_bytes',side_effect=AssertionError('read before validation')):
+                    with self.assertRaises(c.UnsafeCheck):c.graph_dependency_snapshot(site)
+                (metadata/'METADATA').unlink();metadata.rmdir()
+                (site/'escape').symlink_to('/unapproved-original')
+                with self.assertRaises(c.UnsafeCheck):c.graph_dependency_snapshot(site)
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -1199,6 +1243,7 @@ if __name__ == "__main__":
     technical_owned_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf035_self_only",False)
     technical_owned_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf036_self_only",False)
     technical_runtime_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf040_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    graph_focused=json.loads(Path(sys.argv[1]).read_text()).get("technical_graph_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(TechnicalGraphBoundary if graph_focused else CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

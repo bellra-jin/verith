@@ -153,3 +153,11 @@ setup 뒤로 미룬다. trace는 snapshot을 소비하고 LLM 타입 alias는 �
 실제 graph/service를 import한 수용이 아니다. CF021의 config/graph 금지·AST-only 검사와 기존 worker/guard는 유지한다.
 실제 compiled graph의 wheel/platform/site provenance·정확 collection과 수집 전 tracing/provider 차단은 설계 선행이며,
 이 import 안전화가 설치·실제 graph/KIS/OpenAI 실행을 허가하지 않는다. [검증 기록](../work/CF-040-technical-runtime-setup.md)을 따른다.
+
+## 실제 compiled graph의 한정 합성 연결
+
+CF039/CF040 위의 후속 고정 검사는 검토된 별도 64-wheel site와 정확한 소스 사본에서 실제 `run_technical_agent`의 compiled LangGraph를 thread bridge와 Runtime의 strict completion에 연결한다. 기존 CF021의 graph/config import 금지는 해당 collection에 그대로 적용하며 새 `technical-graph-unit`과 혼합하지 않는다.
+
+기존 ScriptedLlm·합성 OHLCV로 normal/data_limited/regime_unavailable 세 경우의 원문/ID/as_of·결과·coverage·worker/slot 정리를 확인한다. 수집 전 파일/네트워크/프로세스 보호, 명시 config 초기화·intraday/trace 비활성, 원본 source 차단과 source/site 전후 provenance가 필수다. urllib3의 import-only IPv6 탐색은 검사 중 IPv4-only 플랫폼 가정으로 예방하며 실제 IPv6 검증으로 해석하지 않는다. CI self는 입구 보호만 검사하고 실제 그래프 unit은 별도 설치 site의 로컬 증거로 구분한다.
+
+이 결과는 KIS/OpenAI·캐시/trace 서비스·운영 활성화·public Technical 실행/저장/usage·전체 main 시작 성공이 아니다. [직접 결과와 한계](../work/technical-compiled-bridge.md)를 따른다. 앞 CF039/CF040의 graph 미실행 문장은 당시 이력이며, 그 보호 collection 자체를 완화하지 않는다.

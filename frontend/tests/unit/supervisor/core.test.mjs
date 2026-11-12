@@ -99,20 +99,20 @@ function actualSessionClass(name){
  }).outputText,{module:m,exports:m.exports},{timeout:100});return m.exports;
 }
 function childVerification(fetcher=async()=>({user_id:A}),request=async()=>({plan:null,plan_status:'deleted',flow:null})){
- const Verification=actualSessionClass('ConversationVerification'),events=[],ref=value=>({current:value});
+ const {h,flow}=load(),Verification=actualSessionClass('ConversationVerification'),events=[],ref=value=>({current:value});
  const context={verification:ref(new Verification()),commandPending:ref(false),planFocus:ref({invalidate(){events.push('focus-invalidated');}}),
   disposed:false,active:ref(true),supervisorId:A,user:A,authEpoch:1,AbortController,
   document:{visibilityState:'visible'},performance:{now:()=>0},window:{location:{href:'http://synthetic/research?supervisor_id='+A},sessionStorage:{}},
   generation:ref(0),controller:ref(null),timer:ref({stop(){events.push('timer-stop');}}),intent:ref({invalidate(){events.push('intent-invalidated');}}),
-  verifiedHref:ref(null),pending:ref(null),known:ref(A),draftRef:ref({}),planRef:ref(null),outcomeRef:ref(null),
+  verifiedHref:ref(null),pending:ref(null),preparing:ref(null),known:ref(A),draftRef:ref({}),planRef:ref(null),outcomeRef:ref(null),
   automaticObservationStarted:ref(false),observedFlow:ref(null),observation:ref({stop(){}}),
   fetchSession:fetcher,coreRequest:request,matchesUrl:()=>true,loadCoreRecovery:()=>({pending:null,storageReadable:true}),canReplayCore:()=>false,
-  CoreHttpError:load().h.CoreHttpError,AnalysisAccountChanged:load().flow.AnalysisAccountChanged,
+  coreErrorMessage:h.coreErrorMessage,CoreHttpError:h.CoreHttpError,AnalysisAccountChanged:flow.AnalysisAccountChanged,
   requiresReauthentication:e=>e instanceof context.AnalysisAccountChanged||e.status===401,
   empty:()=>({original_query:'',answers:[],revision:0}),
   setTimeout(fn,ms){assert.equal(ms,15000);context.timeout=fn;return 1;},clearTimeout(){events.push('clear-timeout');},
  };
- for(const name of ['setVerificationPending','setReplayable','setLocked','setDraft','setPlan','setOutcome','setVerified','setError','setEnded','onVerified','onVerificationFailed','onAccountChange'])context[name]=value=>events.push([name,value]);
+ for(const name of ['setOperation','setVerificationPending','setReplayable','setLocked','setDraft','setPlan','setOutcome','setVerified','setError','setEnded','onVerified','onVerificationFailed','onAccountChange'])context[name]=value=>events.push([name,value]);
  context.invalidate=()=>{context.generation.current++;context.active.current=false;context.verification.current.invalidate();context.controller.current?.abort();events.push('invalidated');};
  return {context,events,verify:actualSessionFunction('verify',context)};
 }
@@ -235,7 +235,7 @@ test('CF028 actual ChatView JSX retains pending status and disabled GET for dele
  for(const deleted of [false,true]){
   const tree=m.exports.ChatView({draft:{original_query:'',answers:[],revision:0},plan:null,outcome:deleted?{plan:null,plan_status:'deleted'}:null,verificationPending:true,busy:false,locked:true,verified:true,replayable:false,waivers:[]}),nodes=[];
   function visit(value){if(Array.isArray(value)){value.forEach(visit);return;}if(value&&typeof value==='object'){nodes.push(value);visit(value.props?.children);}}visit(tree);
-  assert.ok(nodes.some(n=>n.props?.role==='status'&&n.props.children==='상태 확인 중 · 실행 없음'));
+  assert.ok(nodes.some(n=>n.props?.role==='status'&&n.props.children===load().h.operationLabel('verification-get')));
   assert.ok(nodes.some(n=>n.type==='button'&&n.props.children==='상태 다시 확인 · GET만'&&n.props.disabled===true));
   if(deleted)assert.ok(nodes.some(n=>n.type==='h2'&&n.props.children==='삭제된 결과입니다'));
  }
@@ -310,9 +310,9 @@ function preparationAction(saved=null){
  const context={verification:ref({pending:false}),verified:true,verifiedHref:ref(href),active:ref(true),document:{visibilityState:'visible',activeElement:null,body:{}},window:{location:{href}},supervisorId:null,user:A,authEpoch:1,AbortController,HTMLElement:class SyntheticHTMLElement{},
   pending:ref(null),known:ref(null),preparing:ref(saved),planRef:ref(null),draftRef:ref(preparationDraft),preparationRef:ref(null),outcomeRef:ref(null),consentRef:ref({}),
   generation:ref(0),controller:ref(null),commandPending:ref(false),focusMovement:ref(0),intent:ref(new flow.AnalysisIntent()),planFocus:ref({invalidate(){},begin(){},adopt(){}}),timer:ref({stop(){}}),sessionStorage:store(),
-  matchesUrl:()=>true,newPreparation:h.newPreparation,writePreparation:h.writePreparation,bindPreparation:h.bindPreparation,planValue:h.planValue,preparationRequest:async()=>preparationView(),CoreHttpError:h.CoreHttpError,requiresReauthentication:()=>false,
+  matchesUrl:()=>true,newPreparation:h.newPreparation,writePreparation:h.writePreparation,bindPreparation:h.bindPreparation,planValue:h.planValue,preparationRequest:async()=>preparationView(),coreErrorMessage:h.coreErrorMessage,CoreHttpError:h.CoreHttpError,requiresReauthentication:()=>false,
   clearConsent(){},navigate(){},invalidate(){},onAccountChange(){},setTimeout:clock.setTimeout,clearTimeout:clock.clearTimeout};
- for(const name of ['setBusy','setError','setPlan','setDraft','setPreparation','setLocked','setReplayable','setOutcome'])context[name]=v=>events.push([name,v]);
+ for(const name of ['setOperation','setBusy','setError','setPlan','setDraft','setPreparation','setLocked','setReplayable','setOutcome'])context[name]=v=>events.push([name,v]);
  return {context,clock,events,h,action:actualSessionFunction('action',context)};
 }
 for(const kind of ['new','child','get'])test('CF034 actual action selects '+kind+' HTTP before choosing130/16 and does not renew timer',async()=>{
@@ -815,4 +815,60 @@ test('CF041 actual fixture handles only raw exact GET marker and leaves API/sess
   else assert.equal(writes.findLast(x=>x[0]==='status')[1],405);
  }
  assert.equal(JSON.stringify(counters),before);
+});
+
+
+// CF046: exact response semantics and display-only operation; no new execution state.
+for(const [status,code,expected] of [[429,'USAGE_LIMIT_EXCEEDED','USAGE_LIMIT_EXCEEDED'],[403,'FEATURE_UNAVAILABLE','FEATURE_UNAVAILABLE'],[504,'DEADLINE_EXCEEDED','DEADLINE_EXCEEDED'],[503,'USAGE_LIMIT_EXCEEDED','SERVICE_UNAVAILABLE'],[403,'AUTH_REQUEST_INVALID','SERVICE_UNAVAILABLE'],[429,'UNKNOWN_PRIVATE_CODE','SERVICE_UNAVAILABLE']])for(const kind of ['confirm','preparation'])test('CF046 '+kind+' preserves only paired safe code '+status+'/'+code,async()=>{
+ let posts=[];const {h}=load(async(url,init={})=>{if(url==='/api/auth/session')return Response.json({user_id:A,csrf_token:'fresh'});posts.push([url,init.body]);return Response.json({schema_version:h.VERSION,request_id:A,trace_id:B,data:null,error:{code,message:'secret-sentinel-raw-message'}},{status});});
+ const saved=store(),pending=kind==='confirm'?h.freshPending(draft,await plan(h),true,[]):await h.newPreparation(draft);
+ if(kind==='confirm')h.writePending(saved,A,pending);else await h.writePreparation(saved,A,pending);
+ const key=kind==='confirm'?h.pendingKey(A):h.preparationKey(A),before=saved.getItem(key);
+ const call=kind==='confirm'?()=>h.coreRequest('confirm',pending.confirm,A,new AbortController().signal,()=>true):()=>h.preparationRequest('post',pending.body,A,new AbortController().signal,()=>true);
+ await assert.rejects(call,e=>e.status===status&&e.code===expected&&!e.message.includes('secret-sentinel')&&!e.message.includes('UNKNOWN_PRIVATE_CODE'));
+ assert.equal(posts.length,1);assert.equal(saved.getItem(key),before);assert.equal(posts[0][1],JSON.stringify(kind==='confirm'?pending.confirm:pending.body));
+});
+for(const malformed of ['root-extra','error-extra','nonnull-data'])test('CF046 invalid error envelope cannot claim quota '+malformed,async()=>{
+ const {h}=load(async url=>{if(url==='/api/auth/session')return Response.json({user_id:A,csrf_token:'fresh'});const value={schema_version:h.VERSION,request_id:A,trace_id:B,data:null,error:{code:'USAGE_LIMIT_EXCEEDED',message:'raw private'}};if(malformed==='root-extra')value.raw='private';if(malformed==='error-extra')value.error.raw='private';if(malformed==='nonnull-data')value.data={};return Response.json(value,{status:429});});
+ await assert.rejects(()=>h.coreRequest('confirm',{},A,new AbortController().signal,()=>true),e=>e.code==='SERVICE_UNAVAILABLE'&&!e.message.includes('raw private'));
+});
+test('CF046 finite guidance distinguishes GET recovery from an unknown POST without exposing details',()=>{
+ const {h}=load();const timeout=new h.CoreHttpError(504,'DEADLINE_EXCEEDED');
+ assert.match(timeout.message,/처리/);assert.match(timeout.message,/취소·비용/);assert.doesNotMatch(timeout.message,/무료|실행되지|비용이 없/);
+ const known=h.coreErrorMessage(timeout,'request-get',true),unknown=h.coreErrorMessage(timeout,'confirm-post',false);
+ assert.match(known,/GET만/);assert.match(unknown,/서버 ID를 확인하지 못/);assert.match(unknown,/고정된 입력과 키/);assert.doesNotMatch(unknown,/GET/);
+ assert.match(h.coreErrorMessage(new Error('secret raw'),'preparation-post',false),/같은 준비 요청/);assert.doesNotMatch(h.coreErrorMessage(new Error('secret raw'),'preparation-post',false),/secret raw/);
+ assert.match(h.operationLabel('confirm-post'),/접수·분석 시작 여부는 응답 후/);assert.match(h.operationLabel('preparation-delete'),/이미 실행된 분석 취소를 뜻하지/);
+});
+for(const kind of ['new','get','child'])test('CF046 actual action display follows '+kind+' HTTP and settles its generation',async()=>{
+ const h=load().h,root=await h.newPreparation(preparationDraft),saved=kind==='get'?await h.bindPreparation(root,A):root;
+ const run=preparationAction(kind==='new'?null:saved),held=deferred(),entered=deferred();run.context.preparationRequest=async()=>{entered.resolve();return held.promise;};run.action=actualSessionFunction('action',run.context);
+ const child={...preparationDraft,selected_ticker:'005930',candidate_ref:'a'.repeat(64)};const job=run.action('prepare',kind==='child'?child:undefined,kind==='child'?B:null);await entered.promise;
+ assert.deepEqual(run.events.filter(([n])=>n==='setOperation').map(([,v])=>v),[kind==='get'?'preparation-get':kind==='child'?'child-post':'preparation-post']);
+ held.resolve(preparationView());await job;assert.deepEqual(run.events.filter(([n])=>n==='setOperation').at(-1),['setOperation',null]);
+});
+test('CF046 actual confirm waiting is not running and quota keeps fixed pending for explicit same-key recovery',async()=>{
+ const run=preparationAction(),p=await plan(run.h),entered=deferred(),held=deferred();run.context.planRef.current=p;run.context.consentRef.current={allow:true,partial:true,waivers:[]};
+ Object.assign(run.context,{freshPending:run.h.freshPending,writePending:run.h.writePending,canReplayCore:run.h.canReplayCore,canAdoptPreparation:run.h.canAdoptPreparation,coreRequest:async()=>{entered.resolve();return held.promise;}});
+ run.action=actualSessionFunction('action',run.context);const job=run.action('confirm');await entered.promise;
+ const before=run.context.sessionStorage.getItem(run.h.pendingKey(A));assert.ok(before);assert.deepEqual(run.events.filter(([n])=>n==='setOperation').at(-1),['setOperation','confirm-post']);
+ held.reject(new run.h.CoreHttpError(429,'USAGE_LIMIT_EXCEEDED'));await job;
+ assert.equal(run.context.sessionStorage.getItem(run.h.pendingKey(A)),before);assert.ok(run.context.pending.current);assert.match(run.events.filter(([n])=>n==='setError').at(-1)[1],/같은 확정 요청/);assert.equal(run.context.known.current,null);
+});
+for(const operation of ['preparation-post','preparation-get','child-post','confirm-post','request-get','preparation-delete'])test('CF046 actual ChatView renders operation '+operation+' without IO or false analysis start',()=>{
+ const unit=chatNavigationUnit(),{h}=load();const nodes=unit.render({busy:true,operation}),labels=nodes.filter(n=>n.props?.role==='status').map(n=>n.props.children);
+ assert.ok(labels.includes(h.operationLabel(operation)));assert.equal(labels.some(t=>typeof t==='string'&&t.startsWith('Flow 분석 실행 중')),false);
+ unit.render({busy:true,operation});assert.equal(unit.requests.length,0);assert.equal(unit.storage.length,0);assert.equal(unit.callbacks.length,0);
+});
+for(const state of ['running','result_ready','unknown','stored'])test('CF046 actual outcome '+state+' is distinct from a GET-only observation',()=>{
+ const unit=chatNavigationUnit(),flow={state,deadline_at:'2026-11-12T00:00:00Z'},outcome={plan:null,plan_status:'confirmed',coverage:'pending',views:[{view:'flow',state}],flow};
+ const nodes=unit.render({outcome,verificationPending:true,operation:'request-get',locked:true}),labels=nodes.filter(n=>n.props?.role==='status').map(n=>n.props.children);
+ assert.ok(labels.some(t=>typeof t==='string'&&t.includes('새 분석 실행 없음')&&t.includes('GET만')));
+ assert.equal(labels.some(t=>typeof t==='string'&&t.startsWith('Flow 분석 실행 중')),state==='running');
+});
+test('CF046 fixture failure enum is closed and after raw attempt accounting but before successful handler counts',()=>{
+ const source=fs.readFileSync('tests/integration/supervisor/chat-browser-fixture.mjs','utf8');
+ assert.match(source,/coreFailure:'none'/);assert.match(source,/\['none','usage','feature','deadline','service'\]\.includes\(body.coreFailure\)/);
+ assert.ok(source.indexOf('recordAttempt(req.url')<source.indexOf("if(coreFailure!=='none')"));assert.ok(source.indexOf("if(coreFailure!=='none')")<source.indexOf('counts.preparePOST++'));
+ assert.match(source,/usage:\['USAGE_LIMIT_EXCEEDED',429\]/);assert.match(source,/feature:\['FEATURE_UNAVAILABLE',403\]/);assert.match(source,/deadline:\['DEADLINE_EXCEEDED',504\]/);
 });

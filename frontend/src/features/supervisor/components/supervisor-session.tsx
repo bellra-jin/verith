@@ -2,7 +2,7 @@
 import {useCallback,useEffect,useRef,useState,type ReactNode} from 'react';
 import {fetchSession,AnalysisIntent,AnalysisObservation,AnalysisAccountChanged} from '@/features/flow/lib/analysis-request';
 import {ChatView} from './chat-view';
-import {coreRequest,loadCoreRecovery,writePending,freshPending,pendingKey,matchesUrl,CoreHttpError,legacyFlowRecovery,canReplayCore,requiresReauthentication,CoreObservationTimer,clarifiedDraft,newPreparation,readPreparation,writePreparation,preparationKey,preparationRequest,canAdoptPreparation,bindPreparation,planValue,canResetConversation,hash} from '../lib/supervisor-request';
+import {coreRequest,loadCoreRecovery,writePending,freshPending,pendingKey,matchesUrl,CoreHttpError,legacyFlowRecovery,canReplayCore,requiresReauthentication,CoreObservationTimer,clarifiedDraft,newPreparation,readPreparation,writePreparation,preparationKey,preparationRequest,canAdoptPreparation,bindPreparation,planValue,canResetConversation,hash,operationLabel,coreErrorMessage,type CoreOperation} from '../lib/supervisor-request';
 import type {Draft,Plan,Outcome,Pending,Answer,Preparation,PreparePending} from '../model/chat';
 import '../styles/chat.css';
 const empty=():Draft=>({original_query:'',answers:[],revision:0});
@@ -156,6 +156,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   [plan,setPlan]=useState<Plan|null>(null),
   [outcome,setOutcome]=useState<Outcome|null>(null),
   [busy,setBusy]=useState(false),
+  [operation,setOperation]=useState<CoreOperation|null>(null),
   [verificationPending,setVerificationPending]=useState(false),
   [verified,setVerified]=useState(false),
   [locked,setLocked]=useState(Boolean(supervisorId)),
@@ -199,6 +200,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
  setVerified(false);
  setReplayable(false);
  setBusy(false);
+ setOperation(null);
  planRef.current=null;
  preparationRef.current=null;
  setPreparation(null);
@@ -217,6 +219,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
    const token={owner:user,href:target,generation:rev,controller:c};
    if(!verification.current.begin(token))return;
    setVerificationPending(true);
+   setOperation('verification-get');
    planFocus.current.invalidate();
    timer.current.stop();
    controller.current?.abort();
@@ -294,12 +297,12 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
     onVerified(user,authEpoch);
     setError(recovery.storageReadable?'':'고정 입력을 읽지 못해 GET-only로 확인합니다. POST 복구는 잠겨 있습니다.');
    }catch(e){if(current()){setVerified(false);
-   setError(e instanceof CoreHttpError?e.message:'상태를 확인하지 못했습니다. 같은 ID로 GET 재조회할 수 있습니다.');
+   setError(coreErrorMessage(e,'verification-get',Boolean(known.current||preparing.current?.preparation_id)));
    if(requiresReauthentication(e)){invalidate();
    onAccountChange(user,authEpoch);
    }else onVerificationFailed(user,authEpoch);}}
    finally{clearTimeout(t);
-    if(verification.current.finish(token))setVerificationPending(false);
+    if(verification.current.finish(token)){setVerificationPending(false);setOperation(null);}
    }
   }
   restore.current=(manual=false)=>void verify(manual);
@@ -353,6 +356,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
  intent.current.invalidate();
  controller.current?.abort();
  setBusy(false);
+ setOperation(null);
  clearConsent();
  planRef.current=null;
  setPlan(null);
@@ -369,6 +373,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   }
   const selectedPreparation=kind==='prepare'&&!(nextDraft&&parentId)?preparing.current:null;
   const preparationMethod=selectedPreparation?.preparation_id?'get':'post';
+  const displayOperation:CoreOperation=kind==='confirm'?'confirm-post':preparationMethod==='get'?'preparation-get':nextDraft&&parentId?'child-post':'preparation-post';
   const ticket=intent.current.begin();
   if(ticket===null)return;
   const rev=++generation.current,target=window.location.href,c=new AbortController();
@@ -379,6 +384,7 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   controller.current?.abort();
   controller.current=c;
   setBusy(true);
+  setOperation(displayOperation);
   setError('');
   timer.current.stop();
   const sameContext=()=>active.current&&rev===generation.current&&intent.current.accepts(ticket)&&window.location.href===target&&verifiedHref.current===target&&document.visibilityState!=='hidden';
@@ -387,9 +393,9 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
    c.abort();
    if(sameContext()){
     planFocus.current.invalidate();
-    setError('응답을 확인하지 못했습니다. 확정한 입력과 키는 유지됩니다.');
+    setError(coreErrorMessage(new CoreHttpError(504,'DEADLINE_EXCEEDED'),displayOperation,Boolean(kind==='prepare'?preparing.current?.preparation_id:known.current)));
     intent.current.finish(ticket);
-    commandPending.current=false;setBusy(false);
+    commandPending.current=false;setBusy(false);setOperation(null);
    }
   },kind==='confirm'?145000:preparationMethod==='post'?130000:16000);
   try{
@@ -461,14 +467,14 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
    setReplayable(false);
    clearConsent();
   }
-  setError(e instanceof CoreHttpError?e.message:'응답을 확인하지 못했습니다. 확정한 입력과 키는 유지됩니다.');
+  setError(coreErrorMessage(e,displayOperation,Boolean(kind==='prepare'?preparing.current?.preparation_id:known.current)));
   if(requiresReauthentication(e)){invalidate();
   onAccountChange(user,authEpoch);
   }}}
   finally{clearTimeout(t);
   const ownsPending=rev===generation.current&&intent.current.accepts(ticket);
   intent.current.finish(ticket);
-  if(ownsPending){commandPending.current=false;setBusy(false);}
+  if(ownsPending){commandPending.current=false;setBusy(false);setOperation(null);}
   }
  }
  async function answer(slot:Answer['slot'],value:string){if(verification.current.pending||draftRef.current.revision>=4||draftRef.current.answers.length>=8)return;
@@ -490,13 +496,14 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
   setPlan(null);
   const saved=preparing.current;
   if(!saved)return true;
-  if(!saved.preparation_id){setBusy(false);setError('준비 접수 여부가 불명확합니다. 같은 준비 요청으로 확인한 뒤 원문을 삭제할 수 있습니다.');return false;}
+  if(!saved.preparation_id){setBusy(false);setOperation(null);setError('준비 접수 여부가 불명확합니다. 같은 준비 요청으로 확인한 뒤 원문을 삭제할 수 있습니다.');return false;}
   const rev=generation.current,target=window.location.href,c=new AbortController();
   controller.current=c;
   const current=()=>active.current&&generation.current===rev&&window.location.href===target&&document.visibilityState!=='hidden';
   const deadline=setTimeout(()=>c.abort(),16000);
   commandPending.current=true;
   setBusy(true);
+  setOperation('preparation-delete');
   try{
    const result=await preparationRequest('delete',saved.preparation_id,user,c.signal,current);
    if(!current())return false;
@@ -505,8 +512,8 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
    setPreparation(result);
    sessionStorage.removeItem(preparationKey(user));
    return true;
-  }catch(e){if(current()){setError(e instanceof CoreHttpError?e.message:'준비 삭제를 확인하지 못했습니다. 기존 키를 보존합니다.');if(requiresReauthentication(e)){invalidate();onAccountChange(user,authEpoch);}}return false;}
-  finally{clearTimeout(deadline);if(current()){commandPending.current=false;setBusy(false);}}
+  }catch(e){if(current()){setError(coreErrorMessage(e,'preparation-delete',true));if(requiresReauthentication(e)){invalidate();onAccountChange(user,authEpoch);}}return false;}
+  finally{clearTimeout(deadline);if(current()){commandPending.current=false;setBusy(false);setOperation(null);}}
  }
  async function startNew(){if(verification.current.pending||busy)return;
  planFocus.current.invalidate();
@@ -531,13 +538,13 @@ onAccountChange:(user:string,epoch:number)=>void;onVerified:(user:string,epoch:n
  sessionStorage.removeItem(preparationKey(user));
  clearConsent();
  setDraft(empty());setPlan(null);setOutcome(null);setPreparation(null);
- setLocked(false);setReplayable(false);setEnded(false);setError('');
+ setLocked(false);setReplayable(false);setEnded(false);setError('');setOperation(null);
  setVerified(false);verifiedHref.current=null;
  navigate('/research',true);
  if(supervisorId===null)restore.current(true);
  }
- if(!verified)return <section className="supervisor-chat" aria-busy={verificationPending}><h1>Supervisor 리서치</h1><p>계정과 요청 상태를 다시 확인해야 합니다. 원문과 결과는 숨겨졌습니다.</p>{error&&<p role="alert">{error}</p>}{verificationPending&&<p role="status">상태 확인 중 · 실행 없음</p>}<button disabled={rechecking||verificationPending} onClick={()=>restore.current(true)}>상태 다시 확인 · GET만</button><button onClick={()=>navigate('/')}>보관함</button></section>;
- return <ChatView onPendingCommit={onPendingCommit} onPlanCommit={onPlanCommit} verificationPending={verificationPending} canStartNew={canResetConversation(pending.current,known.current,outcome)} preparation={preparation} onCancelPreparation={()=>void cancelPreparation()} draft={draft} plan={plan} outcome={outcome} busy={busy} verified={verified} locked={locked} replayable={replayable} error={error} consent={consent} partialConsent={partial} waivers={waivers} observationEnded={ended} onQuery={q=>void edit({original_query:q,answers:[],revision:0})} onPrepare={()=>void action('prepare')} onAnswer={(slot,value)=>void answer(slot,value)} onSelect={ticker=>{if(verification.current.pending)return;const next={...draftRef.current,selected_ticker:ticker,candidate_ref:planRef.current?.candidate_ref};
+ if(!verified)return <section className="supervisor-chat" aria-busy={verificationPending}><h1>Supervisor 리서치</h1><p>계정과 요청 상태를 다시 확인해야 합니다. 원문과 결과는 숨겨졌습니다.</p>{error&&<p role="alert">{error}</p>}{verificationPending&&<p role="status">{operationLabel('verification-get')}</p>}<button disabled={rechecking||verificationPending} onClick={()=>restore.current(true)}>상태 다시 확인 · GET만</button><button onClick={()=>navigate('/')}>보관함</button></section>;
+ return <ChatView onPendingCommit={onPendingCommit} onPlanCommit={onPlanCommit} verificationPending={verificationPending} canStartNew={canResetConversation(pending.current,known.current,outcome)} preparation={preparation} onCancelPreparation={()=>void cancelPreparation()} draft={draft} plan={plan} outcome={outcome} busy={busy} operation={operation} verified={verified} locked={locked} replayable={replayable} error={error} consent={consent} partialConsent={partial} waivers={waivers} observationEnded={ended} onQuery={q=>void edit({original_query:q,answers:[],revision:0})} onPrepare={()=>void action('prepare')} onAnswer={(slot,value)=>void answer(slot,value)} onSelect={ticker=>{if(verification.current.pending)return;const next={...draftRef.current,selected_ticker:ticker,candidate_ref:planRef.current?.candidate_ref};
  clearConsent();
  void action('prepare',next,preparationRef.current?.preparation_id??null);
  }} onConsent={v=>{if(verification.current.pending)return;consentRef.current.allow=v;

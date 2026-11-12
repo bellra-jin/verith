@@ -172,6 +172,7 @@ const reviewedCodeRoots=Object.freeze([
  path.join(reviewedWorkspace,'verith-technical-chart-browser','frontend'),
  path.join(reviewedWorkspace,'verith-technical-owned-read','frontend'),
  path.join(reviewedWorkspace,'verith-supervisor-fundamental-navigation','frontend'),
+ path.join(reviewedWorkspace,'verith-supervisor-flow-status-ux','frontend'),
 ]);
 const reviewedDependencyRoot=path.join(reviewedWorkspace,'verith','frontend','node_modules');
 const lockSHA='bb3a6a2b6c2e6374a4fa43ab8d3022ea678b0e60a003ff2b2aafb5610a7c7fed';

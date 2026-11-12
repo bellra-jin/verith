@@ -40,3 +40,9 @@ $0.9135는 실행당 보수 예약이고 실제 사용액/청구서/사용자 �
 ## CF-019 표시·삭제 및 운영 설정 안내
 
 [한도 설정 형태/주입/적용 시점](flow-usage-configuration.md)은 source 기반 안내이며 실제 값이나 운영 DB 적용을 확인/활성화한 것이 아니다. [표시·삭제 계약](contracts/flow-display-quality-v1.md)은 저장0/누락/작은값과 active 상세 확인/복구를 구분한다. 현재 구현/검사와 실제 React 합성 클릭 도구 차단은 [작업 기록](work/CF-019-flow-quality-delete-ux.md)을 따른다. Backend self3/unit54·Frontend94/type/lint는 통과했지만 수정 후 초기 GET/본문·삭제 클릭은 미검증이고 run5 자동 정리/테스트 프로필 정리 증거는 대기이므로 CF019 전체 수용/merge-ready가 아니다. 앞선 CF017 관측/미확인 문장은 그때 이력이며 이번 source/클릭 증거로 소급하지 않는다.
+
+## CF-047 새 로그인 세션의 SQL 저장본 복구
+
+기존 CF029의 합성 coordinator 저장 anchor를 재사용해, 같은 owner의 새 SQL 발급 세션 A2에서 전체 payload·목록·동일 confirmation binding을 대조한다. 저장 당시 index의 A1 session metadata는 보존한다. 새 고정 owned 모드는 Frontend 없이 기존 Backend bootstrap을 두 번 순차 exec하고 PID·nonce·포트 소유권과 같은 제한 DB identity를 확인한다. 자식의 관측은 보고서 GET만이며, 기본 gate가 닫힌 Supervisor binding은 parent ASGI에서 확인한다.
+
+fake bootstrap의 시작 probe는 합성 쓰기 뒤 outer rollback이므로 프로세스 전체가 SELECT-only라는 뜻은 아니다. probe 이후 committed rows·원 run/회계·meaning unknown hold를 대조한다. 실제 PG/두 PID의 이번 실행 결과와 정리는 [CF047 기록](work/CF-047-flow-owned-read-continuity.md)에 구분한다. 이 검사는 실제 Google 로그인·사용자 영구 보관함·운영 DB/HTTPS 배포나 새로운 KIS/OpenAI 분석 성공의 증거가 아니다. 이전 실제 분석의 정리된 raw 보고서를 복원한 것도 아니다.

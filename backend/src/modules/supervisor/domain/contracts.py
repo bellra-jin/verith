@@ -307,8 +307,8 @@ InternalOutput=CoreInternalOutput
 MeaningRunInput=CoreMeaningRunInput
 MeaningRunOutput=CoreMeaningRunOutput
 
-MEANING_SPEC={'version': 'supervisor.meaning.v1', 'policy': 'supervisor.flow-core.2', 'model': 'gpt-5.4-mini-2026-03-17', 'price': {'id': 'openai.gpt-5.4-mini.standard.2026-11-10.v1', 'currency': 'USD', 'input_nano_per_token': 750, 'cached_nano_per_token': 75, 'output_nano_per_token': 4500}, 'caps': {'input_tokens': 16384, 'output_tokens': 2048, 'attempts': 2, 'count_requests': 2, 'generation_requests': 2, 'attempt_reserve_nano': 50000000, 'unit_budget_nano': 100000000, 'request_bytes': 65536, 'count_response_bytes': 8192, 'response_bytes': 65536, 'candidate_bytes': 16384, 'provider_seconds': 55, 'verifier_seconds': 60}, 'service_tier': 'default', 'store': False, 'prompt_sha256': '0456f2afc6939b45a61c6d59159bd42a8e807647c656b15fb7ed23a0bf7714c4', 'schema_sha256': '1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'}
-MEANING_SPEC_SHA256='8a873009b7bf71f78b90efbf495ecd920ea12a8027f0ad629b5a530759f3c943'
+MEANING_SPEC={'version': 'supervisor.meaning.v1', 'policy': 'supervisor.flow-core.2', 'model': 'gpt-5.4-mini-2026-03-17', 'price': {'id': 'openai.gpt-5.4-mini.standard.2026-11-10.v1', 'currency': 'USD', 'input_nano_per_token': 750, 'cached_nano_per_token': 75, 'output_nano_per_token': 4500}, 'caps': {'input_tokens': 16384, 'output_tokens': 2048, 'attempts': 2, 'count_requests': 2, 'generation_requests': 2, 'attempt_reserve_nano': 50000000, 'unit_budget_nano': 100000000, 'request_bytes': 65536, 'count_response_bytes': 8192, 'response_bytes': 65536, 'candidate_bytes': 16384, 'provider_seconds': 55, 'verifier_seconds': 60}, 'service_tier': 'default', 'store': False, 'prompt_sha256': 'bc46a22dedceccf2e8b9dcce631c710014595d4440304791f10776bf217fcc6e', 'schema_sha256': '1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'}
+MEANING_SPEC_SHA256='fcacc993fa77c783b0148daa15e42fa13ce2c3f526bc071355394ccc07f37911'
 
 
 class CorePreparationRequest(CoreStrict):

@@ -587,3 +587,16 @@ runtime 참조를 해제하며 startup 자체는 HTTP·DB·provider·계정 발�
 같은 canonical namespace/bootstrap/ordinal4의 고정 recovery identity와 sibling claim 하나를 사용한다. source preload와 같은 canonical flock 뒤 O_EXCL/NOFOLLOW·0600·file/directory fsync로 claim을 먼저 소비하며, 검토 입력의 parent before stamp(mtime/ctime 포함)와 claim 이후 stamp를 검증한다. 삭제·소실을 available로 보거나 새 폴더/nonce/source/ID로 슬롯을 늘리지 않는다. 지원된 독립 durable 이력에서 미발급 확인과 정확한 단일 회복 record/readback은 부모 조율 책임이며 로컬 claim은 그 권위를 대체하지 않는다. authenticated readback/local claim ACK 전 새 journal state·자원·키·송신은 없다.
 
 초기 reserve 및 모든 phase/journal은 nominal allocation50m, 새 외부 예약0, carried/total400m을 구분한다. 새 consumer의 실제 issued_at 기준120초 시작/입력과600초 이하 lease·2026-11-12 08UTC 종료 상한, count1/gen1/HTTP2/retry0 및 기존55/60·정산/cleanup 한계를 유지한다. 확인 불명·취소·실패면 소비/hold를 보존하고 자동 recovery2/ordinal5나 추가 송신을 하지 않는다. 이 private 실행 보완은 production gateway/Flow 전체 인수나 새로운 운영 정책 발급이 아니다.
+
+
+### 모델 후보의 종목과 수급 주체 구분
+
+`mentions`는 원문/지정 답변에 있는 종목·회사 이름 또는 입력된 6자리 종목 코드만을 위한
+필드다. 외국인·기관·개인은 종목 mention이 아니라 flow의 focus/exclude 조건이며, 제외는
+같은 출처의 명시된 인접 부정 근거를 보존해야 한다. 기간은 conditions에 원래 수와 단위로
+남기고 모델이 지원 여부를 판단하지 않는다. 이 구분을 prompt에 명시했으며 wire/schema와
+기존 grounding·인접 부정·고정 frame/plan 검증을 완화하거나 후보를 자동 재분류하지 않는다.
+
+실제 관측한 잘못된 `외국인` mention은 원문 위치가 정확해도 계속 거절된다. 이번 수정의
+semantic identity는 prompt SHA만 바뀌며 과거 실행의 spec·입력·회계는 갱신하지 않는다.
+합성 후보의 수용/거절 회귀는 수정 후 실제 모델의 분류 품질이나 전체 실행 수용 증거가 아니다.

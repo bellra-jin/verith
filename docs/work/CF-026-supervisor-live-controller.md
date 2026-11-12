@@ -972,3 +972,34 @@ consumed 실행 증거는 불변이다. PR은 Draft로 유지하고 병합하지
 거절은 views 항목0의 기존 validate 판정에서 EVIDENCE_SOURCE_SPAN_TEXT_MISMATCH로 확인됐다. 제안된 overview 근거는 원문 start0/end15를 가리켰지만 supplied_text는 ‘현대건설 외국인’이어서 실제 원문 구간 ‘현대건설 외국인 말고 3주 ’와 일치하지 않았다. 근거 불일치를 fail-closed로 거절한 결과이며 overview나 조건 해석을 성공으로 채택하지 않는다. 이 기록을 후보가 남지 않은 이전 ordinal2의 원인이라고 소급 단정하지 않는다.
 
 최종 journal closed·6개 phase·delegated local accounting ACK·cleanup_confirmed, entry False/원래 hash·PID 부재·자기 source copy 부재를 확인했다. 실제 원문/readback·입력/source/실행 hash·usage/진단·정리 증거는 별도 비공개 결과로 보존하고 공개 Git에 넣지 않는다. 추가 외부 호출·발급·ordinal4는 하지 않았다. 이번 결과는 production Supervisor→Flow 전체 또는 Technical 엔진 인수가 아니다.
+
+## CF037 B6 · CF038 이후의 한 질문 재검증 준비
+
+기준 develop `527a73bfd3f3f886cd2b37021d510d1051177f05`의 별도 브랜치에서 준비한다.
+기존 소비된 ordinal3은 응답·usage804/285/1089·관측 추정USD0.0018855·정산ACK 이후
+의미 거절로 종료됐고, 새 검증의 성공 근거로 소급하지 않는다. 기존350m과 당시 source,
+입력·원장·private False·cleanup 증거는 그대로다.
+
+이번은 ordinal4 한 번만 허용하는 후속 분기다. 계획된 추가50m/누적400m은 기존 총한도 안의
+보수 예약이며 아직 실제 배정 여부와 구분한다. 운영 정책 숫자나 새 budget root로 복사하지 않는다.
+기존 helper/단일 unit/보호 entry와 새 private3 사본만 재사용한다. check_safe의 선택·AI32와
+C controller/worker/guard/package/lock은 변경하지 않는다.
+
+CF038 전후 semantic 차이는 정확 prompt SHA 하나다. 과거 prompt/spec/요청 hash를 당시
+고정 source로 재구성해 검증하고, 현재 요청은 현재 rendered request와 전체 count projection에
+대조한다. 과거 equality를 삭제하거나 새 prompt를 옛 실행에 repin하지 않는다.
+현재 alignment의 실제 거절 위치를 유한 이유 코드로 추가했으며 미상은 그대로 미상이다.
+validator/prompt/schema를 진단을 위해 다시 바꾸지 않는다.
+
+집중 검증은 원본 history 불변, 400m·canonical once, 중복/ACK 손실·취소·source/spec drift,
+현재 위치 정합화·overview 거절, 비밀 없는 투영과 private 비활성·정리를 검사한다.
+기존 전체 의미/Frontend/CF044 PG 회귀는 이번 준비 때문에 반복하지 않는다.
+실제 호출은 독립 소스/정확 입력 대조와 부모의 durable 일회 write/readback·같은 stdio 전달 뒤
+한 번만 진행한다. 실제 결과·관측 usage/추정·정산·400m 또는 미발급·원복/cleanup을 분리한다.
+의미 거절이면 새 ordinal5나 추가 송신을 하지 않으며 production/Flow 전체 인수로 확대하지 않는다.
+
+B6 준비의 최종 보호 self4·단일 unit465·private 합성45가 통과했고 guard 위반0,
+부모 exit0·자기 사본 제거 및 두 독립 검토를 확인했다. 실제292파일 copy/import·Scope.check도
+무키로 통과했다. 현재 ordinal4는 발급·로컬 claim·예약·키 내용 읽기·DB/API·활성화0이다.
+실제 한 번의 외부 실행은 별도의 구체 실행 승인 확인이 남아 보류하며, 준비 검사를
+실모델 의미 수용으로 보고하지 않는다. 기존350m과 비공개 실제 기록/False는 그대로다.

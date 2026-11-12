@@ -843,6 +843,24 @@ class CF023Boundary(unittest.TestCase):
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
 class CF024Boundary(unittest.TestCase):
+    def test_CF047_exact_readonly_bootstrap_inputs_and_tamper_rejection(self):
+        import ast,hashlib
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        expected={'backend/scripts/google_login_bootstrap.py':'5937d610c482b1a5e92671b7bad8f496f4c0e292a8d451fc34347381df7df48c',
+                  'backend/scripts/google_login_inputs.py':'4fddb30281357a58b259872bf6cc87542fb41c65928357aab045134d8f155c95'}
+        self.assertEqual(c.CF047_INPUTS,expected)
+        execute=next(n for n in ast.parse((root/'backend/scripts/check_safe.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        gate=next(n for n in ast.walk(execute) if isinstance(n,ast.If) and 'CF047_INPUTS' in ast.unparse(n.test))
+        code=compile(ast.fix_missing_locations(ast.Module(body=[gate],type_ignores=[])),'<actual-source-hash-gate>','exec')
+        for path,digest in expected.items():
+            raw=c.regular_bytes(root,path)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),digest)
+            self.assertTrue(c.source_allowed(path));self.assertFalse(c.source_allowed(path+'.adjacent'))
+            namespace=vars(c)|{'p':path,'data':raw}
+            exec(code,namespace)
+            with self.assertRaises(c.UnsafeCheck):exec(code,namespace|{'data':raw+b'\n# changed'})
+
     def test_exact_existing_inputs_new_single_collection(self):
         import hashlib
         from scripts import check_safe as c

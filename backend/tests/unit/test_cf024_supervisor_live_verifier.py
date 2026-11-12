@@ -746,9 +746,90 @@ def test_crosspath_source_keeps_two_assemblies_same_epoch_and_adopts_actual_owne
     assert 'validate_plan(view[\'plan\'], Draft.model_validate(first_body[\'draft\']))' in source
     assert "value['client_key'] = str(uuid4())" in source
     confirmations=[n for n in ast.walk(node) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='call' and len(n.args)>=3 and isinstance(n.args[2],ast.Name) and n.args[2].id=='confirmation']
-    assert len(confirmations)==3  # 429, same key/body retry, replay
+    assert len(confirmations)==4  # 429, same key/body retry, A1 replay, SQL-issued A2 replay
     assert "patch.dict('os.environ'" in source and 'app.dependency_overrides.update(previous)' in source
     assert 'DELETE' not in source and 'verify_live' not in source
+
+
+def continuity_decoders():
+    from src.modules.flow.api.schemas import FlowReportEnvelope,FlowReportListResponse
+    from src.modules.flow.domain.payload import projection_values_equal
+    nodes=[n for n in crosspath_ast().body if isinstance(n,ast.FunctionDef) and n.name in {'flow_response','restored_report','report_list'}]
+    def check(value,label):assert value,label
+    namespace=dict(check=check,FlowReportEnvelope=FlowReportEnvelope,FlowReportListResponse=FlowReportListResponse,projection_values_equal=projection_values_equal)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes,type_ignores=[])),'<CF047-actual-response-checks>','exec'),namespace)
+    return namespace
+
+
+@pytest.mark.parametrize('kind',['driver','stdlib','string','integer','bytes','object'])
+async def test_synthetic_SQL_epoch_binding_normalizes_only_UUID_family(kind,monkeypatch):
+    from asyncpg.pgproto.pgproto import UUID as DriverUUID
+    from scripts import cf002_interactive_login as runner
+    from src.modules.auth.application import session_service as auth
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    identifier=uuid4()
+    class UUIDLike:
+        def __str__(self):return str(identifier)
+    value={'driver':DriverUUID(str(identifier)),'stdlib':identifier,'string':str(identifier),'integer':identifier.int,'bytes':identifier.bytes,'object':UUIDLike()}[kind]
+    row=NS(id=value,created_at=datetime.now(timezone.utc),unit_id='CF023',semantic_sha256=B.MEANING_SPEC_SHA256,price_sha256=B.sha(B.MEANING_SPEC['price']),max_nano=100000000,attempt_reserve_nano=50000000,max_attempts=2,reserved_nano=0,count_requests=0,generation_requests=0,blocked=False,active_attempt_id=None,attempts_json={})
+    session=NS(commit=AsyncMock());proof=NS(_owner=NS(receipt=object()));p=principal()
+    @asynccontextmanager
+    async def owned(given):
+        assert given is proof
+        yield session
+    monkeypatch.setattr(runner,'owned_session',owned)
+    validate=AsyncMock();monkeypatch.setattr(auth,'validate_principal',validate)
+    monkeypatch.setattr(repo,'verifier_epoch',AsyncMock(return_value=row))
+    if kind in {'driver','stdlib'}:
+        binding=await C.capture_synthetic_epoch(proof,p)
+        assert type(binding.epoch_id) is UUID and binding.epoch_id==identifier
+        assert binding.epoch_created_at==row.created_at and binding.epoch_state_sha256==B.sha(C.epoch_state(row))
+        assert binding.proof is proof and binding.receipt is proof._owner.receipt and binding.mode=='synthetic'
+        session.commit.assert_awaited_once()
+    else:
+        with pytest.raises(CounterUnavailable):await C.capture_synthetic_epoch(proof,p)
+        session.commit.assert_not_awaited()
+    validate.assert_awaited_once_with(session,p,lock=True)
+
+
+@pytest.mark.parametrize('mutation',['none','zero_bool','null_zero','number_text','extension_missing','interpretation','verification'])
+def test_new_session_report_is_compared_to_committed_payload_losslessly(mutation):
+    import copy
+    namespace=continuity_decoders();report_id=str(uuid4())
+    expected={'signals':{'zero':0,'missing':None},'interpretation':'저장된 합성 해석','verification':{'passed':True},'extension':{'nested':[0,None,False]}}
+    actual=copy.deepcopy(expected)
+    if mutation=='zero_bool':actual['signals']['zero']=False
+    elif mutation=='null_zero':actual['signals']['missing']=0
+    elif mutation=='number_text':actual['signals']['zero']='0'
+    elif mutation=='extension_missing':actual.pop('extension')
+    elif mutation=='interpretation':actual['interpretation']='다른 합성 해석'
+    elif mutation=='verification':actual['verification']['passed']=False
+    response=httpx.Response(200,json={'report_id':report_id,'report':actual},headers={'cache-control':'private, no-store'})
+    if mutation=='none':assert namespace['restored_report'](response,report_id,expected)['report']==expected
+    else:
+        with pytest.raises(AssertionError):namespace['restored_report'](response,report_id,expected)
+    assert expected['signals']=={'zero':0,'missing':None}
+
+
+@pytest.mark.parametrize('mutation',['none','missing','duplicate','count','limit','offset','bool_count','wrong_agent','envelope','public','status'])
+def test_new_session_list_requires_exact_report_once_and_actual_pagination(mutation):
+    namespace=continuity_decoders();report_id=str(uuid4())
+    item=dict(id=str(uuid4()),agent_type='flow',agent_report_id=report_id,request_id=None,client_session_id=None,stock_code='000720',stock_name='합성 종목',question='합성 질문',answer_text='합성 해석',data_status=None,trace_id=None,as_of=None,created_at='2026-11-12T00:00:00Z',summary={'zero':0})
+    body=dict(items=[item],limit=20,offset=0,count=1)
+    if mutation=='missing':body.update(items=[],count=0)
+    elif mutation=='duplicate':body.update(items=[item,item],count=2)
+    elif mutation=='count':body['count']=0
+    elif mutation=='limit':body['limit']=100
+    elif mutation=='offset':body['offset']=1
+    elif mutation=='bool_count':body['count']=True
+    elif mutation=='wrong_agent':item['agent_type']='technical'
+    elif mutation=='envelope':body={'data':body,'error':None}
+    response=httpx.Response(503 if mutation=='status' else 200,json=body,headers={} if mutation=='public' else {'cache-control':'private, no-store'})
+    if mutation=='none':assert namespace['report_list'](response,report_id,included=True)==body
+    else:
+        with pytest.raises(AssertionError):namespace['report_list'](response,report_id,included=True)
+    hidden=httpx.Response(200,json=dict(items=[],limit=20,offset=0,count=0),headers={'cache-control':'private, no-store'})
+    assert namespace['report_list'](hidden,report_id,included=False)['count']==0
 
 
 @pytest.mark.parametrize('flag,checker,phase',[('--verify-supervisor-meaning-flow-db','verify_meaning_flow_crosspath','supervisor_meaning_flow_db_check'),('--verify-supervisor-meaning-assembly-db','verify_meaning_assembly','supervisor_meaning_assembly_db_check')])
@@ -761,7 +842,7 @@ def test_actual_CLI_parser_DB_only_routing_bounded_dispatch_and_cleanup(flag,che
     main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
     events=[];logs=[];proof=NS(safe_receipt=lambda:dict(resource_id='synthetic-owned',container_id='0'*64,created_at='synthetic',host='127.0.0.1',port=1234,persistent_mounts=[],cleanup_owner='synthetic',nonce=PRIVATE))
     owner=NS(create=lambda:(events.append('create') or proof),cleanup=lambda:events.append('remove'),receipt=object(),resource_id='synthetic-owned')
-    docker=NS(close=lambda:events.append('docker-close'))
+    docker=NS(close=lambda:events.append('docker-close'),call=lambda *a,**kw:None)
     @contextmanager
     def home(value):
         assert value is docker;events.append('home-enter')
@@ -794,4 +875,167 @@ def test_new_CLI_flag_is_mutually_exclusive_and_in_all_owned_failure_cleanup_bra
                 assert 'verify_supervisor_meaning_flow_db' in attrs
     source=ast.unparse(main)
     assert "mode.add_argument('--verify-supervisor-meaning-flow-db', action='store_true')" in source
-    assert "'cf029_failure_diagnostic' if args.verify_supervisor_meaning_flow_db" in source
+    assert "'cf047_failure_diagnostic' if args.verify_flow_owned_report_read_db else 'cf029_failure_diagnostic' if args.verify_supervisor_meaning_flow_db" in source
+
+
+def runner_functions(names,namespace):
+    tree=ast.parse((ROOT/'backend/scripts/cf002_interactive_login.py').read_text())
+    nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
+    assert len(nodes)==len(names)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes,type_ignores=[])),'<CF047-existing-parent-functions>','exec'),namespace)
+    return namespace
+
+
+@pytest.mark.parametrize('failure',['none','wrong_nonce','wrong_port','wrong_PID','child_exit','timeout'])
+def test_Backend_only_actual_readiness_requires_live_PID_port_nonce_and_never_frontend(failure):
+    child=NS(kind='backend');calls=[];clock=[0.0]
+    def now():clock[0]+=0.1;return clock[0]
+    def get(url):
+        calls.append(url)
+        assert url in {'http://localhost:8200/health','http://localhost:8200/api/auth/session'}
+        return httpx.Response(401 if url.endswith('/session') else 200,headers={'x-cf002-run':'old' if failure=='wrong_nonce' else 'current'})
+    class Client:
+        def __enter__(self):return NS(get=get)
+        def __exit__(self,*args):pass
+    namespace=dict(time=NS(monotonic=now,sleep=lambda _:None),_child_is_alive=lambda _:failure not in {'wrong_PID','child_exit'},_application_owns_port=lambda child,port:port==8200 and failure not in {'wrong_port','timeout'})
+    runner_functions({'wait_readiness'},namespace)
+    invoke=lambda:namespace['wait_readiness']('current',[child],timeout_seconds=1,backend_only=True,client_factory=lambda **_:Client())
+    if failure=='none':invoke();assert len(calls)==2
+    else:
+        with pytest.raises(RuntimeError):invoke()
+    with pytest.raises(RuntimeError):namespace['wait_readiness']('current',[child,child],backend_only=True,client_factory=lambda **_:Client())
+
+
+def test_Backend_only_workspace_skips_all_frontend_and_preserves_dotenv_disablement(tmp_path,monkeypatch):
+    from scripts import google_login_workspace as workspace
+    repository=tmp_path/'repo';backend=repository/'backend'
+    (backend/'src/shared').mkdir(parents=True);(backend/'db/migrations').mkdir(parents=True)
+    (backend/'src/shared/config.py').write_text('s = Settings()\n')
+    (backend/'db/migrations/env.py').write_text('# synthetic migration source\n')
+    source=backend/'src/shared/config.py';original=source.read_bytes()
+    prepared=workspace.prepare_projects(repository,temporary_parent=tmp_path,backend_only=True)
+    try:
+        assert not prepared.frontend.exists()
+        assert (prepared.backend/'src/shared/config.py').read_text()=='s = Settings(_env_file=None)\n'
+        assert not (prepared.backend/'.env').exists() and source.read_bytes()==original
+        home=prepared.root/'cf047-home';assert home.stat().st_mode&0o777==0o700
+        with monkeypatch.context() as m:
+            m.setenv('HOME',str(home));m.setenv('UNRELATED_PRIVATE',PRIVATE)
+            env=workspace.child_base_environment()
+            assert env['HOME']==str(home) and env['PYTHONDONTWRITEBYTECODE']=='1'
+            assert PRIVATE not in repr(env) and 'UNRELATED_PRIVATE' not in env
+            home.chmod(0o755)
+            with pytest.raises(workspace.LoginPreparationError):workspace.child_base_environment()
+            home.chmod(0o700)
+    finally:prepared.cleanup()
+    assert not prepared.root.exists() and source.read_bytes()==original
+
+
+@pytest.mark.parametrize('failure',['none','startup','second_readiness','cancel','postcheck','cleanup'])
+def test_fixed_two_Backend_parent_preserves_private_anchor_and_cleans_registered_children(failure,tmp_path,monkeypatch):
+    from scripts import cf003_admission_check as admission
+    from src.modules.auth.api import router as auth
+    root=tmp_path/'owned';backend=root/'backend';(backend/'src').mkdir(parents=True)
+    source=backend/'src/probe.py';source.write_text('# fixed synthetic source\n')
+    project=NS(root=root,backend=backend);children=[];events=[];logs=[];active=[];live={'present':False};next_pid=[40]
+    from contextlib import contextmanager
+    @contextmanager
+    def isolated(proof):yield {'forbidden':0}
+    monkeypatch.setattr(admission,'isolated_application',isolated)
+    async def callback(name):events.append(name);return {'committed':'same'}
+    anchor={name:(lambda name=name:callback(name)) for name in ('committed_state','assert_current','revoke_a2','remove_index')}
+    anchor.update(report_id='synthetic-report',supervisor_id='synthetic-supervisor',primary=(PRIVATE,None),a2=(PRIVATE,None),other=(PRIVATE,None))
+    for name in ('detail','denied','outcome'):anchor[name]=lambda *args,name=name:events.append(name)
+    anchor['listing']=lambda response,included:({'count':1 if included else 0})
+    class Child:
+        kind='backend'
+        def __init__(self,pid):self.pid=pid;self.dead=False;self.popen=NS(poll=lambda:0 if self.dead else None)
+        def _start_time(self):return None if self.dead else 'fixed-start'
+        def cleanup(self):
+            self.dead=True;live['present']=False;events.append(('cleanup',self.pid))
+            if failure=='cleanup':raise RuntimeError('fixed cleanup failure')
+    def start(project,proof,mode,source,lifetime,owned,**kw):
+        assert mode=='fake' and source is None and kw=={'backend_only':True} and 30<=lifetime<=300
+        next_pid[0]+=1;child=Child(next_pid[0]);owned.append(child);active[:]=[child];live['present']=True
+        if failure=='startup':raise RuntimeError('fixed startup failure')
+        return 'nonce'+str(child.pid)
+    def ready(nonce,owned,**kw):
+        assert kw['backend_only'] is True and kw['timeout_seconds']<=45
+        if failure=='second_readiness' and len(children)==2:raise RuntimeError('fixed readiness timeout')
+        if failure=='cancel':raise KeyboardInterrupt()
+        if failure=='postcheck':source.write_text('# changed synthetic source\n')
+    class Client:
+        def __init__(self,**kw):assert kw['follow_redirects'] is False and kw['trust_env'] is False
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def get(self,url,headers,timeout):
+            assert headers=={'cookie':auth.SESSION_COOKIE+'='+PRIVATE} and timeout<=5
+            status=401 if 'revoke_a2' in events else 200
+            return httpx.Response(status,json={'detail':{'code':'AUTH_REQUIRED','message':'인증이 필요합니다.'}},headers={'x-cf002-run':'nonce'+str(active[0].pid),'cache-control':'private, no-store'})
+    monkeypatch.setattr(httpx,'Client',Client)
+    namespace=dict(asyncio=asyncio,time=NS(monotonic=lambda:0.0),subprocess=NS(run=lambda *a,**kw:NS(returncode=0 if live['present'] else 1,stdout='41' if live['present'] else '')),child_base_environment=lambda:{},start_apps=start,wait_readiness=ready,_child_is_alive=lambda child:not child.dead,_application_owns_port=lambda child,port:port==8200 and not child.dead,safe_print=logs.append)
+    runner_functions({'verify_owned_report_backend_reads'},namespace)
+    invoke=lambda:namespace['verify_owned_report_backend_reads'](project,object(),anchor,children,300)
+    if failure=='none':
+        result=invoke();assert result['backend_PIDs']==[41,42] and result['new_Backend_process'] is True
+        assert result['startup_probe_rollback_verified'] and result['child_cleanup_confirmed']
+        assert [event for event in events if isinstance(event,tuple)]==[('cleanup',41),('cleanup',42)]
+    else:
+        with pytest.raises(KeyboardInterrupt if failure=='cancel' else (RuntimeError,admission.VerificationFailure)):invoke()
+    assert anchor=={} and all(child.dead for child in children)
+    assert PRIVATE not in repr(logs)
+
+
+@pytest.mark.parametrize('extra',[['--google-input','approved-file'],['--lifetime-seconds','600'],['--verify-owned-db']])
+def test_owned_read_mode_refuses_any_credential_lifecycle_or_other_mode_options(extra,monkeypatch):
+    import argparse
+    namespace=dict(argparse=argparse,sys=sys,__doc__='fixed synthetic mode')
+    runner_functions({'main'},namespace)
+    monkeypatch.setattr(sys,'argv',['cf002_interactive_login.py','--verify-flow-owned-report-read-db',*extra])
+    with pytest.raises(SystemExit) as error:namespace['main']()
+    assert error.value.code==2
+
+
+@pytest.mark.parametrize('cleanup_start',[0,260,301])
+def test_owned_read_mode_routes_once_and_clears_private_anchor_before_cleanup(monkeypatch,cleanup_start):
+    import argparse
+    from contextlib import ExitStack,contextmanager
+    from scripts import cf003_admission_check as admission
+    events=[];logs=[];anchors=[];clock=[0]
+    proof=NS(safe_receipt=lambda:dict(resource_id='fixed-owned',container_id='0'*64,created_at='synthetic',host='127.0.0.1',port=1234,persistent_mounts=[],cleanup_owner='synthetic',nonce=PRIVATE))
+    owner=NS(create=lambda:(events.append('create') or proof),cleanup=lambda:events.append('remove'),receipt=object(),resource_id='fixed-owned',metadata_failures=[],cleanup_receipt_path=None)
+    docker=NS(close=lambda:events.append('docker-close'),call=lambda *a,**kw:None)
+    @contextmanager
+    def home(value):
+        assert value is docker;events.append('home-enter')
+        try:yield
+        finally:events.append('home-exit')
+    monkeypatch.setattr(admission,'owned_postgres_home',home)
+    async def migrate(value,**kw):assert value is proof and kw=={'target':'head'};events.append('migrate')
+    async def prepare(value,anchor):
+        assert value is proof and not anchor;anchors.append(anchor);anchor['private']=PRIVATE
+        events.append('anchor');return {'fake_flow_dispatch':1}
+    monkeypatch.setattr(C,'_prepare_owned_flow_read_anchor',prepare)
+    project=NS(root=Path('/synthetic/cf047'),cleanup=lambda:events.append('workspace-remove'))
+    def projects(repository,**kw):assert kw=={'backend_only':True};return project
+    def reads(project_arg,given,anchor,children,deadline):
+        assert project_arg is project and given is proof and anchor=={'private':PRIVATE} and deadline==270
+        events.append('two-backends');clock[0]=cleanup_start;return {'new_Backend_process':True}
+    namespace=dict(argparse=argparse,sys=sys,__doc__='fixed mode',ExitStack=ExitStack,time=NS(monotonic=lambda:clock[0]),
+        signal=NS(SIGINT=2,SIGTERM=15,SIGALRM=14,ITIMER_REAL=0,SIG_IGN=0,signal=lambda *a:None,setitimer=lambda *a:events.append(('timer',a))),
+        LocalDocker=lambda:docker,OwnedPostgres=lambda value:owner,ensure_local_ports_free=lambda **kw:events.append(('ports',kw)),prepare_projects=projects,migrate_owned=migrate,
+        asyncio=asyncio,safe_print=logs.append,_BACKEND=ROOT/'backend',verify_owned_report_backend_reads=reads,cf003_failure_diagnostic=lambda *a:{'phase':'fixed-cleanup-diagnostic'})
+    runner_functions({'main'},namespace)
+    monkeypatch.setattr(sys,'argv',['cf002_interactive_login.py','--verify-flow-owned-report-read-db'])
+    if cleanup_start>300:
+        with pytest.raises(SystemExit) as error:namespace['main']()
+        assert error.value.code==2 and 'remove' not in events and 'workspace-remove' not in events
+        assert any(v['phase']=='cleanup_failed' for v in logs)
+    else:
+        namespace['main']();assert events.count('remove')==1
+    assert events.count('create')==events.count('migrate')==events.count('anchor')==events.count('two-backends')==1
+    assert ('ports',{'backend_only':True}) in events and ('timer',(0,270)) in events
+    assert ('timer',(0,max(0.001,300-cleanup_start))) in events and ('timer',(0,0)) in events
+    assert anchors==[{}] and PRIVATE not in repr(logs)
+    result=next(v for v in logs if v['phase']=='flow_owned_report_read_db_check')
+    assert result['new_Backend_process'] and result['whole_limit_seconds']==300 and result['cleanup_reserve_seconds']==30

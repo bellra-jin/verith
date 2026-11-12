@@ -416,6 +416,11 @@ CF026_TESTS=("tests/unit/test_cf026_supervisor_live_controller.py",)
 NEW.update({"backend/scripts/cf026_supervisor_live_controller.py", "backend/scripts/cf026_successor.py", "backend/tests/unit/test_cf026_supervisor_live_controller.py"})
 
 CF024_TESTS=("tests/unit/test_cf024_supervisor_live_verifier.py",)
+CF047_INPUTS = {
+    "backend/scripts/google_login_bootstrap.py": "5937d610c482b1a5e92671b7bad8f496f4c0e292a8d451fc34347381df7df48c",
+    "backend/scripts/google_login_inputs.py": "4fddb30281357a58b259872bf6cc87542fb41c65928357aab045134d8f155c95",
+}
+NEW.update(CF047_INPUTS)
 NEW.add("backend/tests/unit/test_cf024_supervisor_live_verifier.py")
 
 CF021_TESTS=("tests/unit/test_cf021_technical_boundary.py",)
@@ -574,7 +579,7 @@ def execute(repo, modes, *, analysis_only=False, owned_only=False, adapter_only=
         fingerprints = {}
         for p in selected_sources(repo, quality_only=quality_only, fundamental_only=fundamental_only, flow_errors_only=flow_errors_only, usage_only=usage_only, display_only=display_only, supervisor_only=supervisor_only,core_only=core_only,meaning_only=meaning_only,assembly_only=assembly_only,controller_only=controller_only,technical_boundary_only=technical_boundary_only,technical_read_only=technical_read_only,technical_owned_only=technical_owned_only,technical_owned_read_only=technical_owned_read_only,technical_runtime_only=technical_runtime_only,technical_graph_only=technical_graph_only):
             data = regular_bytes(repo, p)
-            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS)[p]:
+            if p in (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS | CF047_INPUTS) and hashlib.sha256(data).hexdigest() != (FLOW_INPUTS | CF004_INPUTS | CF005_INPUTS | CF012_INPUTS | CF014_INPUTS | CF015_INPUTS | CF017_INPUTS | CF018_INPUTS | CF019_INPUTS | CF020_INPUTS | CF022_INPUTS | CF023_INPUTS | CF021_INPUTS | CF021_FIXED_INPUTS | CF031_INPUTS | CF036_INPUTS | CF040_INPUTS | CF045_INPUTS | CF047_INPUTS)[p]:
                 raise UnsafeCheck("reviewed pure Flow input changed; source review required")
             if technical_graph_only and p in GRAPH_INPUTS and hashlib.sha256(data).hexdigest() != GRAPH_INPUTS[p]:
                 raise UnsafeCheck("reviewed graph source changed")

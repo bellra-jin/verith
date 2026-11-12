@@ -39,7 +39,7 @@ def cf003_failure_diagnostic(error, stage):
     """Fixed CF-003 diagnostics only: never exception text, locals or runtime paths."""
     stages = {"local_context", "owned_creation", "migration", "admission_check", "cleanup"}
     kinds = {"OwnedDatabaseError", "VerificationFailure", "TimeoutError", "TimeoutExpired",
-             "OSError", "PermissionError", "AssertionError", "RuntimeError"}
+             "OSError", "PermissionError", "AssertionError", "RuntimeError", "AuthenticationRequired"}
     sources = {
         str(_BACKEND / "scripts/runner_owned_database.py"): "owned_database",
         str(_BACKEND / "scripts/cf002_interactive_login.py"): "db_runner",
@@ -53,7 +53,8 @@ def cf003_failure_diagnostic(error, stage):
     }
     functions = {"create", "verify_metadata", "call", "inspect", "verify", "sql",
                  "preflight", "attest_connection", "main", "migrate_owned",
-                 "owned_session", "verify_admission", "check", "cleanup",
+                 "owned_session", "verify_admission", "check", "cleanup", "verify_owned_report_backend_reads",
+                 "_prepare_owned_flow_read_anchor", "_verify_meaning_flow_crosspath", "capture_synthetic_epoch",
                  "_create", "_verify_post_start", "_cleanup", "verify_usage", "_verify", "usage_migration"}
     frames = []
     trace = error.__traceback__
@@ -299,9 +300,12 @@ def runtime_database_dto(proof):
 
 
 def start_apps(
-    project, proof, mode, source, lifetime, children, *, fail_after_backend=False
+    project, proof, mode, source, lifetime, children, *, fail_after_backend=False, backend_only=False
 ):
     import secrets
+
+    if backend_only and mode != "fake":
+        raise RuntimeError("Backend-only check requires synthetic authentication")
 
     run_nonce = secrets.token_hex(32)
     # Static, non-secret helpers only; no original Backend import path in child exec.
@@ -317,20 +321,22 @@ def start_apps(
         (project.backend / "runtime_fixture_payload.json").write_text(
             json.dumps(make_flow_payload())
         )
-    config = project.frontend / "next.config.ts"
-    text = config.read_text()
-    if "headers()" in text:
-        raise RuntimeError("Unexpected Next readiness configuration")
-    config.write_text(
-        text.replace(
-            "const nextConfig: NextConfig = {",
-            "const nextConfig: NextConfig = {\n  async headers() { return [{source: '/:path*', headers: [{key: 'X-CF002-Run', value: '"
-            + run_nonce
-            + "'}]}]; },",
-            1,
+    if not backend_only:
+        config = project.frontend / "next.config.ts"
+        text = config.read_text()
+        if "headers()" in text:
+            raise RuntimeError("Unexpected Next readiness configuration")
+        config.write_text(
+            text.replace(
+                "const nextConfig: NextConfig = {",
+                "const nextConfig: NextConfig = {\n  async headers() { return [{source: '/:path*', headers: [{key: 'X-CF002-Run', value: '"
+                + run_nonce
+                + "'}]}]; },",
+                1,
+            )
         )
-    )
-    for role, root in (("backend", project.backend), ("frontend", project.frontend)):
+    roles = (("backend", project.backend),) if backend_only else (("backend", project.backend), ("frontend", project.frontend))
+    for role, root in roles:
         config_read, config_write = os.pipe()
         life_read, life_write = os.pipe()
         dto = dict(
@@ -345,6 +351,9 @@ def start_apps(
         blocked = {signal.SIGINT, signal.SIGTERM}
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
         try:
+            environment = child_base_environment()
+            if backend_only:
+                environment.update(HOME=str(project.root / "cf047-home"), PYTHONDONTWRITEBYTECODE="1")
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -357,7 +366,7 @@ def start_apps(
                     str(life_read),
                 ],
                 cwd=root,
-                env=child_base_environment(),
+                env=environment,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
@@ -437,12 +446,12 @@ def _application_owns_port(child, port):
     return True
 
 
-def wait_readiness(run_nonce, children, *, timeout_seconds=45, client_factory=None):
+def wait_readiness(run_nonce, children, *, timeout_seconds=45, client_factory=None, backend_only=False):
     import httpx
 
     deadline = time.monotonic() + timeout_seconds
     roles = {child.kind: child for child in children}
-    if set(roles) != {"backend", "frontend"}:
+    if len(roles) != len(children) or set(roles) != ({"backend"} if backend_only else {"backend", "frontend"}):
         raise RuntimeError("Expected owned child roles are missing")
     if client_factory is None:
         client_factory = httpx.Client
@@ -452,33 +461,134 @@ def wait_readiness(run_nonce, children, *, timeout_seconds=45, client_factory=No
                 raise RuntimeError("Owned child exited or changed before readiness")
             if not _application_owns_port(
                 roles["backend"], 8200
-            ) or not _application_owns_port(roles["frontend"], 3200):
+            ) or (not backend_only and not _application_owns_port(roles["frontend"], 3200)):
                 time.sleep(0.1)
                 continue
             try:
                 backend = client.get("http://localhost:8200/health")
-                frontend = client.get("http://localhost:3200/")
-                session = client.get("http://localhost:3200/api/auth/session")
+                frontend = None if backend_only else client.get("http://localhost:3200/")
+                session = client.get("http://localhost:8200/api/auth/session" if backend_only else "http://localhost:3200/api/auth/session")
                 if (
                     backend.status_code == 200
-                    and frontend.status_code == 200
+                    and (backend_only or frontend.status_code == 200)
                     and session.status_code == 401
                     and all(
                         response.headers.get("x-cf002-run") == run_nonce
-                        for response in (backend, frontend, session)
+                        for response in ((backend, session) if backend_only else (backend, frontend, session))
                     )
                 ):
                     # Bind ownership must still hold after requests, not just before.
                     if (
                         all(_child_is_alive(child) for child in children)
                         and _application_owns_port(roles["backend"], 8200)
-                        and _application_owns_port(roles["frontend"], 3200)
+                        and (backend_only or _application_owns_port(roles["frontend"], 3200))
                     ):
                         return
             except httpx.HTTPError:
                 pass
             time.sleep(0.1)
     raise RuntimeError("Owned local application readiness timed out")
+
+
+def verify_owned_report_backend_reads(project, proof, anchor, children, deadline):
+    """CF047 fixed GET-only observation through two sequential real Backend execs.
+
+    The original owner retains the DB and expected payload/private anchor.
+    Cookies travel only in localhost GET headers, never bootstrap DTO/argv/env/log.
+    """
+    import hashlib
+    import httpx
+    from scripts.cf003_admission_check import check, isolated_application
+    from src.modules.auth.api.router import SESSION_COOKIE
+
+    def remaining():
+        seconds=deadline-time.monotonic()
+        check(seconds>0,'CF047 absolute parent deadline')
+        return seconds
+
+    async def guarded(callback):
+        with isolated_application(proof) as observed:
+            result=await callback()
+            check(not any(observed.values()),'CF047 parent observation forbidden access')
+            return result
+
+    def observe(callback):
+        return asyncio.run(asyncio.wait_for(guarded(callback),timeout=min(30,remaining())))
+
+    def source_state():
+        return {str(p.relative_to(project.backend)):hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in project.backend.rglob('*') if p.is_file()
+            and (p.is_relative_to(project.backend/'src') or p.is_relative_to(project.backend/'db') or p.name=='alembic.ini')
+            and p.suffix in {'.py','.ini','.mako'}}
+
+    def absent_listener():
+        result=subprocess.run(['lsof','-nP','-a','-iTCP:8200','-sTCP:LISTEN','-t'],capture_output=True,text=True,
+            env=child_base_environment(),timeout=min(3,remaining()))
+        check(result.returncode==1 and not result.stdout.strip(),'CF047 Backend listener absent')
+
+    def get(client,child,nonce,path,identity):
+        check(_child_is_alive(child) and _application_owns_port(child,8200),'CF047 current child owns observation port')
+        value=client.get('http://localhost:8200'+path,headers={'cookie':SESSION_COOKIE+'='+identity[0]},timeout=min(5,remaining()))
+        check(value.headers.get('x-cf002-run')==nonce,'CF047 current Backend nonce')
+        check(_child_is_alive(child) and _application_owns_port(child,8200),'CF047 child identity after observation')
+        return value
+
+    baseline=None;pids=[];nonces=[];groups=[]
+    try:
+        baseline=source_state();committed=observe(anchor['committed_state'])
+        for number in (1,2):
+            check(remaining()>=30,'CF047 finite child watchdog budget')
+            owned=[]
+            try:
+                nonce=start_apps(project,proof,'fake',None,min(300,int(remaining())),owned,backend_only=True)
+                children.extend(owned)
+                check(len(owned)==1 and owned[0].kind=='backend','CF047 only Backend child')
+                child=owned[0]
+                check(child.pid not in pids and nonce not in nonces,'CF047 fresh Backend PID and nonce')
+                wait_readiness(nonce,owned,timeout_seconds=min(45,remaining()),backend_only=True)
+                check(source_state()==baseline,'CF047 Backend source before reads')
+                check(observe(anchor['committed_state'])==committed,'CF047 startup probe fully rolled back')
+                observe(anchor['assert_current'])
+                with httpx.Client(follow_redirects=False,trust_env=False,timeout=5) as client:
+                    path='/api/flow/reports/'+anchor['report_id']
+                    anchor['detail'](get(client,child,nonce,path,anchor['a2']))
+                    anchor['listing'](get(client,child,nonce,'/api/flow/reports',anchor['a2']),True)
+                    anchor['denied'](get(client,child,nonce,path,anchor['other']),404)
+                    anchor['listing'](get(client,child,nonce,'/api/flow/reports',anchor['other']),False)
+                    check(observe(anchor['committed_state'])==committed,'CF047 child GET no committed writes')
+                    observe(anchor['assert_current'])
+                    if number==2:
+                        observe(anchor['revoke_a2'])
+                        anchor['denied'](get(client,child,nonce,path,anchor['a2']),401)
+                        denied=get(client,child,nonce,'/api/flow/reports',anchor['a2'])
+                        check(denied.status_code==401 and denied.headers.get('cache-control')=='private, no-store'
+                              and denied.json()=={'detail':{'code':'AUTH_REQUIRED','message':'인증이 필요합니다.'}},'CF047 revoked child list private')
+                        anchor['detail'](get(client,child,nonce,path,anchor['primary']))
+                        observe(anchor['assert_current'])
+                        observe(anchor['remove_index'])
+                        anchor['denied'](get(client,child,nonce,path,anchor['primary']),404)
+                        hidden=anchor['listing'](get(client,child,nonce,'/api/flow/reports',anchor['primary']),False)
+                        check(hidden['count']==0,'CF047 child omits index-only orphan')
+                        observe(anchor['assert_current'])
+                        groups.extend(['A2_revoked_child401_A1_valid','index_only_missing_root_preserved_child404_list_omits'])
+                pids.append(child.pid);nonces.append(nonce)
+                groups.append('Backend'+str(number)+'_new_PID_A2_lossless_list_detail_no_calls')
+                safe_print({'phase':'cf047_backend_read','number':number,'pid':child.pid,'status':'passed',
+                            'HTTP_methods':['GET'],'startup_probe':'synthetic_write_outer_rollback'})
+            finally:
+                for child in reversed(owned):
+                    if child not in children:children.append(child)
+                    child.cleanup()
+                    check(child.popen.poll() is not None and child._start_time() is None,'CF047 child exited and reaped')
+                absent_listener()
+        return {'groups':groups,'backend_PIDs':pids,'new_Backend_process':True,'GET_observation_only':True,
+                'startup_probe_rollback_verified':True,'child_cleanup_confirmed':True,'real_provider_requests':0,'google_requests':0}
+    finally:
+        try:
+            if baseline is not None:
+                check(source_state()==baseline,'CF047 Backend source postcheck')
+        finally:
+            anchor.clear()
 
 
 def main():
@@ -498,6 +608,7 @@ def main():
     mode.add_argument("--verify-supervisor-meaning-db", action="store_true")
     mode.add_argument("--verify-supervisor-meaning-assembly-db", action="store_true")
     mode.add_argument("--verify-supervisor-meaning-flow-db", action="store_true")
+    mode.add_argument("--verify-flow-owned-report-read-db", action="store_true")
     mode.add_argument("--verify-supervisor-accounting-db", action="store_true")
     mode.add_argument("--verify-supervisor-meaning-runtime-db", action="store_true")
     mode.add_argument("--verify-flow-analysis-db", action="store_true")
@@ -509,6 +620,8 @@ def main():
     parser.add_argument("--hold-fake-seconds", type=int, default=0)
     parser.add_argument("--simulate-startup-failure", action="store_true")
     args = parser.parse_args()
+    if args.verify_flow_owned_report_read_db and sys.argv[1:] != ["--verify-flow-owned-report-read-db"]:
+        parser.error("Owned report read mode accepts no credential or lifecycle options")
     if (
         args.hold_fake_seconds or args.simulate_startup_failure
     ) and not args.verify_fake_environment:
@@ -531,8 +644,19 @@ def main():
 
     for signum in (signal.SIGINT, signal.SIGTERM):
         old_handlers[signum] = signal.signal(signum, stop)
+    flow_read_deadline = flow_read_whole_deadline = None
+    if args.verify_flow_owned_report_read_db:
+        # One non-renewing 300s mode, reserving the final 30s for owned cleanup.
+        flow_read_whole_deadline = time.monotonic() + 300
+        flow_read_deadline = flow_read_whole_deadline - 30
+        def read_expired(signum, frame):
+            raise TimeoutError("Owned report read deadline exceeded")
+        old_handlers[signal.SIGALRM] = signal.signal(signal.SIGALRM, read_expired)
+        signal.setitimer(signal.ITIMER_REAL, 270)
     try:
-        if not (args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db):
+        if args.verify_flow_owned_report_read_db:
+            ensure_local_ports_free(backend_only=True)
+        elif not (args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_owned_db or args.verify_controller or args.verify_flow_admission_db or args.verify_flow_input_snapshot_db or args.verify_flow_fake_execution_db or args.verify_flow_synthetic_demo_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_flow_owned_report_read_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db):
             ensure_local_ports_free()
         docker = LocalDocker()
         if args.verify_flow_admission_db:
@@ -547,7 +671,7 @@ def main():
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
-        elif args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_flow_synthetic_demo_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+        elif args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_flow_synthetic_demo_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_flow_owned_report_read_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
             from scripts.cf003_admission_check import owned_postgres_home
 
             db_test_context.enter_context(owned_postgres_home(docker))
@@ -556,7 +680,7 @@ def main():
         cf003_stage = "owned_creation"
         proof = owner.create()
         receipt_output = proof.safe_receipt()
-        if args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+        if args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_flow_owned_report_read_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
             # The original nonce belongs only to private cleanup evidence.
             receipt_output = {key: receipt_output[key] for key in (
                 "resource_id", "container_id", "created_at", "host", "port", "persistent_mounts", "cleanup_owner")}
@@ -659,6 +783,19 @@ def main():
             cf003_stage='admission_check'
             result=asyncio.run(asyncio.wait_for(verify_meaning_accounting(proof),timeout=180))
             safe_print({'phase':'supervisor_accounting_db_check',**result})
+            return
+        if args.verify_flow_owned_report_read_db:
+            from scripts.cf023_supervisor_meaning_check import _prepare_owned_flow_read_anchor
+            cf003_stage = "admission_check"
+            private_anchor = {}
+            try:
+                result = asyncio.run(asyncio.wait_for(_prepare_owned_flow_read_anchor(proof,private_anchor),timeout=min(120,flow_read_deadline-time.monotonic())))
+                project = prepare_projects(_BACKEND.parent,backend_only=True)
+                observed = verify_owned_report_backend_reads(project,proof,private_anchor,children,flow_read_deadline)
+                safe_print({"phase":"flow_owned_report_read_db_check",**result,**observed,
+                            "groups":result.get('groups',[])+observed.get('groups',[]),"whole_limit_seconds":300,"cleanup_reserve_seconds":30})
+            finally:
+                private_anchor.clear()
             return
         if args.verify_supervisor_meaning_flow_db:
             from scripts.cf023_supervisor_meaning_check import verify_meaning_flow_crosspath
@@ -843,9 +980,9 @@ def main():
         interrupted = True
         safe_print({"phase": "interrupted", "status": "cleaning_owned_resources"})
     except Exception as error:
-        if args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+        if args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_flow_owned_report_read_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
             detail = cf003_failure_diagnostic(error, cf003_stage)
-            detail["phase"] = "cf045_failure_diagnostic" if args.verify_supervisor_meaning_runtime_db else "cf044_failure_diagnostic" if args.verify_supervisor_accounting_db else "cf036_failure_diagnostic" if args.verify_technical_owned_read_db else "cf035_failure_diagnostic" if args.verify_technical_owned_db else "cf029_failure_diagnostic" if args.verify_supervisor_meaning_flow_db else "cf024_failure_diagnostic" if args.verify_supervisor_meaning_assembly_db else "cf023_failure_diagnostic" if args.verify_supervisor_meaning_db else "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
+            detail["phase"] = "cf045_failure_diagnostic" if args.verify_supervisor_meaning_runtime_db else "cf044_failure_diagnostic" if args.verify_supervisor_accounting_db else "cf036_failure_diagnostic" if args.verify_technical_owned_read_db else "cf035_failure_diagnostic" if args.verify_technical_owned_db else "cf047_failure_diagnostic" if args.verify_flow_owned_report_read_db else "cf029_failure_diagnostic" if args.verify_supervisor_meaning_flow_db else "cf024_failure_diagnostic" if args.verify_supervisor_meaning_assembly_db else "cf023_failure_diagnostic" if args.verify_supervisor_meaning_db else "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
             if owner is not None:
                 detail["metadata_failures"] = list(owner.metadata_failures)
             if owner is not None and owner.cleanup_receipt_path is not None:
@@ -891,11 +1028,28 @@ def main():
         )
         raise SystemExit(1) from None
     finally:
+        if args.verify_flow_owned_report_read_db:
+            # Rearm only to the original absolute end, never give cleanup a new
+            # relative 30s. The same alarm also interrupts a blocked cleanup call.
+            signal.setitimer(signal.ITIMER_REAL, max(0.001,flow_read_whole_deadline-time.monotonic()))
         for signum in old_handlers:
-            signal.signal(signum, signal.SIG_IGN)
+            if not (args.verify_flow_owned_report_read_db and signum==signal.SIGALRM):
+                signal.signal(signum, signal.SIG_IGN)
+        def cleanup_budget():
+            if args.verify_flow_owned_report_read_db and time.monotonic()>=flow_read_whole_deadline:
+                raise TimeoutError("Owned report cleanup deadline exceeded")
+        original_cleanup_call = None
+        if args.verify_flow_owned_report_read_db and docker:
+            original_cleanup_call = docker.call
+            def cleanup_call(*values,**options):
+                cleanup_budget()
+                options['timeout']=min(options.get('timeout',15),flow_read_whole_deadline-time.monotonic())
+                return original_cleanup_call(*values,**options)
+            docker.call = cleanup_call
         cleanup_failed = secondary_cleanup_failed
         for child in reversed(children):
             try:
+                cleanup_budget()
                 child.cleanup()
             except BaseException:
                 cleanup_failed = True
@@ -904,9 +1058,10 @@ def main():
                 )
         if owner:
             try:
+                cleanup_budget()
                 receipt_observed = owner.receipt is not None
                 owner.cleanup()
-                if (args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db) and not receipt_observed:
+                if (args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_flow_owned_report_read_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db) and not receipt_observed:
                     cleanup_failed = True
                     safe_print({"phase": "owned_db_cleanup_unverified",
                                 "reason": "creation_receipt_missing",
@@ -915,9 +1070,9 @@ def main():
                     safe_print({"phase": "owned_db_removed", "resource_id": owner.resource_id})
             except BaseException as error:
                 cleanup_failed = True
-                if args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
+                if args.verify_supervisor_meaning_runtime_db or args.verify_supervisor_accounting_db or args.verify_technical_owned_read_db or args.verify_technical_owned_db or args.verify_supervisor_meaning_assembly_db or args.verify_flow_owned_report_read_db or args.verify_supervisor_meaning_flow_db or args.verify_supervisor_meaning_db or args.verify_supervisor_core_db or args.verify_supervisor_flow_db or args.verify_flow_usage_db or args.verify_flow_analysis_db or args.verify_analysis_adapter_db or args.verify_fundamental_analysis_db:
                     detail = cf003_failure_diagnostic(error, "cleanup")
-                    detail["phase"] = "cf045_failure_diagnostic" if args.verify_supervisor_meaning_runtime_db else "cf044_failure_diagnostic" if args.verify_supervisor_accounting_db else "cf036_failure_diagnostic" if args.verify_technical_owned_read_db else "cf035_failure_diagnostic" if args.verify_technical_owned_db else "cf029_failure_diagnostic" if args.verify_supervisor_meaning_flow_db else "cf024_failure_diagnostic" if args.verify_supervisor_meaning_assembly_db else "cf023_failure_diagnostic" if args.verify_supervisor_meaning_db else "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
+                    detail["phase"] = "cf045_failure_diagnostic" if args.verify_supervisor_meaning_runtime_db else "cf044_failure_diagnostic" if args.verify_supervisor_accounting_db else "cf036_failure_diagnostic" if args.verify_technical_owned_read_db else "cf035_failure_diagnostic" if args.verify_technical_owned_db else "cf047_failure_diagnostic" if args.verify_flow_owned_report_read_db else "cf029_failure_diagnostic" if args.verify_supervisor_meaning_flow_db else "cf024_failure_diagnostic" if args.verify_supervisor_meaning_assembly_db else "cf023_failure_diagnostic" if args.verify_supervisor_meaning_db else "cf022_failure_diagnostic" if args.verify_supervisor_core_db else "cf020_failure_diagnostic" if args.verify_supervisor_flow_db else "cf018_failure_diagnostic" if args.verify_flow_usage_db else "cf015_failure_diagnostic" if args.verify_fundamental_analysis_db else "cf013_failure_diagnostic" if args.verify_analysis_adapter_db else "cf012_failure_diagnostic"
                     detail["metadata_failures"] = list(owner.metadata_failures)
                     if owner.cleanup_receipt_path is not None:
                         detail["cleanup_receipt_file"] = str(owner.cleanup_receipt_path)
@@ -945,14 +1100,19 @@ def main():
                 )
         if project and not cleanup_failed:
             try:
+                cleanup_budget()
                 project.cleanup()
                 safe_print({"phase": "owned_workspace_removed"})
             except BaseException:
                 cleanup_failed = True
                 safe_print({"phase": "workspace_cleanup_failed"})
         if docker:
+            if original_cleanup_call is not None:
+                docker.call = original_cleanup_call
             db_test_context.close()
             docker.close()
+        if args.verify_flow_owned_report_read_db:
+            signal.setitimer(signal.ITIMER_REAL, 0)
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
         if cleanup_failed:

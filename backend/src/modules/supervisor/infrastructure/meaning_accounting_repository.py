@@ -25,3 +25,25 @@ async def preparation(session,owner,binding):
 async def create(session,values):
     await session.execute(insert(Account).values(**values).on_conflict_do_nothing(index_elements=['operation','owner_user_id','scope_sha256']))
     return await session.scalar(select(Account).where(Account.operation==values['operation'],Account.owner_user_id==values['owner_user_id'],Account.scope_sha256==values['scope_sha256']).with_for_update().execution_options(populate_existing=True))
+
+async def grant(session,identity,*,lock=False):
+    from db.models.supervisor.meaning_accounting import SupervisorMeaningGrant as Grant
+    q=select(Grant).where(Grant.id==identity).execution_options(populate_existing=True,autoflush=False)
+    with session.no_autoflush:
+        return await session.scalar(q.with_for_update() if lock else q)
+
+async def grant_by_preparation(session,identity):
+    from db.models.supervisor.meaning_accounting import SupervisorMeaningGrant as Grant
+    with session.no_autoflush:
+        return await session.scalar(select(Grant).where(Grant.preparation_id==identity).execution_options(populate_existing=True,autoflush=False))
+
+async def grant_principal(session,row):
+    from db.models.auth.models import AuthSession
+    from src.modules.auth.application.session_service import Principal,validate_principal
+    from src.modules.supervisor.domain.meaning_accounting import principal_fingerprint
+    auth=await session.scalar(select(AuthSession).where(AuthSession.id==row.owner_session_id,AuthSession.user_id==row.owner_user_id).with_for_update(read=True).execution_options(populate_existing=True))
+    if auth is None: raise AccountingConflict()
+    p=Principal(auth.user_id,auth.id,auth.expires_at,auth.token_digest)
+    if principal_fingerprint(p)!=row.principal_sha256: raise AccountingConflict()
+    await validate_principal(session,p,lock=True)
+    return p

@@ -102,3 +102,4 @@ from db.models.supervisor.request_binding import SupervisorRequestBinding
 from db.models.supervisor.preparation import SupervisorMeaningPreparation, SupervisorMeaningEpoch  # noqa: F401
 
 from db.models.supervisor.meaning_accounting import SupervisorMeaningAccount, SupervisorMeaningReservation  # noqa: F401
+from db.models.supervisor.meaning_accounting import SupervisorMeaningGrant  # noqa: F401

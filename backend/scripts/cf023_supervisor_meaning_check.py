@@ -7,15 +7,25 @@ import sys
 MEANING_MODULES = ('domain.meaning_proposals', 'application.meaning_policy', 'infrastructure.openai_meaning_gateway')
 
 
-def load_meaning(*, gateway=None):
+def load_meaning(*, gateway=None, runtime=None):
     from scripts.cf022_supervisor_core_check import load_core
-    from scripts.check_safe import CF023_INPUTS
+    from scripts.check_safe import CF023_INPUTS,CF045_INPUTS
     root = Path(__file__).resolve().parents[2]
-    for relative, digest in CF023_INPUTS.items():
+    for relative, digest in (CF023_INPUTS|CF045_INPUTS).items():
         if hashlib.sha256((root / relative).read_bytes()).hexdigest() != digest:
             raise RuntimeError('Meaning source pin mismatch')
     load_core()
-    for suffix in MEANING_MODULES:
+    import types
+    namespace='src.supervisor.infrastructure.backend'
+    location=root/'ai/src/supervisor/infrastructure/backend'
+    if namespace not in sys.modules:
+        module=types.ModuleType(namespace);module.__path__=[str(location)]
+        module.__spec__=importlib.util.spec_from_loader(namespace,loader=None,is_package=True)
+        module.__spec__.submodule_search_locations=[str(location)]
+        sys.modules[namespace]=module;setattr(sys.modules['src.supervisor.infrastructure'],'backend',module)
+    elif list(sys.modules[namespace].__spec__.submodule_search_locations)!=[str(location)]:
+        raise RuntimeError('Meaning module origin mismatch')
+    for suffix in MEANING_MODULES+('infrastructure.backend.meaning_budget_client','application.meaning_gateway_factory'):
         name = 'src.supervisor.' + suffix
         path = root / ('ai/src/supervisor/' + suffix.replace('.', '/') + '.py')
         if name not in sys.modules:
@@ -29,7 +39,7 @@ def load_meaning(*, gateway=None):
             raise RuntimeError('Meaning module origin mismatch')
     from fastapi import FastAPI
     app = FastAPI()
-    app.include_router(sys.modules['src.supervisor.api.routes'].make_router(gateway=gateway))
+    app.include_router(sys.modules['src.supervisor.api.routes'].make_router(gateway=gateway,runtime=runtime))
     return app
 
 
@@ -1297,3 +1307,293 @@ async def _verify_meaning_accounting(proof):
     check(await sql('SELECT count(*) FROM supervisor_meaning_reservations')==10,'CF044 populated downgrade preserved')
     mark('populated_downgrade_denied')
     return {'groups':groups,'ack_loss':'commit-wrapper-simulation-after-real-commit','actual_SQL':True,'actual_provider':False}
+
+async def verify_meaning_runtime(proof):
+    from scripts.cf003_admission_check import isolated_application,check
+    with isolated_application(proof) as denied:
+        try:
+            result=await _verify_meaning_runtime(proof)
+        except BaseException as error:
+            from scripts.cf002_interactive_login import safe_print
+            frames=[];tb=error.__traceback__
+            allowed={'AccountingConflict','AssertionError','IntegrityError','VerificationFailure','RuntimeError','TypeError','AttributeError','InvalidRequestError','NameError','KeyError'}
+            while tb:
+                filename=tb.tb_frame.f_code.co_filename
+                if filename==__file__ or filename.endswith(('/meaning_accounting_service.py','/meaning_accounting_repository.py','/meaning_accounting.py')):
+                    frames.append({'source':Path(filename).name,'function':tb.tb_frame.f_code.co_name,'line':tb.tb_lineno})
+                tb=tb.tb_next
+            safe_print({'phase':'cf045_checker_failure','error_type':type(error).__name__ if type(error).__name__ in allowed else 'other','frames':frames[-8:]})
+            raise
+        check(not any(denied.values()),'CF045 forbidden IO')
+        return result|{'observed_denials':dict(denied),'real_provider_requests':0}
+
+async def _verify_meaning_runtime(proof):
+    import asyncio,json,httpx
+    from contextlib import ExitStack
+    from dataclasses import asdict
+    from datetime import timedelta
+    from unittest.mock import patch
+    from uuid import UUID,uuid4
+    from sqlalchemy import select,text
+    from db.models.auth.models import AuthUser,AuthSession
+    from db.models.common.stock import Stock
+    from db.models.supervisor.preparation import SupervisorMeaningPreparation as Preparation
+    from db.models.supervisor.meaning_accounting import SupervisorMeaningAccount as Account,SupervisorMeaningReservation as Reservation,SupervisorMeaningGrant as Grant
+    from db.session import get_session
+    from src.api.main import app
+    from src.shared.config import settings
+    from src.shared.http.access_boundary import AccessBoundary
+    from src.modules.auth.application.session_service import issue_session,csrf_token,AuthenticationRequired
+    from src.modules.supervisor.api import router as core
+    from src.modules.supervisor.api import meaning_phase_router as phases
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningAccountingService,MeaningRuntimeService
+    from src.modules.supervisor.domain.meaning_accounting import Policy,RuntimePolicy,AccountingConflict,canonical,sha,wire,strict_json
+    from src.modules.supervisor.domain.contracts import MEANING_SPEC,PreparationRequest,Draft
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    from scripts.cf002_interactive_login import owned_session,migrate_owned,safe_print
+    from scripts.cf003_admission_check import check,migration
+    groups=[];provider_calls=[];phase_values=[];headers_seen=[];key_calls=[];mode='normal';pending=[]
+    def mark(label):groups.append(label);safe_print({'phase':'cf045_check','label':label,'status':'passed'})
+    async def sql(q,p=None):
+        async with owned_session(proof) as s:return await s.scalar(text(q),p or {})
+    async def fail(awaitable):
+        try:await awaitable
+        except (AccountingConflict,AuthenticationRequired):return
+        raise AssertionError('CF045 expected refusal')
+    async with owned_session(proof) as s:
+        now=await s.scalar(text('SELECT clock_timestamp()'));user=AuthUser(id=uuid4());s.add(user);await s.flush()
+        cookie,principal=await issue_session(s,user);await s.commit()
+    before=await sql('SELECT count(*) FROM auth_users')
+    await migration(proof,'c44001a7e0001',downgrade=True);await migrate_owned(proof)
+    check(await sql('SELECT count(*) FROM auth_users')==before and await sql('SELECT version_num FROM alembic_version')=='c45001a7e0001','CF045 additive migration')
+    mark('empty_downgrade_reupgrade_old_rows_preserved')
+    policy=Policy(operation='meaning',scope='{"scope":"cf045-owned"}',starts_at=now-timedelta(seconds=5),ends_at=now+timedelta(minutes=5),limit_nano=1000000000,attempt_nano=50000000,max_attempts=20,semantic_json=canonical(MEANING_SPEC),price_json=canonical(MEANING_SPEC['price']),model=MEANING_SPEC['model'],tier='default',input_cap=16384,output_cap=2048)
+    async with owned_session(proof) as s:account_id=UUID(await MeaningAccountingService(s).create_account(principal,policy,account_id=uuid4()))
+    load_meaning();O=sys.modules['src.supervisor.infrastructure.openai_meaning_gateway'];M=sys.modules['src.supervisor.domain.meaning'];F=sys.modules['src.supervisor.application.meaning_gateway_factory']
+    agreement=O.CounterAgreement(O.COUNT_DOCUMENTATION,'a'*64,O.INPUT_FIELDS,0)
+    agreement_json=asdict(agreement);agreement_json['input_fields']=list(agreement_json['input_fields'])
+    bindings=canonical({str(principal.user_id):dict(account_id=str(account_id),scope_sha256=sha(policy.scope),policy_sha256=sha(policy.snapshot()))})
+    runtime_policy=RuntimePolicy(True,bindings,canonical(agreement_json))
+    async def request_session():
+        async with owned_session(proof) as s:yield s
+    async def key_supplier():key_calls.append('synthetic');return 'synthetic-no-live-credential'
+    async def send_provider(request):
+        # Real other SQL transaction can lock rows during mock provider HTTP:
+        # authorize/metadata locks must already have ended at commit ACK.
+        async with owned_session(proof) as probe:
+            for table in ('supervisor_meaning_preparations','supervisor_meaning_accounts','supervisor_meaning_reservations','supervisor_meaning_grants'):
+                await probe.execute(text('SELECT id FROM '+table+' FOR UPDATE NOWAIT'))
+            await probe.rollback()
+        provider_calls.append(request.url.path)
+        if request.url.path==O.COUNT_PATH:return httpx.Response(200,json={'object':'response.input_tokens','input_tokens':100})
+        request_value=M.decode(request.content);d=M.decode(request_value['input'][0]['content'][0]['text']);q=d['original_query'];company='현대건설'
+        candidate=dict(schema_version='supervisor.meaning.v1',mentions=[dict(evidence=dict(source_kind='original_query',answer_id=None,start=0,end=len(company),text=company),negation=None)],views=[],conditions=[])
+        return httpx.Response(200,json=dict(model=MEANING_SPEC['model'],service_tier='default',status='completed',error=None,usage=dict(input_tokens=100,output_tokens=10,total_tokens=110,input_tokens_details=dict(cached_tokens=0)),output=[dict(type='message',role='assistant',status='completed',content=[dict(type='output_text',text=M.canonical(candidate))])]))
+    async def backend_app(scope,receive,send):
+        if scope['type']=='http' and scope['path'] in phases.PATHS:
+            # Capture only in-memory synthetic callback data for explicit replay tests.
+            data=bytearray()
+            async def capture_receive():
+                v=await receive();data.extend(v.get('body',b''));return v
+            headers_seen.append(scope['headers'])
+            await app(scope,capture_receive,send)
+            if data:phase_values.append((scope['path'],strict_json(data)))
+        else:await app(scope,receive,send)
+    rt=F.MeaningRuntime(F.MeaningRuntimeOptions(backend_origin='http://127.0.0.1:8200',service_token='meaning-service-'+('x'*40),counter_agreement=agreement,key_supplier=key_supplier,backend_transport=httpx.ASGITransport(app=backend_app),provider_transport=httpx.MockTransport(send_provider),allow_loopback=True))
+    ai=load_meaning(runtime=rt)
+    client=AIClient('http://127.0.0.1:8100',125,transport=httpx.ASGITransport(app=ai),service_token='flow-synthetic-'+('y'*40))
+    original_client=core.AIClient
+    app.dependency_overrides[get_session]=request_session
+    try:
+        with ExitStack() as stack:
+            for k,v in dict(FLOW_ANALYSIS_ENABLED=True,FLOW_SERVICE_TOKEN=client._flow_token,SUPERVISOR_MEANING_ENABLED='true',SUPERVISOR_MEANING_SERVICE_TOKEN='meaning-service-'+('x'*40),SUPERVISOR_MEANING_ACCOUNT_BINDINGS=bindings,SUPERVISOR_MEANING_COUNTER_AGREEMENT=canonical(agreement_json)).items():stack.enter_context(patch.object(settings,k,v))
+            stack.enter_context(patch.object(core,'AIClient',lambda *a,**kw:client))
+            from src.modules.supervisor.application.preparation_service import PreparationService
+            original_post=PreparationService.post
+            async def observed_post(service,*a,**kw):
+                try:return await original_post(service,*a,**kw)
+                except BaseException as error:
+                    frames=[];tb=error.__traceback__
+                    while tb:
+                        if tb.tb_frame.f_code.co_filename.endswith(('/preparation_service.py','/meaning_accounting_service.py','/meaning_accounting.py')):
+                            frames.append({'source':Path(tb.tb_frame.f_code.co_filename).name,'function':tb.tb_frame.f_code.co_name,'line':tb.tb_lineno})
+                        tb=tb.tb_next
+                    safe_print({'phase':'cf045_post_failure','error_type':type(error).__name__ if type(error).__name__ in {'AccountingConflict','CoreInvalid','IntegrityError','AttributeError','TypeError','PreparationConflict'} else 'other','frames':frames[-6:]})
+                    raise
+            stack.enter_context(patch.object(PreparationService,'post',observed_post))
+            # Actual AI core auth is explicit too; no real setting discovery.
+            import os
+            stack.enter_context(patch.dict(os.environ,{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':client._flow_token}))
+            async with owned_session(proof) as s:s.add(Stock(stock_code='000720',stock_name='현대건설',market='KOSPI'));await s.commit()
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=backend_app),base_url='http://localhost:8200') as browser:
+                browser.cookies.set('verith_session',cookie)
+                # Use the actual cookie name from the auth contract.
+                from src.modules.auth.api.router import SESSION_COOKIE
+                browser.cookies.clear();browser.cookies.set(SESSION_COOKIE,cookie)
+                public_headers={'Origin':'http://localhost:3200','X-CSRF-Token':csrf_token(principal)}
+                async def post_question(q):
+                    body=PreparationRequest(prepare_key=str(uuid4()),draft=Draft(original_query=q,answers=[],revision=0))
+                    response=await browser.post('/api/supervisor/core/preparations',json=body.model_dump(mode='json'),headers=public_headers)
+                    if response.status_code!=200:
+                        code=response.json().get('error',{}).get('code')
+                        safe_print({'phase':'cf045_http_failure','status':response.status_code,'code':code if code in {'AUTH_REQUIRED','AUTH_REQUEST_INVALID','SERVICE_UNAVAILABLE','RESULT_CONTRACT_INVALID','INPUT_INVALID','FEATURE_UNAVAILABLE','DEADLINE_EXCEEDED'} else 'other'})
+                    check(response.status_code==200,'CF045 public preparation HTTP')
+                    return body,response.json()['data']
+                deterministic,_=await post_question('삼성전자 수급')
+                check(not provider_calls and not key_calls and await sql('SELECT count(*) FROM supervisor_meaning_reservations')==0,'CF045 deterministic free')
+                with patch.object(settings,'SUPERVISOR_MEANING_ENABLED',False):
+                    _,unavailable=await post_question('현대건설 수급')
+                    check(unavailable['meaning_status']=='unavailable' and not provider_calls and not key_calls,'CF045 default off only supplement unavailable')
+                with patch.object(settings,'SUPERVISOR_MEANING_ACCOUNT_BINDINGS','{}'):
+                    _,unavailable=await post_question('현대건설 수급')
+                    check(unavailable['meaning_status']=='unavailable' and not provider_calls,'CF045 absent mapping no auto account')
+                malformed=canonical({str(principal.user_id):dict(account_id=1,scope_sha256='a'*64,policy_sha256='b'*64)})
+                with patch.object(settings,'SUPERVISOR_MEANING_ACCOUNT_BINDINGS',malformed):
+                    _,free=await post_question('삼성전자 수급')
+                    check(free['meaning_status']=='deterministic' and not provider_calls,'CF045 malformed paid policy preserves deterministic preparation')
+                body,result=await post_question('현대건설 수급')
+                check(result['meaning_status']=='supplemented','CF045 supplement result')
+                check(provider_calls==[O.COUNT_PATH,O.GENERATE_PATH] and len(key_calls)==1,'CF045 exactly one count generation supplier')
+                check(await sql('SELECT reserved_nano FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id})==50000000,'CF045 one atomic reserve')
+                check(await sql('SELECT state FROM supervisor_meaning_reservations')=='observed' and await sql('SELECT estimated_nano FROM supervisor_meaning_reservations')==120000,'CF045 observed independent integer cost')
+                check(await sql('SELECT count(*) FROM supervisor_meaning_grants WHERE terminal_sha256 IS NOT NULL')==1,'CF045 terminal grant ACK')
+                repeat=await browser.post('/api/supervisor/core/preparations',json=body.model_dump(mode='json'),headers=public_headers)
+                restored=await browser.get('/api/supervisor/core/preparations/'+result['preparation_id'])
+                check(repeat.status_code==restored.status_code==200 and len(provider_calls)==2,'CF045 replay GET no extra provider')
+                mark('actual_public_prepare_AI_factory_gateway_phase_ASGI_owned_SQL_observed')
+                bad=await browser.post('/internal/supervisor/meaning/authorize',content=b'not-json')
+                check(bad.status_code==403,'CF045 missing service auth before body')
+                schema=app.openapi();check(not any('/internal/supervisor/meaning/' in k for k in schema['paths']),'CF045 private schema exclusion')
+                mark('service_auth_before_body_public_schema_unchanged')
+        # Independent SQL contenders use the same pending preparation, explicit DI.
+        async def pending_grant(q='현대건설 수급',deadline_seconds=60,who=principal):
+            from src.modules.supervisor.infrastructure.meaning_accounting_repository import projection
+            from src.modules.supervisor.domain.contracts import sha as contract_sha
+            async with owned_session(proof) as s:
+                stamp=await s.scalar(text('SELECT clock_timestamp()'));pid,attempt=uuid4(),uuid4();d=Draft(original_query=q,answers=[],revision=0)
+                raw=canonical(d.model_dump(mode='json'))
+                row=Preparation(id=pid,owner_user_id=who.user_id,prepare_key_digest=uuid4().bytes*2,request_digest='a'*64,draft_digest=contract_sha(d.model_dump(mode='json',exclude={'selected_ticker','candidate_ref'})),semantic_json=policy.semantic_json,semantic_sha256=sha(policy.semantic_json),root_id=pid,parent_id=None,depth=0,attempt_id=attempt,epoch_id=None,state='pending',meaning_status='pending',draft_json=raw,created_at=stamp,expires_at=stamp+timedelta(minutes=2))
+                s.add(row);await s.commit()
+            async with owned_session(proof) as s:handle=await MeaningRuntimeService(s,runtime_policy=runtime_policy).issue(who,pid,deadline=asyncio.get_running_loop().time()+deadline_seconds)
+            return handle,attempt,M.Draft.model_validate(d.model_dump(mode='json'))
+        handle,attempt,d=await pending_grant();request=O.rendered_request(d);ph=M.sha({k:request[k] for k in O.INPUT_FIELDS});rh=M.sha(request)
+        count=dict(phase='count',attempt_id=str(attempt),request_sha256=rh,projection_sha256=ph,counter_sha256=sha(runtime_policy.counter_json),rendered_request=request)
+        async def authorize(value):
+            async with owned_session(proof) as s:return await MeaningRuntimeService(s,runtime_policy=runtime_policy).authorize(handle,value)
+        winners=await asyncio.gather(authorize(count),authorize(count))
+        check(sum(r['newly_authorized'] for r in winners)==1,'CF045 concurrent count winner one')
+        evidence=dict(request_sha256=rh,projection_sha256=ph,input_tokens=100,model=policy.model,price_sha256=sha(policy.price_json),mapping_sha256=agreement.documentation_sha256,count_fee_bound_nano=0)
+        gen={k:v for k,v in count.items() if k!='rendered_request'}|{'phase':'generation','evidence':evidence}
+        winners=await asyncio.gather(authorize(gen),authorize(gen))
+        check(sum(r['newly_authorized'] for r in winners)==1,'CF045 concurrent generation winner one')
+        check(await sql('SELECT reserved_nano FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id})==100000000,'CF045 duplicate phases no second reserve')
+        mark('two_SQL_sessions_count_generation_single_winners')
+        changed=count|{'request_sha256':'f'*64};await fail(authorize(changed))
+        async def authorize_for(h,v):
+            async with owned_session(proof) as s:return await MeaningRuntimeService(s,runtime_policy=runtime_policy).authorize(h,v)
+        async def new_count():
+            h,a,d=await pending_grant()
+            r=O.rendered_request(d)
+            return h,dict(count,attempt_id=str(a),rendered_request=r)
+        rollback_handle,rollback_count=await new_count()
+        before_amount=await sql('SELECT reserved_nano FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id})
+        async with owned_session(proof) as s:
+            flush=s.flush;n=0
+            async def fail_second_flush(*a,**kw):
+                nonlocal n
+                n+=1
+                if n==2:raise RuntimeError('synthetic rollback before grant consume')
+                return await flush(*a,**kw)
+            s.flush=fail_second_flush
+            try:await MeaningRuntimeService(s,runtime_policy=runtime_policy).authorize(rollback_handle,rollback_count)
+            except RuntimeError:pass
+            else:raise AssertionError('CF045 staged failure must roll back')
+        check(await sql('SELECT reserved_nano FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id})==before_amount,'CF045 atomic rollback account')
+        check(await sql('SELECT count(*) FROM supervisor_meaning_reservations')==2,'CF045 rollback no orphan reservation')
+        mark('count_reservation_grant_transaction_rollback_atomic')
+        ack_handle,ack_count=await new_count()
+        async with owned_session(proof) as s:
+            commit=s.commit
+            async def lost_commit():await commit();raise OSError('synthetic ACK loss after committed SQL')
+            s.commit=lost_commit
+            try:await MeaningRuntimeService(s,runtime_policy=runtime_policy).authorize(ack_handle,ack_count)
+            except OSError:pass
+            else:raise AssertionError('CF045 ACK loss must not return permission')
+        # No reservation UUID was returned; recovery knows only the original handle.
+        reconcile={k:ack_count[k] for k in ('attempt_id','request_sha256','projection_sha256')}|dict(action='reconcile',phase='count')
+        async with owned_session(proof) as s:
+            dirty=AuthUser(id=uuid4());s.add(dirty)
+            recovered=await MeaningRuntimeService(s).reconcile_phase(ack_handle,reconcile)
+            check(dirty in s.new and recovered['newly_authorized'] is False and recovered['settlement']['state']=='held' and recovered['terminal_ACK'] is False,'CF045 readonly ACK reconcile no autoflush')
+        check((await authorize_for(ack_handle,ack_count))['newly_authorized'] is False,'CF045 committed phase replay cannot resend')
+        check(len(provider_calls)==2,'CF045 recovery never dispatches provider')
+        mark('commit_ACK_loss_wrapper_readonly_recovery_no_hidden_ID_no_new_send')
+        expiry_handle,expiry_attempt,expiry_draft=await pending_grant(deadline_seconds=.8)
+        expiry_count=dict(count,attempt_id=str(expiry_attempt),rendered_request=O.rendered_request(expiry_draft))
+        await authorize_for(expiry_handle,expiry_count)
+        await asyncio.sleep(.85)
+        await fail(authorize_for(expiry_handle,dict(gen,attempt_id=str(expiry_attempt))))
+        check(await sql('SELECT generation_receipt FROM supervisor_meaning_grants WHERE id=:id',{'id':UUID(expiry_handle.split('.')[0])}) is None,'CF045 absolute grant deadline cannot renew generation')
+        mark('absolute_deadline_between_phases_no_renewal_held_no_terminal_ACK')
+        deletion_handle,deletion_count=await new_count()
+        await authorize_for(deletion_handle,deletion_count)
+        deletion_id=UUID(deletion_handle.split('.')[0])
+        async with owned_session(proof) as s:
+            g=await s.get(Grant,deletion_id)
+            from src.modules.supervisor.infrastructure.preparation_repository import lineage,redact
+            rows=await lineage(s,principal.user_id,g.preparation_id)
+            await redact(s,rows,await s.scalar(text('SELECT clock_timestamp()')));await s.commit()
+        deletion_gen=dict(gen,attempt_id=deletion_count['attempt_id'])
+        await fail(authorize_for(deletion_handle,deletion_gen))
+        check(await sql('SELECT generation_receipt FROM supervisor_meaning_grants WHERE id=:id',{'id':deletion_id}) is None,'CF045 deleted after count generation0')
+        mark('count_to_generation_fresh_delete_blocks_and_preserves_held')
+        observation={'state':'unknown','reason':'UNOBSERVED','estimated_nano':None}
+        check(await sql('SELECT blocked FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id}) is False,'CF045 revoke fixture starts unblocked')
+        async with owned_session(proof) as s:
+            same_user=await s.get(AuthUser,principal.user_id)
+            _,second_principal=await issue_session(s,same_user);await s.commit()
+        revoke_handle,revoke_attempt,revoke_draft=await pending_grant(who=second_principal)
+        revoke_count=dict(count,attempt_id=str(revoke_attempt),rendered_request=O.rendered_request(revoke_draft))
+        wrong_nonce=revoke_handle[:-1]+('0' if revoke_handle[-1]!='0' else '1')
+        await fail(authorize_for(wrong_nonce,revoke_count))
+        check(await sql('SELECT count_receipt FROM supervisor_meaning_grants WHERE id=:id',{'id':UUID(revoke_handle.split('.')[0])}) is None,'CF045 valid shaped wrong nonce authority0')
+        await authorize_for(revoke_handle,revoke_count)
+        async with owned_session(proof) as s:
+            session_row=await s.get(AuthSession,second_principal.session_id)
+            session_row.revoked_at=await s.scalar(text('SELECT clock_timestamp()'));await s.commit()
+        await fail(authorize_for(revoke_handle,dict(gen,attempt_id=str(revoke_attempt))))
+        check(await sql('SELECT generation_receipt FROM supervisor_meaning_grants WHERE id=:id',{'id':UUID(revoke_handle.split('.')[0])}) is None and await sql('SELECT blocked FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id}) is False,'CF045 session revocation alone generation0 on unblocked account')
+        mark('well_formed_wrong_nonce_and_count_then_revoke_generation0_unblocked_account')
+        ack_terminal=dict(attempt_id=ack_count['attempt_id'],request_sha256=rh,projection_sha256=ph,observation=observation,blocked=True)
+        async with owned_session(proof) as s:
+            commit=s.commit
+            async def lost_terminal_commit():await commit();raise OSError('synthetic settlement ACK loss')
+            s.commit=lost_terminal_commit
+            try:await MeaningRuntimeService(s).finish(ack_handle,ack_terminal)
+            except OSError:pass
+            else:raise AssertionError('CF045 settlement ACK loss must not report success')
+        async with owned_session(proof) as s:
+            recovered=await MeaningRuntimeService(s).reconcile_phase(ack_handle,dict(reconcile,phase='settlement'))
+            check(recovered['newly_authorized'] is False and recovered['terminal_ACK'] is True and recovered['settlement']['state']=='unknown','CF045 terminal SQL and grant atomically durable after ACK loss')
+        mark('settlement_commit_ACK_loss_wrapper_terminal_readonly_reconcile')
+        terminal=dict(attempt_id=str(attempt),request_sha256=rh,projection_sha256=ph,observation=observation,blocked=True)
+        async with owned_session(proof) as s:
+            row=await s.get(AuthSession,principal.session_id);row.revoked_at=await s.scalar(text('SELECT clock_timestamp()'));await s.commit()
+        async with owned_session(proof) as s:receipt=await MeaningRuntimeService(s).finish(handle,terminal)
+        check(receipt['settlement']['state']=='unknown','CF045 settlement after revocation')
+        check(await sql('SELECT blocked FROM supervisor_meaning_accounts WHERE id=:id',{'id':account_id}) is True,'CF045 unknown hold blocked')
+        async with owned_session(proof) as s:check(await MeaningRuntimeService(s).finish(handle,terminal)==receipt,'CF045 terminal replay')
+        async with owned_session(proof) as s:await fail(MeaningRuntimeService(s).finish(handle,terminal|{'blocked':False}))
+        await fail(authorize(gen))
+        mark('revocation_fixed_settlement_hold_block_and_conflict')
+        try:await migration(proof,'c44001a7e0001',downgrade=True)
+        except RuntimeError:pass
+        else:raise AssertionError('CF045 populated grant downgrade must refuse')
+        check(await sql('SELECT count(*) FROM supervisor_meaning_grants')==8,'CF045 populated grants preserved')
+        mark('populated_downgrade_denied_no_secret_payload_persistence')
+        return {'groups':len(groups),'labels':groups,'mock_provider_count':1,'mock_provider_generation':1,'key_supplier':'synthetic-only'}
+    finally:
+        app.dependency_overrides.pop(get_session,None)
+        for task in pending:
+            if not task.done():task.cancel()
+        if pending:await asyncio.gather(*pending,return_exceptions=True)

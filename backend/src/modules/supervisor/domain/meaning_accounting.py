@@ -116,3 +116,83 @@ def settlement(policy, evidence):
         if amount>policy.attempt_nano: raise AccountingConflict()
         return 'observed',amount
     except (AccountingConflict,KeyError,TypeError): return 'anomalous',None
+
+# CF045: closed server policy and provider input identities. No source discovery.
+INPUT_FIELDS=('model','instructions','input','text','tools','tool_choice','parallel_tool_calls','reasoning')
+COUNT_DOCUMENTATION='https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count'
+
+def wire(value, maximum=98304):
+    try: raw=json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+    except (ValueError,TypeError,OverflowError,RecursionError): raise AccountingConflict() from None
+    if len(raw.encode())>maximum: raise AccountingConflict()
+    return raw
+
+def strict_json(raw, maximum=98304):
+    if type(raw) not in {str,bytes,bytearray} or len(raw.encode() if type(raw) is str else raw)>maximum: raise AccountingConflict()
+    def pairs(items):
+        out={}
+        for k,v in items:
+            if k in out: raise AccountingConflict()
+            out[k]=v
+        return out
+    try: return json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda _:(_ for _ in ()).throw(AccountingConflict()))
+    except (ValueError,TypeError,UnicodeError,RecursionError): raise AccountingConflict() from None
+
+def counter(value):
+    names={'documentation_url','documentation_sha256','input_fields','counting_fee_bound_nano'}
+    if type(value) is not dict or set(value)!=names or value['documentation_url']!=COUNT_DOCUMENTATION or value['input_fields']!=list(INPUT_FIELDS): raise AccountingConflict()
+    digest(value['documentation_sha256']);integer(value['counting_fee_bound_nano'])
+    if value['counting_fee_bound_nano']>28496000: raise AccountingConflict()
+    return canonical(value)
+
+@dataclass(frozen=True,repr=False)
+class RuntimePolicy:
+    enabled: object
+    bindings_json: str
+    counter_json: str
+    def active(self):
+        return self.enabled is True or type(self.enabled) is str and self.enabled=='true'
+    def select(self,owner):
+        if not self.active(): raise AccountingConflict()
+        values=strict_json(self.bindings_json,16384)
+        if type(values) is not dict: raise AccountingConflict()
+        for k,v in values.items():
+            if str(UUID(k))!=k or type(v) is not dict or set(v)!={'account_id','scope_sha256','policy_sha256'}: raise AccountingConflict()
+            if type(v['account_id']) is not str or str(UUID(v['account_id']))!=v['account_id']: raise AccountingConflict()
+            digest(v['scope_sha256']);digest(v['policy_sha256'])
+        result=values.get(str(owner))
+        if result is None: raise AccountingConflict()
+        agreement=counter(strict_json(self.counter_json,16384))
+        return UUID(result['account_id']),result['scope_sha256'],result['policy_sha256'],agreement
+
+def principal_fingerprint(principal):
+    return sha(canonical(dict(owner=str(principal.user_id),session=str(principal.session_id),expires=principal.expires_at.isoformat(),token_sha256=hashlib.sha256(principal.token_digest).hexdigest())))
+
+def provider_identity(request,draft_json,semantic_json):
+    """Validate transient wire bytes against stored draft/spec, without AI imports."""
+    spec=strict_json(semantic_json,16384)
+    required=set(INPUT_FIELDS)|{'service_tier','store','stream','max_output_tokens'}
+    if type(request) is not dict or set(request)!=required: raise AccountingConflict()
+    expected={'model':spec['model'],'input':[{'role':'user','content':[{'type':'input_text','text':draft_json}]}],
+              'tools':[],'tool_choice':'none','parallel_tool_calls':False,'reasoning':{'effort':'none'},
+              'service_tier':spec['service_tier'],'store':False,'stream':False,'max_output_tokens':spec['caps']['output_tokens']}
+    for k,v in expected.items():
+        # Canonical comparison distinguishes bool from integer, nested shape too.
+        if wire(request[k])!=wire(v): raise AccountingConflict()
+    if type(request['instructions']) is not str or sha(request['instructions'])!=spec['prompt_sha256']: raise AccountingConflict()
+    form=request['text']
+    if type(form) is not dict or set(form)!={'format'} or type(form['format']) is not dict: raise AccountingConflict()
+    f=form['format']
+    if set(f)!={'type','name','strict','schema'} or f['type']!='json_schema' or f['name']!='supervisor_meaning_v1' or f['strict'] is not True or sha(wire(f['schema']))!=spec['schema_sha256']: raise AccountingConflict()
+    return sha(wire(request,65536)),sha(wire({k:request[k] for k in INPUT_FIELDS},65536))
+
+def maximum_reserve(policy,agreement,input_tokens=None):
+    c=strict_json(agreement);counter(c)
+    tokens=policy.input_cap if input_tokens is None else integer(input_tokens)
+    if tokens>policy.input_cap: raise AccountingConflict()
+    p=strict_json(policy.price_json)
+    # Ten percent regional allowance, rounded upward; no cached-token discount.
+    base=tokens*p['input_nano_per_token']+policy.output_cap*p['output_nano_per_token']
+    amount=(base*110+99)//100+c['counting_fee_bound_nano'];integer(amount)
+    if amount>policy.attempt_nano: raise AccountingConflict()
+    return amount

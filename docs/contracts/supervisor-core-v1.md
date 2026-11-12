@@ -519,3 +519,46 @@ CF038의 현재 prompt/semantic/alignment와 과거 소비 source/spec를 분리
 새 발급·송신은 완전한 기존 소비 이력과 실제 durable write/readback·동일 invocation의
 stdio/local ACK가 검증된 뒤에만 가능하다. 실패·불명·취소는 추가 송신 없이 hold로 끝낸다.
 운영 epoch/정책·Gateway·CF044 운영 계정의 연결이나 활성화를 뜻하지 않는다.
+
+## CF045 요청별 Gateway와 durable 비용 승인
+
+기본 설정은 비활성이다. 서버가 명시한 owner별 기존 `meaning` account ID·scope/policy hash와
+계수 근거 snapshot만 선택하며 계정 자동 생성·기간 갱신·예산 reset은 하지 않는다.
+`SUPERVISOR_MEANING_ENABLED`, 별도 `SUPERVISOR_MEANING_SERVICE_TOKEN`,
+`SUPERVISOR_MEANING_ACCOUNT_BINDINGS`, `SUPERVISOR_MEANING_COUNTER_AGREEMENT`가 필요하다.
+Flow 서비스 token과 비용 변경 권한은 별개다. 운영 계정 발급·정책 검토·실제 key supplier와
+AI runtime의 명시 설치·배포 활성화는 별도 선행조건이다.
+
+신규 root 준비의 metadata grant는 유료 송신권이 아니다. 기존 준비 guard 뒤 서버 전용
+`X-Supervisor-Meaning-Grant` header로 전달하며 public body/hash는 바꾸지 않는다.
+AI의 실제 `assess(...).needs_supplement`가 참인 policy2 start에만 요청별 Gateway/budget client를 만든다.
+기존 deterministic·policy1·continue·동일 key replay/GET는 모델 비용 권한을 소비하지 않는다.
+미설정/잘못된 설정/계정 불일치는 모델 보완만 unavailable로 닫는다.
+
+두 내부 POST `/internal/supervisor/meaning/authorize`, `/internal/supervisor/meaning/settle`는
+별도 service token과 nonce를 body/DB 전에 검증하고 public OpenAPI에서 제외한다.
+query·browser credential·중복 header/JSON key·압축·unknown field를 거절한다.
+count body는 96KiB, generation/settle은 8KiB, callback 전체는 최초 진입부터 5초다.
+고정 origin/TLS·trust_env=False·redirect=False·retry0을 사용한다.
+
+준비 request/DB projection과 provider rendered request/INPUT_FIELDS projection은 서로 다른 hash다.
+Backend는 저장한 draft와 고정 spec의 instructions/schema hash 및 닫힌 provider shape를 대조하여
+provider hash를 독립 계산한다. transient payload는 저장하지 않는다. authorize의 잠금은
+session→root/leaf 준비→account→reservation→grant 순서이며 count 예약과 phase 소비를 하나의
+commit으로 끝낸다. commit ACK 이후 최초 승자만 True이며 HTTP 중 SQL lock을 유지하지 않는다.
+원 요청/grant/account/session/준비 TTL의 가장 이른 기한을 commit 후 다시 확인하고, AI는 callback
+시작 시각에 remaining을 더해 RTT로 기한을 연장하지 않는다. commit 직후 철회와 물리 송신의 원자성을
+보장하는 것은 아니다.
+
+정산은 이미 소비한 고정 grant/예약과 provider hash에만 가능하고, 사용자 세션 철회·만료·원문 삭제와
+분리한다. Gateway의 검증된 observed model/price hash와 고정 request model/tier를 확인해 CF044
+증거로 매핑하고 정수 비용을 다시 계산한다. 의미 거절과 관측 사용량 정산은 별개다.
+자동 환급은 없고 unknown/anomalous는 hold/block, 다른 terminal 증거는 conflict다.
+ACK 불명 뒤에는 `authorize`의 닫힌 `action=reconcile` 요청으로 SELECT-only 상태를 확인할 수 있으며,
+명시 복구 결과는 항상 새 송신권 False다. 자동 callback 재시도·새 권위·sweeper는 없다.
+정산 ACK 부재는 held/consumed로 보존하고 block 완료나 청구 확정으로 표현하지 않는다.
+
+이번 수용은 실제 Backend 준비 HTTP→AI core ASGI→실제 요청별 Gateway→provider MockTransport→
+Backend phase ASGI→신규 소유 PG의 합성 연결이다. 실제 provider/배포 환경·운영 정책 발급·전체 AI
+startup·Supervisor→Flow 전체 인수는 포함하지 않는다. 기존 private 실제 검증의 보수 예약/once는
+이 운영 계정으로 이식하지 않는다.

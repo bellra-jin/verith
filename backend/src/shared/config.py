@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     FUNDAMENTAL_SERVICE_TOKEN: str = ""
     FLOW_ANALYSIS_ENABLED: bool = False
     FLOW_SERVICE_TOKEN: str = Field(default="", repr=False)
+    SUPERVISOR_MEANING_ENABLED: Any = False  # Raw: invalid paid config cannot break free planning.
+    SUPERVISOR_MEANING_SERVICE_TOKEN: str = Field(default="", repr=False)
+    SUPERVISOR_MEANING_ACCOUNT_BINDINGS: str = ""
+    SUPERVISOR_MEANING_COUNTER_AGREEMENT: str = ""
     # Raw, non-secret values: parse only on a new Flow admission, never startup/GET.
     FLOW_USAGE_LIMITS_ENABLED: Any = "false"
     FLOW_SUPPORTED_TICKERS: Any = ""

@@ -527,7 +527,7 @@ stdio/local ACK가 검증된 뒤에만 가능하다. 실패·불명·취소는 �
 `SUPERVISOR_MEANING_ENABLED`, 별도 `SUPERVISOR_MEANING_SERVICE_TOKEN`,
 `SUPERVISOR_MEANING_ACCOUNT_BINDINGS`, `SUPERVISOR_MEANING_COUNTER_AGREEMENT`가 필요하다.
 Flow 서비스 token과 비용 변경 권한은 별개다. 운영 계정 발급·정책 검토·실제 key supplier와
-AI runtime의 명시 설치·배포 활성화는 별도 선행조건이다.
+배포 활성화와 실제 key 설정은 별도 선행조건이다.
 
 신규 root 준비의 metadata grant는 유료 송신권이 아니다. 기존 준비 guard 뒤 서버 전용
 `X-Supervisor-Meaning-Grant` header로 전달하며 public body/hash는 바꾸지 않는다.
@@ -562,3 +562,21 @@ ACK 불명 뒤에는 `authorize`의 닫힌 `action=reconcile` 요청으로 SELEC
 Backend phase ASGI→신규 소유 PG의 합성 연결이다. 실제 provider/배포 환경·운영 정책 발급·전체 AI
 startup·Supervisor→Flow 전체 인수는 포함하지 않는다. 기존 private 실제 검증의 보수 예약/once는
 이 운영 계정으로 이식하지 않는다.
+
+### AI lifespan의 기본 비활성 연결
+
+`uvicorn src.main:app`의 lifespan은 기존 runtime 설치 함수를 호출한다. 명시 process 설정
+`SUPERVISOR_MEANING_ENABLED=true`, `SUPERVISOR_MEANING_BACKEND_ORIGIN`(HTTPS origin),
+별도 `SUPERVISOR_MEANING_SERVICE_TOKEN`, `SUPERVISOR_MEANING_COUNTER_AGREEMENT`의
+닫힌 JSON snapshot이 모두 유효할 때만 기존 `MeaningRuntimeOptions`를 구성한다.
+기본값으로 origin·서비스 token·계수 근거·계정/한도를 만들지 않으며 Flow token을 대체값으로
+사용하지 않는다. 미설정·부분/오류 설정은 runtime을 설치하지 않아 의미 보완만 unavailable로
+닫고 deterministic·policy1·continue 경로를 유지한다. 환경 파일 탐색·dotenv 로드·복사는 없다.
+
+이 연결은 startup에서 provider key를 읽지 않는다. 기존 Gateway가 count 승인 ACK를 받은 뒤
+호출하는 지연 supplier만 process의 `OPENAI_API_KEY` 한 값을 읽으며 env 파일/fallback은 없다.
+서버 grant와 Backend의 기존 owner account·정책/한도 검증을 대신하지 않는다. shutdown에서
+runtime 참조를 해제하며 startup 자체는 HTTP·DB·provider·계정 발급을 수행하지 않는다.
+
+선택한 실제 lifespan/설치 함수와 실제 core ASGI→Gateway→합성 phase/provider transport 검증은
+전체 AI main의 다른 서비스 import·실제 uvicorn startup·배포 설정/키·실공급자 검증과 구분한다.

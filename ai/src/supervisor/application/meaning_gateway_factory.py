@@ -15,7 +15,12 @@ class MeaningRuntimeOptions:
     allow_loopback: bool=False
     def validate(self):
         from src.supervisor.infrastructure.openai_meaning_gateway import CounterAgreement
-        u=urlsplit(self.backend_origin)
+        try:
+            u=urlsplit(self.backend_origin)
+            port=u.port
+        except (ValueError,TypeError):
+            raise CounterUnavailable() from None
+        if port is not None and not 1<=port<=65535: raise CounterUnavailable()
         if u.scheme!='https' and not (self.allow_loopback is True and u.scheme=='http' and u.hostname in {'127.0.0.1','localhost','::1'}): raise CounterUnavailable()
         if not u.hostname or u.username or u.password or u.path not in {'','/'} or u.query or u.fragment or self.backend_origin.endswith('/'): raise CounterUnavailable()
         if type(self.service_token) is not str or not 32<=len(self.service_token)<=512 or any(not 33<=ord(c)<=126 for c in self.service_token) or not callable(self.key_supplier) or type(self.counter_agreement) is not CounterAgreement: raise CounterUnavailable()
@@ -32,3 +37,34 @@ class MeaningRuntime:
         o=self._options
         budget=BackendMeaningBudget(origin=o.backend_origin,service_token=o.service_token,grant=grant,draft=draft,agreement=o.counter_agreement,transport=o.backend_transport,deadline=deadline)
         return OpenAIMeaningGateway(key_supplier=o.key_supplier,budget=budget,counter_agreement=o.counter_agreement,transport=o.provider_transport,deadline=deadline)
+
+
+def startup_options(values):
+    """Explicit process settings only; no dotenv discovery or credential read here."""
+    if values.get('SUPERVISOR_MEANING_ENABLED') != 'true':
+        return None
+    from src.supervisor.domain.meaning import decode
+    from src.supervisor.infrastructure.openai_meaning_gateway import CounterAgreement
+    try:
+        origin = values.get('SUPERVISOR_MEANING_BACKEND_ORIGIN')
+        token = values.get('SUPERVISOR_MEANING_SERVICE_TOKEN')
+        raw = values.get('SUPERVISOR_MEANING_COUNTER_AGREEMENT')
+        if type(origin) is not str or type(token) is not str or type(raw) is not str or len(raw.encode('utf8')) > 16384:
+            return None
+        counter = decode(raw)
+        names = {'documentation_url', 'documentation_sha256', 'input_fields', 'counting_fee_bound_nano'}
+        if type(counter) is not dict or set(counter) != names or type(counter['input_fields']) is not list:
+            return None
+        agreement = CounterAgreement(counter['documentation_url'], counter['documentation_sha256'],
+                                     tuple(counter['input_fields']), counter['counting_fee_bound_nano'])
+
+        async def key_supplier():
+            # Gateway calls this once only after the count authorization ACK.
+            # Read one explicit process variable, never an env file or fallback.
+            return values.get('OPENAI_API_KEY')
+
+        options = MeaningRuntimeOptions(origin, token, agreement, key_supplier)
+        options.validate()
+        return options
+    except (CounterUnavailable, ValueError, TypeError, UnicodeError, RecursionError):
+        return None

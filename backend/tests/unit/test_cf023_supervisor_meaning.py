@@ -1542,3 +1542,144 @@ def test_cf042_deadline_precision_at_observed_CI_fraction_never_extends_shorter_
     state['core_deadline']=state['core_admission_deadline']=started+10
     assert preparation_deadlines(request,started+4)==started+10
     assert state['core_admission_deadline']==started+10
+
+# Default-off AI lifespan assembly; selected main functions, not full AI startup.
+def startup_settings():
+    return dict(SUPERVISOR_MEANING_ENABLED='true',
+                SUPERVISOR_MEANING_BACKEND_ORIGIN='https://backend.example',
+                SUPERVISOR_MEANING_SERVICE_TOKEN='meaning-'+('s'*40),
+                SUPERVISOR_MEANING_COUNTER_AGREEMENT=M.canonical(dict(
+                    documentation_url=O.COUNT_DOCUMENTATION,documentation_sha256='a'*64,
+                    input_fields=list(O.INPUT_FIELDS),counting_fee_bound_nano=1)))
+
+
+def selected_startup_app():
+    import ast
+    from contextlib import asynccontextmanager
+    from fastapi import FastAPI
+    tree=ast.parse((ROOT/'ai/src/main.py').read_text())
+    selected=[]
+    for node in tree.body:
+        if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)) and node.name in {'install_supervisor_meaning_runtime','lifespan'}:
+            selected.append(node)
+        elif isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in {'supervisor_meaning_runtime','supervisor_router','app'} for t in node.targets):
+            selected.append(node)
+        elif isinstance(node,ast.Expr) and isinstance(node.value,ast.Call) and ast.unparse(node.value)=='app.include_router(supervisor_router)':
+            selected.append(node)
+    ns=dict(FastAPI=FastAPI,asynccontextmanager=asynccontextmanager,
+            make_supervisor_router=sys.modules['src.supervisor.api.routes'].make_router)
+    exec(compile(ast.Module(body=selected,type_ignores=[]),'<selected-ai-lifespan>','exec'),ns)
+    assert ns['supervisor_meaning_runtime'] is None
+    return ns
+
+
+@pytest.mark.parametrize('fault',['off','missing_origin','missing_token','missing_counter','flow_only',
+                                  'http','bad_port','zero_port','bad_origin_type','token_type','counter_type','counter_large',
+                                  'duplicate','unknown','bad_sha','bool_fee','bad_fields','bad_url'])
+def test_meaning_startup_invalid_explicit_settings_close_without_key_read(fault):
+    F=sys.modules['src.supervisor.application.meaning_gateway_factory'];values=startup_settings();reads=[]
+    if fault=='off':values['SUPERVISOR_MEANING_ENABLED']='TRUE'
+    elif fault.startswith('missing_'):
+        values.pop({'missing_origin':'SUPERVISOR_MEANING_BACKEND_ORIGIN','missing_token':'SUPERVISOR_MEANING_SERVICE_TOKEN','missing_counter':'SUPERVISOR_MEANING_COUNTER_AGREEMENT'}[fault])
+    elif fault=='flow_only':values={'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':'s'*40}
+    elif fault=='http':values['SUPERVISOR_MEANING_BACKEND_ORIGIN']='http://127.0.0.1:8200'
+    elif fault=='bad_port':values['SUPERVISOR_MEANING_BACKEND_ORIGIN']='https://backend.example:bad'
+    elif fault=='zero_port':values['SUPERVISOR_MEANING_BACKEND_ORIGIN']='https://backend.example:0'
+    elif fault=='bad_origin_type':values['SUPERVISOR_MEANING_BACKEND_ORIGIN']=[]
+    elif fault=='token_type':values['SUPERVISOR_MEANING_SERVICE_TOKEN']=42
+    elif fault=='counter_type':values['SUPERVISOR_MEANING_COUNTER_AGREEMENT']=None
+    elif fault=='counter_large':values['SUPERVISOR_MEANING_COUNTER_AGREEMENT']='x'*16385
+    elif fault=='duplicate':values['SUPERVISOR_MEANING_COUNTER_AGREEMENT']='{"input_fields":[],"input_fields":[]}'
+    else:
+        counter=json.loads(values['SUPERVISOR_MEANING_COUNTER_AGREEMENT'])
+        if fault=='unknown':counter['extra']='synthetic-not-exposed'
+        elif fault=='bad_sha':counter['documentation_sha256']=[]
+        elif fault=='bool_fee':counter['counting_fee_bound_nano']=False
+        elif fault=='bad_fields':counter['input_fields']={}
+        elif fault=='bad_url':counter['documentation_url']='https://other.example'
+        values['SUPERVISOR_MEANING_COUNTER_AGREEMENT']=M.canonical(counter)
+    class Settings(dict):
+        def get(self,key,default=None):
+            reads.append(key)
+            assert key!='OPENAI_API_KEY'
+            return super().get(key,default)
+    assert F.startup_options(Settings(values)) is None
+    assert not any('FLOW_' in k for k in reads)
+
+
+def test_meaning_startup_module_import_is_inert_and_key_is_deferred(monkeypatch):
+    import importlib.util
+    F=sys.modules['src.supervisor.application.meaning_gateway_factory']
+    with patch('os.getenv',side_effect=AssertionError('import env forbidden')),patch('pathlib.Path.read_text',side_effect=AssertionError('import file forbidden')):
+        spec=importlib.util.spec_from_file_location(F.__name__,F.__file__)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    values=startup_settings();reads=[]
+    class Settings(dict):
+        def get(self,key,default=None):reads.append(key);return super().get(key,default)
+    options=F.startup_options(Settings(values));assert options is not None
+    F.MeaningRuntime(options)
+    assert 'OPENAI_API_KEY' not in reads and not ATTEMPTS
+    assert 'service_token' not in repr(options) and 's'*40 not in repr(options)
+
+
+@pytest.mark.parametrize('configured',[False,True])
+async def test_meaning_default_lifespan_preserves_deterministic_continue_and_unavailable(monkeypatch,configured):
+    F=sys.modules['src.supervisor.application.meaning_gateway_factory'];settings=startup_settings() if configured else {}
+    if configured:settings['SUPERVISOR_MEANING_COUNTER_AGREEMENT']='invalid'
+    monkeypatch.setattr(F,'startup_options',lambda _:F_start(settings))
+    ns=selected_startup_app();app=ns['app']
+    d=draft('삼성전자 수급');first=await P.start_v2(d)
+    base=dict(schema_version=B.VERSION,request_id=str(uuid4()),trace_id=str(uuid4()),error=None)
+    async with app.router.lifespan_context(app):
+        assert ns['supervisor_meaning_runtime'] is None
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://ai.example') as c:
+            for value in (dict(phase='start',draft=d.model_dump(mode='json')),
+                          dict(phase='continue',draft=d.model_dump(mode='json'),frame=first.frame.model_dump(mode='json'),resolution=resolution().model_dump(mode='json')),
+                          dict(phase='start',draft=draft('현대건설 수급').model_dump(mode='json'))):
+                value.update(policy_version='supervisor.flow-core.2',attempt_id=str(uuid4()))
+                result=await c.post('/internal/supervisor/core/plan',json=base|{'data':value},headers={'X-Flow-Service-Token':TOKEN})
+                assert result.status_code==200
+                if value['draft']['original_query']=='현대건설 수급':assert result.json()['data']['meaning_status']=='unavailable'
+    assert ns['supervisor_meaning_runtime'] is None
+
+
+# Preserve the actual parser when a lifespan test substitutes only its input mapping.
+F_start=sys.modules['src.supervisor.application.meaning_gateway_factory'].startup_options
+
+
+@pytest.mark.parametrize('authorized',[True,False])
+async def test_meaning_lifespan_actual_gateway_reads_key_only_after_count_ACK(monkeypatch,authorized):
+    from dataclasses import replace
+    from fastapi import FastAPI,Request
+    F=sys.modules['src.supervisor.application.meaning_gateway_factory'];events=[];server=FastAPI();d=draft('현대건설 수급')
+    @server.post('/internal/supervisor/meaning/{phase}')
+    async def phase(phase:str,request:Request):
+        value=await request.json();events.append('backend-'+phase+(('-'+value['phase']) if phase=='authorize' else ''))
+        if phase=='settle':return {'settlement':{'state':'observed' if authorized else 'unknown'}}
+        receipt=dict(phase=value['phase'],reservation_id=str(uuid4()),binding_sha256='a'*64,request_sha256=value['request_sha256'],projection_sha256=value['projection_sha256'],evidence_sha256='b'*64)
+        return dict(newly_authorized=authorized,remaining_ms=50000,receipt=receipt)
+    def provider_send(request):
+        events.append(request.url.path)
+        return httpx.Response(200,json=dict(object='response.input_tokens',input_tokens=100) if request.url.path==O.COUNT_PATH else provider(proposal(mentions=[dict(evidence=ev(d.original_query,'현대건설'),negation=None)])))
+    class Settings(dict):
+        def get(self,key,default=None):
+            if key=='OPENAI_API_KEY':
+                assert events==['backend-authorize-count'];events.append('key-read')
+                return 'synthetic-only'
+            return super().get(key,default)
+    settings=Settings(startup_settings())
+    def options(_):
+        value=F_start(settings)
+        return replace(value,backend_transport=httpx.ASGITransport(app=server),provider_transport=httpx.MockTransport(provider_send))
+    monkeypatch.setattr(F,'startup_options',options)
+    ns=selected_startup_app();app=ns['app']
+    async with app.router.lifespan_context(app):
+        installed=ns['supervisor_meaning_runtime'];assert type(installed) is F.MeaningRuntime and not events
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://ai.example') as c:
+            payload=dict(schema_version=B.VERSION,request_id=str(uuid4()),trace_id=str(uuid4()),data=dict(phase='start',policy_version='supervisor.flow-core.2',draft=d.model_dump(mode='json'),attempt_id=str(uuid4())),error=None)
+            headers={'X-Flow-Service-Token':TOKEN,'X-Supervisor-Meaning-Grant':str(uuid4())+'.'+'a'*64}
+            result=await c.post('/internal/supervisor/core/plan',json=payload,headers=headers)
+        assert result.status_code==200
+        assert result.json()['data']['meaning_status']==('supplemented' if authorized else 'counter_unavailable')
+    assert ns['supervisor_meaning_runtime'] is None
+    assert events==(['backend-authorize-count','key-read',O.COUNT_PATH,'backend-authorize-generation',O.GENERATE_PATH,'backend-settle'] if authorized else ['backend-authorize-count'])

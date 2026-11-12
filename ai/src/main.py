@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
 
 from src.shared.api.errors import AppError, app_error_handler, validation_exception_handler
 from src.agents.fundamental.api.routes import router as fundamental_router
@@ -12,14 +13,29 @@ from src.agents.flow.api.http import router as flow_router
 supervisor_meaning_runtime = None
 
 def install_supervisor_meaning_runtime(options):
-    # Called explicitly by a deployment composition, never from environment/import.
+    # Explicit options only; constructing a runtime does not read a provider key.
     from src.supervisor.application.meaning_gateway_factory import MeaningRuntime
     global supervisor_meaning_runtime
     supervisor_meaning_runtime = MeaningRuntime(options)
 
+
+@asynccontextmanager
+async def lifespan(app):
+    import os
+    from src.supervisor.application.meaning_gateway_factory import startup_options
+    global supervisor_meaning_runtime
+    supervisor_meaning_runtime = None
+    options = startup_options(os.environ)
+    if options is not None:
+        install_supervisor_meaning_runtime(options)
+    try:
+        yield
+    finally:
+        supervisor_meaning_runtime = None
+
 supervisor_router = make_supervisor_router(runtime=lambda: supervisor_meaning_runtime)
 
-app = FastAPI(title="verith-ai")
+app = FastAPI(title="verith-ai", lifespan=lifespan)
 
 # 내부 AI endpoint 라우터와 §9 error envelope 핸들러 등록.
 app.include_router(flow_router)

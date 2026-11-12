@@ -885,7 +885,7 @@ def test_reverse_response_order_keeps_usage_on_original_ordinal():
 # CF051 uses real Request/Response/stream protocol objects but synthetic SDK,
 # HTTP client/transport constructors and bytes. No SDK import or socket exists.
 def official_adapter(*,calls=4,count_body=None,status=200,chunks=None,headers=None,
-                     request_change=None,inner=None,constructor_failure=None,**limits):
+                     request_change=None,inner=None,constructor_failure=None,defer=False,**limits):
     h=strict_adapter(counter=False,calls=calls);events=[];sent=[];closed=[];read=[]
     a=h.a
     class Parts(httpx.SyncByteStream):
@@ -956,7 +956,7 @@ def official_adapter(*,calls=4,count_body=None,status=200,chunks=None,headers=No
     h.official_options=opts;h.events=events;h.sent=sent;h.closed=closed;h.read=read
     def factory():return a['official_count_openai_client'](request_budget=h.budget,api_key=PRIVATE,**opts)
     h.factory=factory
-    if constructor_failure:h.client=None
+    if constructor_failure or defer:h.client=None
     else:h.client=factory();h.sdk=h.client._client
     return h
 
@@ -1291,3 +1291,79 @@ def test_official_opaque_receipt_keeps_hash_binding_without_retaining_prompt():
     assert PRIVATE not in repr(receipts) and all('input' not in binding for _,binding in receipts.values())
     assert all(PRIVATE not in str(getattr(r,f.name)) for r in h.budget.snapshot() for f in fields(r))
     h.client.close()
+
+async def test_CF053_callback_late_fixed_ACK_is_not_adopted_after_clock_advance():
+    from src.modules.technical.domain import provider_execution as P
+    path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
+    tree=ast.parse(path.read_text());node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient')
+    clock=SimpleNamespace(value=0.0)
+    values={'P':P,'asyncio':asyncio,'httpx':httpx,'math':math,'time':SimpleNamespace(monotonic=lambda:clock.value)}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),values)
+    from fastapi import FastAPI
+    from starlette.responses import JSONResponse
+    app=FastAPI();seen=[]
+    @app.post('/internal/technical/execution/start')
+    async def start():
+        seen.append(True);clock.value=6
+        return JSONResponse({'schema_version':P.SCHEMA})
+    client=values['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,transport=httpx.ASGITransport(app=app))
+    with pytest.raises(P.ExecutionInvalid):await client._post('/internal/technical/execution/start',{'schema_version':P.SCHEMA},'f'*64,5,8192)
+    assert seen==[True]
+
+async def test_CF053_authority_snapshot_survives_await_mutation_without_credential_redirect():
+    from src.modules.technical.domain import provider_execution as P
+    path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
+    node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient')
+    values={'P':P,'asyncio':asyncio,'httpx':httpx,'math':math,'time':__import__('time')}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),values)
+    from fastapi import FastAPI,Request
+    from starlette.responses import JSONResponse
+    app=FastAPI();seen=[]
+    @app.post('/internal/technical/execution/start')
+    async def start(request:Request):
+        seen.append((request.url.hostname,request.headers['x-technical-authority-token']))
+        return JSONResponse({'bounded':True})
+    client=values['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,transport=httpx.ASGITransport(app=app))
+    class AwaitMutation:
+        def __init__(self,**kwargs):self.inner=httpx.AsyncClient(**kwargs)
+        async def __aenter__(self):
+            await self.inner.__aenter__();client.origin='https://other.invalid';client.token=b'c'*32;client.transport=None;return self.inner
+        async def __aexit__(self,*args):return await self.inner.__aexit__(*args)
+    values['httpx']=SimpleNamespace(AsyncClient=AwaitMutation,ASGITransport=httpx.ASGITransport)
+    assert await client._post('/internal/technical/execution/start',{'schema_version':P.SCHEMA},'f'*64,5,8192)=={'bounded':True}
+    assert seen==[('backend.invalid','b'*32)]
+    with pytest.raises(P.ExecutionInvalid):await client._post('/internal/technical/execution/start',{'schema_version':P.SCHEMA},'f'*64,5,8192)
+    assert len(seen)==1
+
+def test_CF053_actual_CF051_overflow_failure_keeps_usage_and_null_estimate():
+    from src.modules.technical.domain import provider_execution as P
+    h=strict_adapter();huge=P.MAX//10+1
+    h.sdk.responses.create=lambda **kwargs:SimpleNamespace(status='completed',model='synthetic-model',service_tier='default',output_text='synthetic',usage=SimpleNamespace(input_tokens=huge,output_tokens=0,total_tokens=huge))
+    with pytest.raises(h.a['LlmCallError'],match='USAGE_LIMIT_MISMATCH'):h.client.complete('synthetic')
+    record,=h.budget.snapshot()
+    assert record.usage==(huge,0,huge) and record.estimated_nano is None and not record.text_accepted
+    p=json.loads(h.budget._policy_json)
+    cfg=P.Configuration.parse({'schema_version':P.SCHEMA,'policy':p,'counter':{'free':True,'mapping':'technical.responses.model-input.v1','version':'synthetic.v1','provenance_sha256':'c'*64,'evidence_sha256':'d'*64},'caps':{'request':4096,'count':4096,'generation':4096},'ai_origin':'https://ai.invalid','authority_origin':'https://backend.invalid','cache_mode':'none','trace_mode':'none'})
+    start=P.start_receipt('e'*64,str(uuid4()),h.started.isoformat())
+    row={f.name:(str(getattr(record,f.name)) if isinstance(getattr(record,f.name),UUID) else list(getattr(record,f.name)) if type(getattr(record,f.name)) is tuple else getattr(record,f.name)) for f in fields(record)}
+    control={'analysis_id':row['analysis_id'],'attempt_id':row['attempt_id'],'policy_sha256':row['policy_sha256'],'reserved_nano':h.budget._reserved}
+    value={'schema_version':'technical.usage.v1','analysis_id':row['analysis_id'],'attempt_id':row['attempt_id'],'policy_sha256':row['policy_sha256'],'control_sha256':start['control_sha256'],'start_sha256':start['start_sha256'],'executor_id':start['executor_id'],'outcome':'failed','records':[row]}
+    assert P.evidence(value,cfg,control,start)==value
+
+async def test_CF053_authority_cleanup_delay_cannot_return_late_ACK():
+    from src.modules.technical.domain import provider_execution as P
+    path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
+    node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient')
+    clock=SimpleNamespace(value=0.0);app=__import__('fastapi').FastAPI()
+    from starlette.responses import JSONResponse
+    @app.post('/internal/technical/execution/start')
+    async def callback():return JSONResponse({'bounded':True})
+    class DelayedClose:
+        def __init__(self,**kwargs):self.inner=httpx.AsyncClient(**kwargs)
+        async def __aenter__(self):return await self.inner.__aenter__()
+        async def __aexit__(self,*args):
+            result=await self.inner.__aexit__(*args);clock.value=6;return result
+    values={'P':P,'asyncio':asyncio,'httpx':SimpleNamespace(AsyncClient=DelayedClose,ASGITransport=httpx.ASGITransport,AsyncBaseTransport=httpx.AsyncBaseTransport),'math':math,'time':SimpleNamespace(monotonic=lambda:clock.value)}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),values)
+    client=values['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,transport=httpx.ASGITransport(app=app))
+    with pytest.raises(P.ExecutionInvalid):await client._post('/internal/technical/execution/start',{'schema_version':P.SCHEMA},'f'*64,5,8192)

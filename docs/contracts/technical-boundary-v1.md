@@ -229,3 +229,45 @@ ready/stored의 incoming replay도 원 hash/정본과 비교한다. 게시 오�
 GET은 admitted/claimed 만료를 정리할 수 있지만 AI/자동 게시를 하지 않는다. ACK 전용 `reconcile_completion`은 clean 세션의 no-autoflush SELECT이며 expiry·DML·commit·발행 권위가 없다. pending new/dirty/deleted가 있으면 CF035 ORM refresh 전에 거절하므로 fresh clean 세션으로 복구한다. 수신/게시 취소는 pending transaction을 rollback하고 재전파하며 이미 durable한 ready·hold는 보존한다. ready 취소는 pending 원문만 지우고 늦은 accept/게시를 차단한다. stored/failed는 close_unknown이나 새 claim으로 되돌리지 않는다.
 
 실제 수신/저장 복구 SQL은 [검증 기록](../work/CF-050-technical-result-completion.md)을 따른다. provider 송신 권위·usage 정산/환급·실제 graph scheduling·3초 wire 밖 실제 엔진→저장·Supervisor 확정 dispatch·운영 활성화는 여전히 미완료다.
+
+## CF053: 기본 비활성 provider execution
+
+새 `technical.provider-execution.v1` run만 `technical.execution.v1` control/result와
+`execution_mode=controlled`를 사용한다. 기존 admission spec·B 의미 입력·synthetic 3초·CF035
+snapshot FORMAT과 기존 canonical bytes는 바꾸지 않는다. 같은 owner/operation/key와 KST period를
+공유하므로 policy/ID를 바꿔 예약을 복제할 수 없다. 운영 숫자나 가격 기본값은 없다.
+
+Backend는 명시 구성과 인증된 AI `/internal/technical/execution/ready`를 대조한 뒤 새 접수를 한다.
+기수락 run은 같은 claim transaction에서 opaque grant의 digest와 control을 고정한다. 원 owner/session,
+Stock·policy·기한을 재검증한 Backend `/internal/technical/execution/start`의 **이번 commit fresh ACK**만
+해당 AI invocation에 실행권을 준다. 다른 worker·재시작·같은 nonce·ACK 복구는 True를 재발급하지 않는다.
+전송 전 claim 검증과 결과 수신 후 durable start 필수 검증을 분리한다. raw grant/서비스 토큰은 SQL
+snapshot이나 관측 본문에 저장하지 않는다. 설정 토큰은 서로 구분하며 Flow 토큰 fallback은 없다.
+
+AI runtime은 명시 설치만 지원한다. import/default export에는 새 graph/SDK/key loader를 붙이지 않는다.
+명시 fetcher/cache/trace, 실제 intraday fallback off와 자동 tracing off, 동기 DI·준비 의존성을 확인한다.
+원 구성·메서드·authority origin/token/transport를 고정하고 원 UTC/monotonic 기한을 늘리지 않는다.
+start ACK 뒤 요청당 CF051 policy/budget/bundle 하나로 실제 graph 전 노드와 재생성을 제한한다.
+N≤4 쌍이므로 count/generation POST≤2N≤8이며 자동 SDK/HTTP retry·redirect·proxy는 없다.
+새 controlled Bridge만 명시 원 Deadline을 쓰고 기존 synthetic 3초는 유지한다.
+
+HTTP waiter의 종료는 physical worker 종료가 아니다. 첫 취소 관측에 같은 budget의 미진입 phase를
+닫고, 원 thread 종료까지 slot·자기 bundle을 유지한다. 종료 뒤 bounded usage를 별도
+`/internal/technical/execution/observe`로 한 번 기록한다. 취소된 work task에 새 SQL·callback 재시도나
+별도 detached cleanup을 붙이지 않는다. 원 세션 철회/기한 뒤에도 이미 소비된 start의 같은 기록만
+받을 수 있고, 같은 evidence/hash만 ACK replay한다. 다른 증거 교체·정산·자동 환급은 없다.
+usage unknown 또는 관측 ACK 불명은 start 소비와 **full hold**를 남긴다. 관측 추정액 overflow는
+usage/실패를 보존하고 estimate=null로 표시하며, 기록0을 비용0으로 해석하지 않는다.
+
+Backend 설정은 `TECHNICAL_EXECUTION_ENABLED=false`, 빈 `TECHNICAL_EXECUTION_CONFIG`, 빈 비밀
+`TECHNICAL_EXECUTION_AI_SERVICE_TOKEN`/`TECHNICAL_EXECUTION_AUTHORITY_TOKEN`으로 닫힌다.
+enable은 명시 bool 또는 true/false 문자열만 지연 파싱한다. 새 양방향 transport는 정확 HTTPS origin,
+TLS verify·trust_env=false·bounded streaming과 고정 절대 기한을 사용한다. ready/start/observe는 최대5초,
+execution body 65,536B·ready 32,768B·start 8,192B·observe 16,384B·result 2MiB다. callback은 인증을
+body/DB보다 먼저 확인하고 정확 path/method/header·중복/unknown/encoding을 닫으며 no-store다.
+
+CF050/CF035는 response 자체의 선언 대신 SQL spec/start/control 기대값으로 새 결과를 검증·저장한다.
+controlled stage에는 같은 owner의 accepted run이 필요하다. 내부 read/replay는 원 bytes를 복원하지만,
+기존 공개 목록/count/pagination은 SQL에서 controlled를 제외하고 공개 detail은404다. coverage cutoff는
+계속 unverified다. 실제 공급자·KIS·TLS 배포·키 유효성·청구 정산·Supervisor 확정 dispatch·새 화면의
+완료를 뜻하지 않는다. 실제 검증 범위는 [CF053 기록](../work/CF-053-technical-provider-execution.md)에 구분한다.

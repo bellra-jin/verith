@@ -637,11 +637,15 @@ async def _verify_completion(proof):
         async with owned_session(proof) as s:return await E.TechnicalOwnedReportService(s,principal=p).read(item['claimed'].run.report_id)
 
     config=Config();config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
-    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c50001a7e0001'],'CF050 single migration head')
+    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c53001a7e0001'],'CF053 single migration head')
     check(await scalar('SELECT version_num FROM alembic_version')==heads[0],'CF050 current head')
     async with owned_session(proof) as s:s.add(Stock(stock_code='000720',stock_name='CF050 synthetic canonical',market='KOSPI'));await s.commit()
     p,a2=await user();other,_=await user()
-    async with owned_session(proof) as s:old=await Admission(s,principal=p,policy=policy).admit('cf050-old-row',intent)
+    try:
+        async with owned_session(proof) as s:old=await Admission(s,principal=p,policy=policy).admit('cf050-old-row',intent)
+    except Exception as error:
+        _provider_diagnostic(error,'old_admission');raise
+
     before=await totals();await migration(proof,'c48001a7e0001',downgrade=True)
     check(not await scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='technical_analysis_runs' AND column_name='accepted_at')"),'CF050 old columns absent')
     class DDLFailure(RuntimeError):pass
@@ -949,8 +953,325 @@ async def _verify_completion(proof):
         if mode in {'receive_cancel','race_ready'}:check((await runtime_publish(owner_a2,item)).run.state=='stored','CF052 ready cancellation/error recovery no client')
         check(len(synthetic_boundary_invocations)-initial==1 and await totals()==before,'CF052 client vs receive failure no new reserve or retry')
     runtime_mark('client_failure_cancel_receive_cancel_ready_race_fence_preserve_raw_snapshot_hold')
+    try:provider_groups=await _verify_provider(proof,policy,intent,user,totals,scalar,refused,mark)
+    except Exception as error:
+        _provider_diagnostic(error,'provider_connection');raise
     return dict(status='passed',groups=groups,receiving_only=False,baseline_receiving_only=True,
-        runtime_groups=runtime_groups,synthetic_boundary_invocations=len(synthetic_boundary_invocations),new_admission_or_claim_in_completion=0,
-        provider_calls=0,engine_dispatch=0,usage_settlement=False,hold_refund=0,
+        runtime_groups=runtime_groups,provider_groups=provider_groups,synthetic_boundary_invocations=len(synthetic_boundary_invocations),new_admission_or_claim_in_completion=0,
+        provider_calls=0,engine_dispatch=0,compiled_graph_dispatch=0,synthetic_provider_execution_runs=2,mock_provider_HTTP_requests=4,usage_settlement=False,hold_refund=0,
         concurrency='actual two SQL sessions',ACK_loss='wrapper simulation around actual PG commits',
         expiry='actual DB clock',dirty_session='rejected before ORM refresh',fixture='synthetic CF031; no actual engine')
+
+async def _verify_provider(proof,policy,intent,user,totals,scalar,refused,mark):
+    """Actual SQL + production clients/ASGI; graph is an explicit synthetic runner.
+
+    Compiled graph/real CF051 definitions are separately verified in graph-unit.
+    No dependency sites are united and no provider/market request can connect.
+    """
+    import asyncio,sys,time,importlib.util,importlib.machinery
+    from contextlib import asynccontextmanager
+    from dataclasses import fields
+    from types import ModuleType,SimpleNamespace as NS
+    from unittest.mock import patch
+    import httpx
+    from fastapi import FastAPI
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+    from scripts.cf002_interactive_login import owned_session
+    from scripts.cf003_admission_check import check,migration
+    from scripts import check_safe as pins
+    from src.modules.auth.application.session_service import revoke_session
+    from src.modules.technical.domain import provider_execution as P
+    from src.modules.technical.domain.execution_admission import TechnicalAdmissionError
+    from src.modules.technical.application.execution_admission_service import TechnicalAdmissionService as Admission
+    from src.modules.technical.application.execution_authority_service import TechnicalExecutionAuthority as Authority,AuthorityUnavailable,AuthorityConflict
+    from src.modules.technical.api.execution_authority_router import make_router as authority_router
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.modules.technical.application import execution_completion as E
+    from src.modules.technical.infrastructure import execution_completion_repository as CR
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    root=Path(__file__).resolve().parents[2];labels=[]
+    # Exercise this revision's own DDL rollback, after the old-row compatibility
+    # baseline but before any provider row is admitted. No policy/reset changes.
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import event
+    from alembic import command
+    from alembic.config import Config
+    from scripts.cf002_interactive_login import safe_print
+    before_ddl=await totals()
+    await migration(proof,'c50001a7e0001',downgrade=True)
+    check(not await scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='technical_analysis_runs' AND column_name='execution_grant_digest')"),'CF053 empty additive downgrade before provider data')
+    class ProviderDDLFailure(RuntimeError):pass
+    await proof.preflight();engine=create_async_engine(proof.url,connect_args=proof.connection_parameters());reached=[]
+    try:
+        async with engine.connect() as connection:
+            await proof.attest_connection(connection)
+            def apply(sync):
+                config=Config();config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
+                config.attributes.update(connection=sync,verified_test_mode=True)
+                def after(conn,cursor,statement,parameters,context,executemany):
+                    if statement.lstrip().upper().startswith('ALTER TABLE TECHNICAL_ANALYSIS_RUNS ADD COLUMN EXECUTION_GRANT_DIGEST'):
+                        reached.append(True);raise ProviderDDLFailure('fixed CF053 same connection DDL rollback')
+                event.listen(sync,'after_cursor_execute',after)
+                try:command.upgrade(config,'c53001a7e0001')
+                finally:event.remove(sync,'after_cursor_execute',after)
+            try:await connection.run_sync(apply);await connection.commit()
+            except ProviderDDLFailure:await connection.rollback()
+    finally:await engine.dispose()
+    check(reached==[True] and await scalar('SELECT version_num FROM alembic_version')=='c50001a7e0001','CF053 partial upgrade rolls back revision and all columns')
+    check(not await scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='technical_analysis_runs' AND column_name='execution_configuration_json')"),'CF053 first added column rollback')
+    await migration(proof,'c53001a7e0001')
+    check(await totals()==before_ddl,'CF053 old rows/holds survive additive migration roundtrip')
+    labels.append('own_additive_revision_same_connection_DDL_atomicity_old_rows_hold_preserved')
+    mark('CF053_'+labels[-1])
+
+    from src.modules.technical.domain.execution_admission import Intent
+    intent=Intent.parse(intent.data()|{'original_query':'현대건설 차트'})
+    def passed(label):labels.append(label);mark('CF053_'+label)
+    def load(suffix):
+        name='src.'+suffix;path=root/'ai/src'/Path(suffix.replace('.','/')+'.py')
+        check(hashlib.sha256(path.read_bytes()).hexdigest()==pins.CF053_INPUTS[path.relative_to(root).as_posix()],'CF053 exact selected AI bytes')
+        parts=name.split('.')
+        for index in range(1,len(parts)):
+            parent='.'.join(parts[:index])
+            if parent not in sys.modules:
+                module=ModuleType(parent);module.__path__=[];module.__spec__=importlib.machinery.ModuleSpec(parent,None,is_package=True);module.__spec__.submodule_search_locations=[str(path.parent)]
+                sys.modules[parent]=module
+                if index>1:setattr(sys.modules['.'.join(parts[:index-1])],parts[index-1],module)
+        if name not in sys.modules:
+            spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module)
+            setattr(sys.modules[name.rpartition('.')[0]],name.rpartition('.')[2],module)
+        check(Path(sys.modules[name].__spec__.origin).resolve()==path.resolve(),'CF053 AI source origin')
+        return sys.modules[name]
+    for suffix in ('shared.contracts.agent_envelope','shared.runtime.deadline','agents.technical.domain.intraday_limits',
+        'agents.technical.domain.models.enums','agents.technical.domain.models.ohlcv','agents.technical.domain.models.chart','agents.technical.domain.models.intraday','agents.technical.domain.models.contracts','agents.technical.domain.boundary_contracts',
+        'supervisor.domain.planning.interpret','supervisor.application.planning.technical_boundary','agents.technical.application.boundary_adapter','agents.technical.application.boundary_runtime','agents.technical.application.engine_bridge','agents.technical.domain.execution_contracts','agents.technical.infrastructure.execution_authority_client','agents.technical.application.execution_runtime','agents.technical.api.routes'):load(suffix)
+    AP=sys.modules['src.agents.technical.domain.execution_contracts'];AR=sys.modules['src.agents.technical.application.execution_runtime']
+    from tests.unit import test_cf040_technical_runtime_setup as helper
+    cfg=P.Configuration.parse(dict(schema_version=P.SCHEMA,policy=policy.data(),counter={'free':True,'mapping':'technical.responses.model-input.v1','version':'synthetic.v1','provenance_sha256':'c'*64,'evidence_sha256':'d'*64},caps={'request':4096,'count':4096,'generation':1048576},ai_origin='https://ai.invalid',authority_origin='https://backend.invalid',cache_mode='none',trace_mode='none'))
+    async def sessions():
+        async with owned_session(proof) as session:yield session
+    backend=FastAPI();backend.include_router(authority_router(session_factory=sessions,configuration=lambda:cfg,token=lambda:'b'*32))
+    authority_client=sys.modules['src.agents.technical.infrastructure.execution_authority_client'].ExecutionAuthorityClient(origin=cfg.data()['authority_origin'],token='b'*32,transport=httpx.ASGITransport(app=backend))
+    template=json.loads(storage_fixture(uuid4())[1].result_json)['data']['result'];factory_calls=[];runner_calls=[];credential_calls=[];runner_mode=['normal']
+    sdk=helper.official_adapter(defer=True);sdk.a['time']=time
+    def factory(**kwargs):factory_calls.append(kwargs['request_budget']);return sdk.a['official_count_openai_client'](**kwargs)
+    llm=NS(TechnicalLlmPolicy=sdk.a['TechnicalLlmPolicy'],TechnicalRequestLlmBudget=sdk.a['TechnicalRequestLlmBudget'],official_count_openai_client=factory)
+    def synthetic_runner(payload,**kwargs):
+        runner_calls.append(payload.request_id);kwargs['llm_client'].complete('synthetic SQL ASGI accounting evidence')
+        result=copy.deepcopy(template);result.update(request_id=payload.request_id,trace_id=kwargs['trace_id'],ticker=payload.ticker,as_of=payload.as_of.isoformat(),resolved_stock_name=payload.stock_name)
+        if runner_mode[0]=='invalid':result['ticker']='999999'
+        return result
+    def credential():credential_calls.append(True);return 'synthetic-not-a-provider-key'
+    opts=AR.ExecutionOptions(AP.Configuration(cfg.text),'a'*32,'b'*32,credential,lambda *a,**k:{},None,None)
+    ai_runtime=AR.TechnicalProviderRuntime(opts,agent_module=NS(run_technical_agent=synthetic_runner),steps_module=NS(INTRADAY_FETCH_ENABLED=False),llm_module=llm,authority=authority_client)
+    ai=FastAPI();ai.state.technical_execution_runtime=ai_runtime;ai.include_router(sys.modules['src.agents.technical.api.routes'].make_router())
+    client=AIClient('https://ai.invalid',10,httpx.ASGITransport(app=ai),execution_token='a'*32)
+    definition=await scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='technical_analysis_runs'::regclass AND conname='cf048_run_spec'")
+    check(P.SPEC_SHA256 in definition and P.SPEC_JSON.encode().hex() in definition,'CF053 byte-safe new spec CHECK retained after downgrade refusal')
+    check(await scalar('SELECT version_num FROM alembic_version')=='c53001a7e0001','CF053 head retained before provider admission')
+    p,a2=await user();other,_=await user();before=await totals()
+    async with owned_session(proof) as session:
+        runtime=TechnicalExecutionRuntime(session,principal=p,client=client,policy=policy,enabled=True)
+        first=await runtime.admit_provider_once('cf053-runtime',intent,cfg)
+        result=await runtime.execute_provider_once(first.run,first.claim_token,cfg)
+        if result.run.state!='stored':
+            from scripts.cf002_interactive_login import safe_print
+            safe_print({'phase':'cf053_runtime_state','state':result.run.state,'reason':result.run.unknown_reason,'runner_count':len(runner_calls),'factory_count':len(factory_calls),'credential_count':len(credential_calls),'fake_provider_http_count':len(sdk.sent)})
+        check(result.run.state=='stored','CF053 actual Backend runtime through AI ASGI stored')
+    check(len(runner_calls)==len(factory_calls)==len(credential_calls)==1 and len(sdk.sent)==2,'CF053 actual one runtime/start/budget/fake pair')
+    async with owned_session(proof) as session:
+        stored=await E.TechnicalOwnedReportService(session,principal=a2).read(first.run.report_id)
+        check(stored.frozen.result_schema==P.SCHEMA,'CF053 A2 controlled internal restore')
+        check(await E.TechnicalOwnedReportService(session,principal=a2).read_projection(first.run.report_id) is None,'CF053 public detail404')
+        check(str(first.run.report_id) not in [x['report_id'] for x in (await E.TechnicalOwnedReportService(session,principal=a2).list_owned(limit=20))['items']],'CF053 public SQL list/pagination excludes controlled')
+        check(await E.TechnicalOwnedReportService(session,principal=other).read(first.run.report_id) is None,'CF053 wrong owner404')
+    check(await scalar('SELECT execution_started_at IS NOT NULL AND execution_evidence_json IS NOT NULL AND held_nano=reserved_nano FROM technical_analysis_runs WHERE id=:id',{'id':first.run.analysis_id}),'CF053 independent evidence durable/full hold')
+    saved=await scalar('SELECT execution_evidence_json FROM technical_analysis_runs WHERE id=:id',{'id':first.run.analysis_id})
+    check(json.loads(saved)['records'][0]['usage']==[12,3,15],'CF053 usage independently preserved')
+    passed('actual_Backend_ready_claim_AI_route_budget_Bridge_callback_SQL_receive_storage_A2_public_exclusion')
+
+    async def pending(owner,key):
+        async with owned_session(proof) as s:f=await Admission(s,principal=owner,policy=policy).admit_provider(key,intent,cfg)
+        async with owned_session(proof) as s:c=await Admission(s,principal=owner,policy=policy).dispatch_provider_claim(f.run,f.claim_token,cfg)
+        return f,c,P.decode(c.execution_json)
+    async def start(owner,claim,execution,executor=None):
+        body={'schema_version':P.SCHEMA,'analysis_id':str(claim.run.analysis_id),'control_sha256':execution['control_sha256'],'executor_id':executor or str(uuid4())}
+        async with owned_session(proof) as s:return await Authority(s,configuration=cfg).start(body,claim.grant)
+    # A malformed graph result must not erase independently observed usage.
+    runner_mode[0]='invalid'
+    try:
+        async with owned_session(proof) as session:
+            runtime=TechnicalExecutionRuntime(session,principal=p,client=client,policy=policy,enabled=True)
+            bad=await runtime.admit_provider_once('cf053-invalid-result',intent,cfg)
+            rejected=await runtime.execute_provider_once(bad.run,bad.claim_token,cfg)
+        check(rejected.run.state=='unknown' and rejected.run.held_nano==10000,'CF053 invalid result closes unknown/full hold')
+        check(await scalar("SELECT accepted_at IS NULL AND execution_evidence_json IS NOT NULL AND execution_evidence_json::jsonb->>'outcome'='failed' FROM technical_analysis_runs WHERE id=:id",{'id':bad.run.analysis_id}),'CF053 invalid result preserves durable usage independently')
+        async with owned_session(proof) as session:check(await E.TechnicalOwnedReportService(session,principal=a2).read(bad.run.report_id) is None,'CF053 invalid result not published')
+        check(len(runner_calls)==2 and len(factory_calls)==2 and len(sdk.sent)==4,'CF053 each run has one isolated budget and pair')
+    finally:runner_mode[0]='normal'
+    passed('invalid_result_no_storage_but_independent_usage_commit_and_full_hold')
+    dispatch_count=len(runner_calls)
+    f,c,x=await pending(p,'cf053-race');race=await asyncio.gather(start(p,c,x),start(p,c,x))
+    check(sum(r['newly_started'] for r in race)==1,'CF053 two SQL sessions only first start ACK fresh')
+    winning=next(r for r in race if r['newly_started']);check(not (await start(p,c,x,winning['executor_id']))['newly_started'],'CF053 same executor replay never authority')
+    passed('two_actual_SQL_start_workers_winner1_replay_false')
+    # Tampering reaches the new strict SQL guard, not an immutable-row or
+    # deferred-period-count refusal. Each clone is a fresh admitted INSERT.
+    from db.models.technical.execution_admission import TechnicalAnalysisRun as Run
+    from sqlalchemy import select,insert
+    async with owned_session(proof) as session:
+        original=dict((await session.execute(select(Run.__table__).where(Run.id==c.run.analysis_id))).mappings().one())
+    for cap in ('request','count','generation'):
+        for bad in (None,'4096',4096.0,True):
+            changed=cfg.data();changed['caps'][cap]=bad;values=dict(original)
+            values.update(id=uuid4(),admission_request_id=uuid4(),attempt_id=uuid4(),planned_report_id=uuid4(),boundary_request_id=uuid4(),trace_id=uuid4(),key_digest=hashlib.sha256(str(uuid4()).encode()).digest(),claim_digest=hashlib.sha256(str(uuid4()).encode()).digest(),state='admitted',claim_consumed_at=None,
+                execution_configuration_json=P.canonical(changed),execution_configuration_sha256=P.sha(P.canonical(changed)))
+            for column in Run.__table__.columns:
+                if column.name.startswith('execution_') and column.name not in {'execution_configuration_json','execution_configuration_sha256'}:values[column.name]=None
+            async with owned_session(proof) as session:
+                from sqlalchemy import func
+                stamp=await session.scalar(select(func.clock_timestamp()))
+                values.update(as_of=stamp,started_at=stamp,deadline_at=stamp+timedelta(seconds=policy.data()['deadline_seconds']))
+                executed=False
+                try:await session.execute(insert(Run).values(**values));executed=True
+                except IntegrityError as error:
+                    check('CF053 strict cap' in str(error),'CF053 exact strict cap guard; no unrelated constraint masking')
+                    await session.rollback()
+                else:check(False,'CF053 malformed cap must fail at INSERT before deferred totals')
+                check(not executed,'CF053 strict cap rejection not masked by deferred sum')
+    passed('strict_SQL_caps_null_string_float_bool_direct_fresh_INSERT')
+    # Provider completion metadata is mandatory even when all CF050 hashes,
+    # IDs, accepted state, and canonical bytes are otherwise consistent.
+    from src.modules.analysis.domain.contracts import FrozenAnalysisResult
+    async with owned_session(proof) as session:
+        row=await CR.owned(session,c.run.analysis_id,p.user_id);binding=E.binding_from_sql(row)
+    raw=copy.deepcopy(template);b=x['boundary_request'];raw.update(request_id=b['request_id'],trace_id=b['trace_id'],ticker=b['data']['stock']['stock_code'],as_of=b['data']['requested_as_of'],resolved_stock_name=b['data']['stock']['stock_name'])
+    response=P.result(b,raw,{k:winning[k] for k in ('control_sha256','start_sha256','executor_id')})
+    valid=E.TechnicalCompletionAdapter(binding).validate_and_freeze(response)
+    for key in ('control_sha256','start_sha256','executor_id'):
+        for missing in (True,False):
+            bad=copy.deepcopy(response)
+            if missing:del bad['data'][key]
+            else:bad['data'][key]=None
+            frozen=FrozenAnalysisResult.freeze(context=valid.context,report_id=valid.report_id,input_schema=valid.input_schema,result_schema=valid.result_schema,input_json=valid.input_json,result_json=P.canonical(bad))
+            async with owned_session(proof) as session:
+                row=await CR.owned(session,c.run.analysis_id,p.user_id)
+                try:
+                    adopted=await CR.accept(session,row,hashlib.sha256(f.claim_token).digest(),frozen)
+                    check(adopted is not None,'CF053 test reaches live original deadline')
+                    await session.commit()
+                except IntegrityError:await session.rollback()
+                else:check(False,'CF053 missing/null controlled metadata must deny')
+    passed('controlled_metadata_missing_null_SQL_accept_rejected_all3')
+    for key in ('request_sha256','prompt_sha256','projection_sha256'):
+        evidence=json.loads(saved);evidence.update(analysis_id=str(c.run.analysis_id),attempt_id=str(c.run.attempt_id),control_sha256=x['control_sha256'],start_sha256=winning['start_sha256'],executor_id=winning['executor_id'])
+        evidence['records'][0].update(analysis_id=str(c.run.analysis_id),attempt_id=str(c.run.attempt_id));evidence['records'][0][key]=int('1'*64)
+        value=P.canonical(evidence)
+        await refused('UPDATE technical_analysis_runs SET execution_evidence_json=:body,execution_evidence_sha256=:sha,execution_observed_at=clock_timestamp() WHERE id=:id',{'body':value,'sha':P.sha(value),'id':c.run.analysis_id})
+    passed('numeric_digest_direct_SQL_observation_rejected_all3')
+
+    body={'schema_version':P.SCHEMA,'analysis_id':str(c.run.analysis_id),'control_sha256':x['control_sha256'],'executor_id':str(uuid4())}
+    async with owned_session(proof) as s:
+        # Already-started replay is False even when simulated ACK is lost.
+        commit=s.commit
+        async def lost():await commit();raise OSError('fixed synthetic ACK unknown')
+        with patch.object(s,'commit',lost):
+            try:await Authority(s,configuration=cfg).start(body,c.grant)
+            except AuthorityUnavailable:pass
+            else:check(False,'CF053 lost ACK must not return capability')
+    check(not (await start(p,c,x))['newly_started'] and len(runner_calls)==dispatch_count,'CF053 ACK unknown no graph replay')
+    passed('start_ACK_unknown_and_restart_no_new_invocation')
+    af,ac,ax=await pending(p,'cf053-first-start-ACK-loss')
+    body={'schema_version':P.SCHEMA,'analysis_id':str(ac.run.analysis_id),'control_sha256':ax['control_sha256'],'executor_id':str(uuid4())}
+    async with owned_session(proof) as session:
+        original_commit=session.commit
+        async def lost_first_ACK():await original_commit();raise OSError('fixed first start ACK unknown')
+        with patch.object(session,'commit',lost_first_ACK):
+            try:await Authority(session,configuration=cfg).start(body,ac.grant)
+            except AuthorityUnavailable:pass
+            else:check(False,'CF053 first start ACK lost never returns fresh capability')
+    check(await scalar('SELECT execution_started_at IS NOT NULL AND held_nano=reserved_nano FROM technical_analysis_runs WHERE id=:id',{'id':ac.run.analysis_id}),'CF053 first start commit retained after ACK loss')
+    check(not (await start(p,ac,ax,body['executor_id']))['newly_started'] and len(runner_calls)==dispatch_count,'CF053 lost first ACK restart cannot execute')
+    # New-spec claim/grant ACK loss never returns/reconstructs its raw grant.
+    async with owned_session(proof) as session:gf=await Admission(session,principal=p,policy=policy).admit_provider('cf053-grant-ACK-loss',intent,cfg)
+    async with owned_session(proof) as session:
+        original_commit=session.commit
+        async def lost_grant_ACK():await original_commit();raise OSError('fixed grant ACK unknown')
+        with patch.object(session,'commit',lost_grant_ACK):
+            try:await Admission(session,principal=p,policy=policy).dispatch_provider_claim(gf.run,gf.claim_token,cfg)
+            except TechnicalAdmissionError as error:check(error.code=='ACK_UNKNOWN','CF053 claim grant ACK unknown fixed')
+            else:check(False,'CF053 claim/grant ACK loss cannot return authority')
+    async with owned_session(proof) as session:
+        replay=await Admission(session,principal=p,policy=policy).dispatch_provider_claim(gf.run,gf.claim_token,cfg)
+        check(not replay.newly_claimed and replay.grant is None and replay.execution_json is None,'CF053 grant never recovered after ambiguous ACK')
+    check(await scalar('SELECT execution_grant_digest IS NOT NULL AND execution_started_at IS NULL AND held_nano=reserved_nano FROM technical_analysis_runs WHERE id=:id',{'id':gf.run.analysis_id}),'CF053 consumed grant/hold remains unstarted')
+    passed('fresh_start_and_claim_grant_actual_commit_ACK_losses_no_reissue_no_execution')
+
+    revoked,_=await user();rf,rc,rx=await pending(revoked,'cf053-revoke-before')
+    async with owned_session(proof) as s:await revoke_session(s,revoked)
+    try:await start(revoked,rc,rx)
+    except (AuthorityUnavailable,Exception) as error:
+        from src.modules.auth.application.session_service import AuthenticationRequired
+        check(type(error) in {AuthorityUnavailable,AuthenticationRequired},'CF053 revoked original session start denied')
+    else:check(False,'CF053 revoked start must deny')
+    # A consumed start can still record its same evidence after revocation.
+    async with owned_session(proof) as s:await revoke_session(s,p)
+    remaining=await scalar('SELECT greatest(0,extract(epoch FROM deadline_at-clock_timestamp())) FROM technical_analysis_runs WHERE id=:id',{'id':c.run.analysis_id})
+    await asyncio.sleep(min(11,float(remaining)+.02))
+    check(await scalar('SELECT clock_timestamp()>=deadline_at FROM technical_analysis_runs WHERE id=:id',{'id':c.run.analysis_id}),'CF053 record-only observation after original deadline')
+    observation={'schema_version':'technical.usage.v1','analysis_id':str(c.run.analysis_id),'attempt_id':str(c.run.attempt_id),'policy_sha256':c.run.policy_sha256,'control_sha256':x['control_sha256'],'start_sha256':winning['start_sha256'],'executor_id':winning['executor_id'],'outcome':'unknown','records':[]}
+    ob={'schema_version':P.SCHEMA,'analysis_id':str(c.run.analysis_id),'control_sha256':x['control_sha256'],'start_sha256':winning['start_sha256'],'executor_id':winning['executor_id'],'evidence':observation,'evidence_sha256':P.sha(P.canonical(observation))}
+    async with owned_session(proof) as session:
+        original_commit=session.commit
+        async def lost_observe_ACK():await original_commit();raise OSError('fixed observe ACK unknown')
+        with patch.object(session,'commit',lost_observe_ACK):
+            try:await Authority(session).observe(ob,c.grant)
+            except AuthorityUnavailable:pass
+            else:check(False,'CF053 observation commit ACK uncertainty fixed')
+    check(await scalar('SELECT execution_evidence_json IS NOT NULL AND held_nano=reserved_nano FROM technical_analysis_runs WHERE id=:id',{'id':c.run.analysis_id}),'CF053 observation ACK loss preserves record and hold')
+    async with owned_session(proof) as s:check((await Authority(s).observe(ob,c.grant))['recorded'],'CF053 exact evidence ACK replay')
+    changed=copy.deepcopy(ob);changed['evidence']['outcome']='failed';changed['evidence_sha256']=P.sha(P.canonical(changed['evidence']))
+    async with owned_session(proof) as s:
+        try:await Authority(s).observe(changed,c.grant)
+        except AuthorityConflict:pass
+        else:check(False,'CF053 different late evidence conflict')
+    passed('revoked_before_start_denied_after_start_observe_only_replay_conflict_full_hold')
+    await refused('UPDATE technical_analysis_runs SET execution_evidence_json=NULL,execution_evidence_sha256=NULL,execution_observed_at=NULL WHERE id=:id',{'id':c.run.analysis_id})
+    await refused('DELETE FROM technical_analysis_runs WHERE id=:id',{'id':c.run.analysis_id})
+    await refused('UPDATE technical_analysis_runs SET execution_executor_id=:other WHERE id=:id',{'id':c.run.analysis_id,'other':uuid4()})
+    passed('direct_SQL_start_evidence_mutation_delete_denied')
+    before_downgrade=await totals()
+    try:await migration(proof,'c50001a7e0001',downgrade=True)
+    except RuntimeError:pass
+    else:check(False,'CF053 provider data blocks downgrade')
+    check(await totals()==before_downgrade and await scalar('SELECT version_num FROM alembic_version')=='c53001a7e0001','CF053 downgrade refusal preserves provider/old rows and all holds')
+    passed('provider_populated_downgrade_refused_before_drop_preserves_all_accounting')
+
+    return labels
+
+
+def _provider_diagnostic(error,stage):
+    """Bounded synthetic PG diagnosis; never SQL, parameters, messages or secrets."""
+    from scripts.cf002_interactive_login import safe_print
+    rows=[];seen=set()
+    while error is not None and id(error) not in seen and len(rows)<8:
+        seen.add(id(error));row={'kind':type(error).__name__ if type(error).__name__ in {'TechnicalAdmissionError','AttributeError','NameError','ProgrammingError','IntegrityError','DataError'} else 'other'}
+        code=getattr(error,'code',None)
+        if code in {'UNAVAILABLE','ACK_UNKNOWN','STORED_INVALID','CONTEXT_DIRTY','CLAIM_DENIED','POLICY_UNAVAILABLE'}:row['code']=code
+        state=getattr(error,'sqlstate',None)
+        if type(state) is str and len(state)==5 and state.isalnum():row['sqlstate']=state
+        frames=[];trace=error.__traceback__
+        while trace is not None:
+            filename=Path(trace.tb_frame.f_code.co_filename)
+            if filename.name in {'execution_admission_service.py','execution_authority_service.py','execution_runtime.py','provider_execution.py','execution_contracts.py','cf035_technical_owned_check.py','execution_completion.py','owned_report_service.py'}:
+                frames.append({'source':filename.name,'function':trace.tb_frame.f_code.co_name,'line':trace.tb_lineno})
+            trace=trace.tb_next
+        if frames:row['frames']=frames[-6:]
+        constraint=getattr(error,'constraint_name',None)
+        if type(constraint) is str and constraint.startswith(('cf053_','cf048_','ck_technical_')) and len(constraint)<100 and all(ch.isalnum() or ch=='_' for ch in constraint):row['constraint']=constraint
+        tags=('CF053 evidence binding','CF053 configuration types','CF053 counter shape','CF053 strict cap','CF053 configuration','CF053 starts unconsumed','CF053 old run unchanged','CF048 fresh admission identity','CF048 run period binding')
+        for tag in tags:
+            if tag in str(error):row['fixed_guard']=tag;break
+        rows.append(row);error=getattr(error,'orig',None) or error.__context__
+    safe_print({'phase':'cf053_bounded_diagnostic','stage':stage,'errors':rows})

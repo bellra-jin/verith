@@ -202,6 +202,7 @@ class Policy:
 
 SPEC_JSON = canonical(SPEC)
 SPEC_SHA256 = sha(SPEC_JSON)
+from .provider_execution import SPEC_SHA256 as PROVIDER_SPEC_SHA256
 COMPLETION_FORMAT = 'technical.result-completion.v1'
 COMPLETION_FIELDS = ('completion_format','input_sha256','result_sha256','binding_sha256','accepted_at','error_code')
 
@@ -238,7 +239,7 @@ class RunReceipt:
             digest(getattr(self, key))
         utc(self.as_of);utc(self.deadline_at)
         integer(self.reserved_nano);integer(self.held_nano)
-        if self.held_nano != self.reserved_nano or self.deadline_at <= self.as_of or self.spec_sha256 != SPEC_SHA256:
+        if self.held_nano != self.reserved_nano or self.deadline_at <= self.as_of or self.spec_sha256 not in {SPEC_SHA256,PROVIDER_SPEC_SHA256}:
             raise TechnicalAdmissionError('STORED_INVALID')
         if type(self.state) is not str or self.state not in {'admitted', 'claimed', 'unknown','result_ready','stored','failed'}:
             raise TechnicalAdmissionError('STORED_INVALID')
@@ -321,3 +322,17 @@ class ClaimReceipt:
                 raise TechnicalAdmissionError('STORED_INVALID')
         elif self.intent_json is not None:
             raise TechnicalAdmissionError('STORED_INVALID')
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class ProviderClaim:
+    run: RunReceipt
+    newly_claimed: bool
+    execution_json: str | None=None
+    grant: str | None=None
+    def __post_init__(self):
+        if type(self.run) is not RunReceipt or type(self.newly_claimed) is not bool or self.run.spec_sha256!=PROVIDER_SPEC_SHA256:raise TechnicalAdmissionError('STORED_INVALID')
+        self.run.__post_init__()
+        if self.newly_claimed:
+            if self.run.state!='claimed' or type(self.execution_json) is not str or type(self.grant) is not str or re.fullmatch('[0-9a-f]{64}',self.grant) is None:raise TechnicalAdmissionError('STORED_INVALID')
+        elif self.execution_json is not None or self.grant is not None:raise TechnicalAdmissionError('STORED_INVALID')

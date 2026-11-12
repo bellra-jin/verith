@@ -888,7 +888,7 @@ class CF048Boundary(unittest.TestCase):
         indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
         raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
         with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_admission_only=True)
-        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF048_COMPAT))
+        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF048_COMPAT)|{p for p in c.CF053_INPUTS if p.startswith('ai/')} )
         self.assertEqual({p for p in selected if p.startswith('frontend/')},{'frontend/tests/fixtures/cf031-technical-boundary-read.json'})
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
 
@@ -1266,7 +1266,7 @@ class CF040Boundary(unittest.TestCase):
         indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
         raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
         with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_runtime_only=True)
-        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF040_COMPAT | c.CF040_INPUTS))
+        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF040_COMPAT | c.CF040_INPUTS | c.CF053_INPUTS))
         self.assertFalse(any(p.startswith('frontend/') for p in selected))
         self.assertTrue(c.CF040_SOURCES <= set(selected))
         for name in ('backend/scripts/cf026_successor.py','backend/scripts/cf026_supervisor_live_controller.py',

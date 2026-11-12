@@ -53,5 +53,46 @@ def make_router(*,engine=None,enabled=False,service_token='',timeout=3.0):
         except BoundaryEngineFailure:return error('RESULT_CONTRACT_INVALID',502,ids)
         except BoundaryInvalid:return error('RESULT_CONTRACT_INVALID',502,ids)
         except Exception:return error('SERVICE_UNAVAILABLE',503,ids)
+    async def execution_request(request,ready=False):
+        from src.agents.technical.domain import execution_contracts as P
+        from src.agents.technical.application.execution_runtime import TechnicalProviderRuntime
+        try:
+            runtime=getattr(request.app.state,'technical_execution_runtime',None)
+            if type(runtime) is not TechnicalProviderRuntime:raise P.ExecutionInvalid()
+            path='/internal/technical/execution/ready' if ready else '/internal/technical/execution'
+            scope=request.scope
+            if scope['method']!='POST' or scope['path']!=path or scope.get('raw_path',path.encode())!=path.encode() or scope.get('query_string'):raise P.ExecutionInvalid()
+            values={};allowed={b'host',b'content-type',b'content-length',b'accept',b'accept-encoding',b'user-agent',b'connection',b'x-technical-service-token'}
+            if not ready:allowed.add(b'x-technical-execution-grant')
+            for key,value in scope.get('headers',[]):
+                key=key.lower()
+                if key not in allowed or key in values or any(c<32 or c>126 for c in value):raise P.ExecutionInvalid()
+                values[key]=value
+            if not hmac.compare_digest(runtime.service_token,values.get(b'x-technical-service-token',b'')):return error('AUTH_REQUIRED',401)
+            if values.get(b'content-type',b'').lower()!=b'application/json':raise P.ExecutionInvalid()
+            cap=32768 if ready else 65536;length=values.get(b'content-length')
+            if length is not None and (not length.isdigit() or len(length)>8 or int(length)>cap):raise P.ExecutionInvalid()
+            raw=bytearray()
+            async with asyncio.timeout(5):
+                async for chunk in request.stream():
+                    if len(raw)+len(chunk)>cap:raise P.ExecutionInvalid()
+                    raw.extend(chunk)
+            if length is not None and int(length)!=len(raw):raise P.ExecutionInvalid()
+            value=P.decode(raw,cap)
+            if ready:
+                P.shape(value,{'schema_version'})
+                if value['schema_version']!=P.SCHEMA:raise P.ExecutionInvalid()
+                return JSONResponse(runtime.readiness(),headers=PRIVATE)
+            grant=values.get(b'x-technical-execution-grant',b'').decode('ascii');P.digest(grant)
+            result=await runtime.execute(value,grant)
+            if len(P.canonical(result).encode('utf8'))>2097152:raise P.ExecutionInvalid()
+            return JSONResponse(result,headers=PRIVATE)
+        except asyncio.CancelledError:raise
+        except TimeoutError:return error('DEADLINE_EXCEEDED',504)
+        except Exception:return error('SERVICE_UNAVAILABLE',503)
+    @router.post('/execution/ready',include_in_schema=False)
+    async def execution_ready(request:Request):return await execution_request(request,True)
+    @router.post('/execution',include_in_schema=False)
+    async def execution_run(request:Request):return await execution_request(request)
     return router
 router=make_router()

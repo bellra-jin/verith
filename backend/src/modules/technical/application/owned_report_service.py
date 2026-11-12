@@ -147,11 +147,11 @@ def _context(text):
     return context
 
 
-def restore_snapshot(snapshot):
+def restore_snapshot(snapshot,execution_json=None):
     if snapshot.format != FORMAT: raise TechnicalStorageInputError()
     caller = _context(snapshot.caller_context_json); boundary = _context(snapshot.boundary_context_json)
     binding = TechnicalReadBinding(caller, snapshot.caller_input_json,
-        TechnicalBoundaryBinding(boundary, snapshot.report_id, snapshot.request_id, snapshot.trace_id, snapshot.input_json))
+        TechnicalBoundaryBinding(boundary, snapshot.report_id, snapshot.request_id, snapshot.trace_id, snapshot.input_json,execution_json))
     frozen = FrozenAnalysisResult(context=caller, report_id=snapshot.report_id,
         **{name:getattr(snapshot,name) for name in ('input_schema','result_schema','input_json','result_json',
                                                 'input_sha256','result_sha256','binding_sha256')})
@@ -182,6 +182,12 @@ class TechnicalOwnedReportService:
             principal = await self._authorize()
             request, _, _ = checked(binding,frozen)
             if principal.user_id != binding.caller_context.owner_user_id: raise AuthenticationRequired()
+            if frozen.result_schema=='technical.execution.v1':
+                from src.modules.technical.application.execution_completion import checked_saved
+                row=await repo.execution_for_report(self.session,frozen.report_id,principal.user_id)
+                if row is None or row.accepted_at is None:raise TechnicalStorageInputError()
+                checked_saved(row,frozen)
+
             root = await repo.storage_root_for_update(self.session,frozen.report_id)
             indexes = await repo.technical_indexes(self.session,frozen.report_id)
             if root is not None or indexes:
@@ -217,7 +223,20 @@ class TechnicalOwnedReportService:
             if selected is None: return None
             root,snapshot = selected
             try:
-                binding,result = restore_snapshot(snapshot)
+                execution_json=None
+                if snapshot.result_schema=='technical.execution.v1':
+                    from src.modules.technical.application.execution_completion import binding_from_report,binding_from_sql,checked_saved
+                    row=await repo.execution_for_report(self.session,report_id,principal.user_id)
+                    if row is None or row.accepted_at is None:raise TechnicalStoredPayloadError()
+                    if row.intent_json is not None:execution_json=binding_from_sql(row).boundary.execution_json
+                    else:
+                        from src.modules.technical.domain.execution_admission import Intent
+                        from src.modules.technical.application.execution_completion import binding_from_intent
+                        data=strict_json(snapshot.input_json)['data']
+                        intent=Intent.parse(dict(operation='technical.analysis.v1',ticker=data['stock']['stock_code'],original_query=data['original_query'],requested_views=data['requested_views'],conditions=data['conditions']))
+                        execution_json=binding_from_intent(row,intent).boundary.execution_json
+                binding,result = restore_snapshot(snapshot,execution_json)
+                if execution_json is not None:checked_saved(row,result.frozen)
                 indexes = await repo.technical_indexes(self.session,report_id)
                 if (len(indexes) != 1 or indexes[0].owner_user_id != principal.user_id or
                         not isinstance(snapshot.owner_session_id,UUID) or
@@ -257,6 +276,11 @@ class TechnicalOwnedReportService:
             return dict(items=items[:limit],limit=limit,offset=offset,has_more=len(items)>limit)
 
     async def read_projection(self, report_id):
+        with self.session.no_autoflush:
+            principal=await self._authorize()
+            if not isinstance(report_id,UUID):raise TechnicalStorageInputError()
+            selected=await repo.get_owned_storage(self.session,report_id,principal.user_id)
+            if selected is None or selected[1].result_schema!='technical.boundary.v1':return None
         result = await self.read(report_id)
         if result is None: return None
         # Independent expected B is the validated stored input TEXT, never result.request_snapshot.

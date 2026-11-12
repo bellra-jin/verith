@@ -90,7 +90,7 @@ class TechnicalExecutionRuntime:
             row=await completion.owned(self.session,run.analysis_id,principal.user_id)
             if row is None:raise TechnicalCompletionError('RESOURCE_NOT_FOUND')
             await completion.expire(self.session,row)
-            await profile.check_receive(self.session,row,principal,run,token)
+            await profile.check_dispatch(self.session,row,principal,run,token)
             if row.state!='claimed' or row.accepted_at is not None:
                 await profile.validate_state(self.session,row,principal)
                 view=profile.view(row);await self.session.commit()
@@ -114,7 +114,7 @@ class TechnicalExecutionRuntime:
             await validate_principal(self.session,principal,lock=True)
             row=await completion.owned(self.session,run.analysis_id,principal.user_id)
             if row is None:raise TechnicalCompletionError('RESOURCE_NOT_FOUND')
-            await profile.check_receive(self.session,row,principal,run,token)
+            await profile.check_dispatch(self.session,row,principal,run,token)
             if row.state!='claimed' or row.accepted_at is not None:
                 await profile.validate_state(self.session,row,principal)
                 view=profile.view(row);await self.session.commit();return view
@@ -169,3 +169,78 @@ class TechnicalExecutionRuntime:
         except Exception:
             return await self._client_failed(run,token,principal,policy,profile,'DISPATCH_UNCERTAIN')
         return await coordinator.receive(run,token,response)
+
+    async def admit_provider_once(self,key,intent,configuration):
+        """Readiness failure precedes admission and any new monetary hold."""
+        from src.modules.technical.domain import provider_execution as P
+        if (self.enabled is not True or type(self.client) is not AIClient or type(self.policy) is not Policy
+                or type(configuration) is not P.Configuration or configuration.policy_sha256!=self.policy.fingerprint):
+            raise TechnicalCompletionError('SERVICE_UNAVAILABLE')
+        cfg=P.Configuration(configuration.text)
+        captured=self.client._technical_execution_configuration(cfg)
+        await self.client.technical_execution_ready(cfg,_configuration=captured)
+        return await TechnicalAdmissionService(self.session,principal=self.principal,policy=self.policy).admit_provider(key,intent,cfg)
+
+    async def execute_provider_once(self,expected,token,configuration):
+        from src.modules.technical.domain import provider_execution as P
+        from src.modules.technical.domain.execution_admission import ProviderClaim
+        try:
+            if (self.enabled is not True or type(self.client) is not AIClient or type(self.policy) is not Policy
+                    or type(configuration) is not P.Configuration or type(token) is not bytes or len(token)!=32
+                    or self.session.new or self.session.dirty or self.session.deleted):raise P.ExecutionInvalid()
+            run=_frozen_run(expected);cfg=P.Configuration(configuration.text);policy=Policy(self.policy.text);policy.enabled()
+            if run.spec_sha256!=P.SPEC_SHA256 or run.policy_sha256!=cfg.policy_sha256 or policy.fingerprint!=cfg.policy_sha256:raise P.ExecutionInvalid()
+            client=self.client;dispatch=client.technical_execute;ready=client.technical_execution_ready;configure=client._technical_execution_configuration
+            if not all((_same_method(dispatch,client,_EXEC_DISPATCH),_same_method(ready,client,_EXEC_READY),_same_method(configure,client,_EXEC_CONFIGURE))):raise P.ExecutionInvalid()
+            captured=configure(cfg);p=TechnicalAdmissionService(self.session,principal=self.principal)._principal()
+            principal=Principal(UUID(int=p.user_id.int),UUID(int=p.session_id.int),p.expires_at,bytes(p.token_digest))
+            anchor=self._clock();now=self._utcnow()
+            if type(anchor) not in (int,float) or not math.isfinite(anchor) or now<run.as_of:raise P.ExecutionInvalid()
+            deadline=anchor+min((run.deadline_at-now).total_seconds(),(run.deadline_at-run.as_of).total_seconds())
+            self._remaining(run,deadline)
+        except Exception:raise TechnicalCompletionError('SERVICE_UNAVAILABLE') from None
+        with self._once:
+            if self._used:raise TechnicalCompletionError('SERVICE_UNAVAILABLE')
+            self._used=True
+        await ready(cfg,_configuration=captured)  # before durable claim
+        self._remaining(run,deadline)
+        if not all((_same_method(client.technical_execute,client,_EXEC_DISPATCH),_same_method(client.technical_execution_ready,client,_EXEC_READY),_same_method(client._technical_execution_configuration,client,_EXEC_CONFIGURE))):raise TechnicalCompletionError('SERVICE_UNAVAILABLE')
+        service=TechnicalAdmissionService(self.session,principal=principal,policy=policy)
+        profile=TechnicalCompletionProfile(policy=policy)
+        coordinator=AnalysisCoordinator(self.session,principal=principal,client=None,profile=profile)
+        claim=await service.dispatch_provider_claim(run,token,cfg)
+        if type(claim) is not ProviderClaim:raise TechnicalCompletionError('SERVICE_UNAVAILABLE')
+        if not claim.newly_claimed:return await coordinator.get(run.analysis_id)
+        run=_frozen_run(claim.run)
+        # Revalidate original identity/session and close locks before outbound I/O.
+        try:
+            await validate_principal(self.session,principal,lock=True)
+            row=await completion.owned(self.session,run.analysis_id,principal.user_id)
+            if row is None:raise TechnicalCompletionError('RESOURCE_NOT_FOUND')
+            await profile.check_dispatch(self.session,row,principal,run,token)
+            if row.state!='claimed' or row.accepted_at is not None or row.execution_started_at is not None:
+                await profile.validate_state(self.session,row,principal);view=profile.view(row);await self.session.commit();return view
+            if row.execution_configuration_json!=cfg.text or row.execution_control_sha256!=P.decode(claim.execution_json)['control_sha256']:raise P.ExecutionInvalid()
+            base=self._clock();stamp=await admission.clock(self.session)
+            deadline=min(deadline,base+(run.deadline_at-stamp).total_seconds());self._remaining(run,deadline)
+            await self.session.commit()
+        except asyncio.CancelledError:raise
+        except BaseException as error:
+            try:await self.session.rollback()
+            except Exception:pass
+            if isinstance(error,profile.preserved_errors):raise
+            raise TechnicalCompletionError('SERVICE_UNAVAILABLE',run.analysis_id) from None
+        try:
+            if not _same_method(client.technical_execute,client,_EXEC_DISPATCH):raise P.ExecutionInvalid()
+            remaining=self._remaining(run,deadline)
+            async with asyncio.timeout(remaining):
+                response=await dispatch(P.decode(claim.execution_json),claim.grant,remaining=remaining,_configuration=captured)
+            self._remaining(run,deadline)
+        except asyncio.CancelledError:raise
+        except (TimeoutError,AITimeoutError):return await self._client_failed(run,token,principal,policy,profile,'TIMEOUT')
+        except Exception:return await self._client_failed(run,token,principal,policy,profile,'DISPATCH_UNCERTAIN')
+        return await coordinator.receive(run,token,response)
+
+_EXEC_DISPATCH=AIClient.technical_execute
+_EXEC_READY=AIClient.technical_execution_ready
+_EXEC_CONFIGURE=AIClient._technical_execution_configuration

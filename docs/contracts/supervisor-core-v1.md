@@ -580,3 +580,15 @@ runtime 참조를 해제하며 startup 자체는 HTTP·DB·provider·계정 발�
 
 선택한 실제 lifespan/설치 함수와 실제 core ASGI→Gateway→합성 phase/provider transport 검증은
 전체 AI main의 다른 서비스 import·실제 uvicorn startup·배포 설정/키·실공급자 검증과 구분한다.
+
+### 모델 후보의 종목과 수급 주체 구분
+
+`mentions`는 원문/지정 답변에 있는 종목·회사 이름 또는 입력된 6자리 종목 코드만을 위한
+필드다. 외국인·기관·개인은 종목 mention이 아니라 flow의 focus/exclude 조건이며, 제외는
+같은 출처의 명시된 인접 부정 근거를 보존해야 한다. 기간은 conditions에 원래 수와 단위로
+남기고 모델이 지원 여부를 판단하지 않는다. 이 구분을 prompt에 명시했으며 wire/schema와
+기존 grounding·인접 부정·고정 frame/plan 검증을 완화하거나 후보를 자동 재분류하지 않는다.
+
+실제 관측한 잘못된 `외국인` mention은 원문 위치가 정확해도 계속 거절된다. 이번 수정의
+semantic identity는 prompt SHA만 바뀌며 과거 실행의 spec·입력·회계는 갱신하지 않는다.
+합성 후보의 수용/거절 회귀는 수정 후 실제 모델의 분류 품질이나 전체 실행 수용 증거가 아니다.

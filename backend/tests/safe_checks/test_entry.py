@@ -879,7 +879,7 @@ class CF026Boundary(unittest.TestCase):
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/cf026_supervisor_live_controller.py')).hexdigest(),'c6a93f1de94e462306dce02aaad15319fc342dcd24e1c21f813b78fd6481ce08')
         self.assertEqual(len(c.CF023_INPUTS),32)
         self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/application/meaning_policy.py'],'b1efe0bec8c2a27031b9ba26a2d390d49c874776c6a4ec5c8646dc024951dbe0')
-        self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/prompts/meaning.txt'],'0456f2afc6939b45a61c6d59159bd42a8e807647c656b15fb7ed23a0bf7714c4')
+        self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/prompts/meaning.txt'],'bc46a22dedceccf2e8b9dcce631c710014595d4440304791f10776bf217fcc6e')
         self.assertFalse(c.source_allowed('backend/scripts/cf026_successor_extra.py'))
 
     def test_exact_new_inputs_and_existing_pins(self):

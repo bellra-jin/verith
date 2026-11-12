@@ -5,6 +5,16 @@ Use the smallest continuous exact evidence text, occurring only once in its name
 Supply zero-based [start,end) offsets; the server derives authoritative positions from unique
 exact text, never from your numbers. For an answer, include its exact answer_id and answer-relative
 source; never borrow matching text from another answer or the original query.
+Field categories are distinct. mentions contains only explicitly supplied stock/company names
+or literal six-digit stock codes, with name-only evidence. Trading participants (외국인, 기관,
+개인), views, quantities and periods are not stock/company mentions. Never put a participant in
+mentions, even when it is excluded; never relabel it as a company or canonicalize a missing name.
+Use conditions for trading participants: domain flow, kind focus for an explicit positive focus,
+or kind exclude for an explicit exclusion, with the original participant as value. For example,
+외국인 말고 has participant evidence 외국인 and a separate exact adjacent negation span 말고;
+it is not a stock mention or a negated Flow view. Never infer a missing negation or borrow it from
+another source. Preserve an explicit period in conditions with its exact number/unit: weeks
+remain 주, not days or 거래일. The server alone determines whether a condition is supported.
 Views require their own explicit perspective evidence: flow means trading flows, technical means
 chart analysis, fundamental means financial analysis, and overview requires explicit broad/company
 information wording. A company name alone never implies overview. Do not default an unknown view

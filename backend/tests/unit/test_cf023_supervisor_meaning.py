@@ -1683,3 +1683,73 @@ async def test_meaning_lifespan_actual_gateway_reads_key_only_after_count_ACK(mo
         assert result.json()['data']['meaning_status']==('supplemented' if authorized else 'counter_unavailable')
     assert ns['supervisor_meaning_runtime'] is None
     assert events==(['backend-authorize-count','key-read',O.COUNT_PATH,'backend-authorize-generation',O.GENERATE_PATH,'backend-settle'] if authorized else ['backend-authorize-count'])
+
+@pytest.mark.parametrize('actor',G.ACTORS)
+@pytest.mark.parametrize('supplied_negation',[False,True])
+async def test_observed_trading_participant_stock_mention_remains_rejected(actor,supplied_negation):
+    q=f'현대건설 {actor} 말고 3주 수급';d=draft(q)
+    candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None),
+        dict(evidence=ev(q,actor),negation=ev(q,'말고') if supplied_negation else None)])
+    before=copy.deepcopy(candidate)
+    aligned=G.align_model_proposal(d,candidate)
+    item=aligned.mentions[1]
+    assert q[item.evidence.start:item.evidence.end]==item.evidence.text==actor
+    with pytest.raises(M.CoreInvalid):G.assess(d,candidate)
+    gateway=NS(propose=AsyncMock(return_value=candidate));frame,status=await S.understand_v2(d,gateway)
+    assert status=='rejected' and frame.interpretation_source=='unavailable'
+    assert candidate==before and not G.stock_name_shape(actor)
+    gateway.propose.assert_awaited_once()
+
+
+@pytest.mark.parametrize('actor',G.ACTORS)
+async def test_company_actor_exclusion_and_week_period_keep_their_distinct_fields(actor):
+    q=f'현대건설 {actor} 말고 3주 수급';d=draft(q)
+    candidate=proposal(mentions=[dict(evidence=ev(q,'현대건설'),negation=None)],
+        views=[dict(view='flow',evidence=ev(q,'수급'),negation=None)],
+        conditions=[dict(domain='flow',kind='exclude',value=actor,evidence=ev(q,actor),negation=ev(q,'말고')),
+                    dict(domain='flow',kind='period',value='3주',evidence=ev(q,'3주'),negation=None)])
+    gateway=NS(propose=AsyncMock(return_value=candidate));frame,status=await S.understand_v2(d,gateway)
+    assert status=='supplemented' and [m.text for m in frame.mentions]==['현대건설']
+    assert frame.requested_views==['flow'] and frame.negated_views==[]
+    excluded=next(c for c in frame.conditions if c.kind=='exclude' and c.value==actor)
+    assert [e.text for e in excluded.evidence]==[actor,'말고']
+    period=next(c for c in frame.conditions if c.kind=='period')
+    assert period.value=='3주' and period.disposition=='unsupported'
+    assert G.validate_fixed_frame(d,frame)==frame
+    resolved=sys.modules['src.supervisor.domain.core_contracts'].Resolution(status='resolved',reason='exact_match',
+        stock=dict(stock_code='000720',stock_name='현대건설',market='KOSPI'),candidates=[])
+    plan=P.continuation_v2(d,frame,resolved).plan
+    assert plan.status=='scope_confirmation' and plan.partial and plan.required_waivers
+    assert any(c.kind=='period' and c.value=='3주' and c.disposition!='honored' for c in plan.frame.conditions)
+    gateway.propose.assert_awaited_once()
+
+
+@pytest.mark.parametrize('fault',[None,'missing_negation','borrowed_negation'])
+def test_participant_answer_negation_cannot_move_between_named_sources(fault):
+    stock_id,actor_id,other_id=(str(uuid4()) for _ in range(3))
+    d=draft('3주 수급',answers=[dict(answer_id=stock_id,slot='stock',value='현대건설'),
+        dict(answer_id=actor_id,slot='flow_focus',value='외국인 말고'),
+        dict(answer_id=other_id,slot='flow_focus',value='기관 말고')])
+    def answer_ev(identity,text,start,end):
+        return dict(source_kind='clarification_answer',answer_id=identity,start=start,end=end,text=text)
+    negative=answer_ev(actor_id,'말고',4,6)
+    if fault=='missing_negation':negative=None
+    elif fault=='borrowed_negation':negative=answer_ev(other_id,'말고',3,5)
+    candidate=proposal(mentions=[dict(evidence=answer_ev(stock_id,'현대건설',0,4),negation=None)],
+        conditions=[dict(domain='flow',kind='exclude',value='외국인',evidence=answer_ev(actor_id,'외국인',0,3),negation=negative)])
+    before=copy.deepcopy(candidate)
+    if fault:
+        with pytest.raises(M.CoreInvalid):G.assess(d,candidate)
+    else:
+        frame=G.assess(d,candidate,source='model_assisted').frame
+        assert [m.text for m in frame.mentions]==['현대건설']
+        condition=next(c for c in frame.conditions if c.kind=='exclude' and c.value=='외국인')
+        assert [e.answer_id for e in condition.evidence]==[actor_id,actor_id]
+    assert candidate==before
+
+
+def test_stock_mention_guidance_changes_only_prompt_semantic_identity():
+    previous=T.semantic_spec()|{'prompt_sha256':'0456f2afc6939b45a61c6d59159bd42a8e807647c656b15fb7ed23a0bf7714c4'}
+    assert M.sha(previous)=='8a873009b7bf71f78b90efbf495ecd920ea12a8027f0ad629b5a530759f3c943'
+    assert T.semantic_spec()['schema_sha256']=='1a3a394f965270af18a4cb5e1b46f3e99a37a6c770970d1c8d09fc1bc211dbb1'
+    assert T.semantic_spec()==B.MEANING_SPEC and M.sha(T.semantic_spec())==B.MEANING_SPEC_SHA256

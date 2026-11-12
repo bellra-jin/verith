@@ -18,6 +18,10 @@ controlled 내부 복원과 공개 synthetic 조회를 분리하며 새 공개 d
 필수 원본만 변경했다. 조건부 추가 허용은 `backend/tests/unit/test_cf035_technical_owned_storage.py`
 1개다. c350 migration CHECK와 현재 확장 model을 동일 비교하던 회귀를, 옛 bytes/hash/기존 synthetic
 CHECK와 새 c530의 정확 model CHECK를 각각 검증하도록 변경했다. 과거 migration은 그대로다.
+원격 CI의 기존 공개 경로 AST 불변 검사가 새 내부 분기까지 비교하여 실패한 뒤,
+직접 호환에 필요한 `backend/tests/unit/test_cf023_supervisor_meaning.py` 한 경로를 추가했다.
+CF045/CF053의 정확 endpoint 집합을 각각 한 번만 분리하고 새 분기 자체도 별도 AST hash로
+고정했다. 기존 공개 경로 hash와 제품 코드는 바꾸지 않았다. 최종 실제 변경은37파일이다.
 Frontend·News·준영 AI·guard/worker·CI/lock/package는 변경하지 않았다.
 
 ## 검증 범위와 현재 기록
@@ -34,6 +38,7 @@ Frontend·News·준영 AI·guard/worker·CI/lock/package는 변경하지 않았�
   ACK 손실은 실제 PG commit 뒤 wrapper simulation이며 실제 네트워크 단절이라고 표현하지 않는다.
 - 최종 보호 검사: admission self5/unit279, runtime self5/unit236, boundary self3/unit208,
   owned storage unit72·owned read unit47, graph self2/unit22 통과·guard 위반0.
+  원격 실패의 위 호환 수정 뒤 meaning self7/unit367도 통과했다.
   graph22건은 실제 compiled graph와 가짜 SDK/OHLCV의 로컬 결과이며 원격 CI의 graph self와 구분한다.
   64개 설치 버전/의존성 snapshot 전후 불변은 매 회 wheel 원본의 암호학적 재검증이라는 뜻이 아니다.
   최종 PG12의 정확 소유 DB/source copy 제거와 source/dependency/origin postcheck를 확인했다.

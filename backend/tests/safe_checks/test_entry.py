@@ -1128,7 +1128,7 @@ class CF036Boundary(unittest.TestCase):
             self.assertNotIn(name,sys.modules)
 
 class CF040Boundary(unittest.TestCase):
-    def test_exact_four_inputs_six_origins_and_single_collection(self):
+    def test_exact_five_inputs_six_origins_and_single_collection(self):
         import hashlib
         from unittest.mock import patch
         from scripts import check_safe as c
@@ -1138,7 +1138,8 @@ class CF040Boundary(unittest.TestCase):
         self.assertEqual(len(c.CF040_COMPAT),6)
         self.assertEqual(set(c.CF040_INPUTS),{
             'ai/src/agents/technical/config.py','ai/src/api/dependencies.py',
-            'ai/src/agents/technical/domain/intraday_limits.py','ai/src/shared/runtime/deadline.py'})
+            'ai/src/agents/technical/domain/intraday_limits.py','ai/src/shared/runtime/deadline.py',
+            'ai/src/agents/technical/infrastructure/openai_llm_client.py'})
         self.assertEqual(c.CF021_INPUTS['ai/src/agents/technical/config.py'],c.CF040_INPUTS['ai/src/agents/technical/config.py'])
         for name,digest in (c.CF040_COMPAT | c.CF040_INPUTS).items():
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)

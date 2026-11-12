@@ -26,6 +26,7 @@ CONFIG_PATH = 'ai/src/agents/technical/config.py'
 DEPENDENCIES_PATH = 'ai/src/api/dependencies.py'
 LIMITS_PATH = 'ai/src/agents/technical/domain/intraday_limits.py'
 DEADLINE_PATH = 'ai/src/shared/runtime/deadline.py'
+LLM_PATH = 'ai/src/agents/technical/infrastructure/openai_llm_client.py'
 PRIVATE = 'cf040-synthetic-private-sentinel-never-output'
 FORBIDDEN = ('src.agents.technical.application.', 'agents.technical.application.',
              'src.agents.technical.infrastructure.', 'agents.technical.infrastructure.',
@@ -37,7 +38,7 @@ def load_readonly():
     """Preserve the existing six actual pure Flow source origins before collection."""
     from scripts.check_safe import CF040_COMPAT, CF040_INPUTS
     ai = ROOT/'ai/src'
-    assert len(CF040_COMPAT) == 6 and set(CF040_INPUTS) == {CONFIG_PATH, DEPENDENCIES_PATH, LIMITS_PATH, DEADLINE_PATH}
+    assert len(CF040_COMPAT) == 6 and set(CF040_INPUTS) == {CONFIG_PATH, DEPENDENCIES_PATH, LIMITS_PATH, DEADLINE_PATH, LLM_PATH}
     for name in ('agents','agents.flow','agents.flow.api','agents.flow.domain','agents.flow.domain.verification','agents.flow.infrastructure'):
         if name not in sys.modules:
             module = ModuleType(name)
@@ -383,3 +384,60 @@ def test_selected_body_alias_and_graph_import_boundary_are_explicit():
         assert name not in sys.modules
     from scripts.safe_checks_bootstrap import valid_flow_origins
     assert valid_flow_origins(ROOT/'backend',sys.modules)
+
+
+# Execute only the actual usage/text helpers and adapter class body. No SDK,
+# client factory, config loader, graph or provider module is imported.
+def usage_adapter():
+    tree=ast.parse((ROOT/LLM_PATH).read_text())
+    names={'_extract_usage','_extract_text','OpenAiLlmClient'}
+    nodes=[node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names]
+    assert {node.name for node in nodes}==names
+    module=ast.Module(body=[ast.ImportFrom(module='__future__',names=[ast.alias(name='annotations')],level=0),*nodes],type_ignores=[])
+    class SDKError(Exception):pass
+    class CallError(Exception):pass
+    values={name:getattr(COLLECTION_CONFIG,name) for name in (
+        'OPENAI_TEMPERATURE','OPENAI_MAX_OUTPUT_TOKENS','OPENAI_TIMEOUT_SECONDS','OPENAI_STORE')}
+    values.update(time=SimpleNamespace(perf_counter=lambda:1.0),openai=SimpleNamespace(OpenAIError=SDKError),
+                  logger=SimpleNamespace(warning=lambda *a,**kw:None),
+                  DeadlineExceeded=DEADLINE.DeadlineExceeded,LlmCallError=CallError)
+    exec(compile(ast.fix_missing_locations(module),str(ROOT/LLM_PATH),'exec'),values)
+    return values
+
+
+@pytest.mark.parametrize('values',[
+    {},dict(input_tokens=1,output_tokens=2),
+    dict(input_tokens=None,output_tokens=2,total_tokens=2),
+    dict(input_tokens=True,output_tokens=2,total_tokens=3),
+    dict(input_tokens='1',output_tokens=2,total_tokens=3),
+    dict(input_tokens=1.9,output_tokens=2,total_tokens=3),
+    dict(input_tokens=-1,output_tokens=2,total_tokens=1),
+    dict(input_tokens=1,output_tokens=2,total_tokens=4),
+    dict(input_tokens=1,output_tokens=False,total_tokens=1),
+    dict(input_tokens=1,output_tokens=2,total_tokens=3.0),
+])
+def test_usage_invalid_or_missing_is_unknown_without_coercion(values):
+    adapter=usage_adapter()
+    assert adapter['_extract_usage'](SimpleNamespace(usage=SimpleNamespace(**values))) is None
+    assert 'openai' not in sys.modules
+
+
+@pytest.mark.parametrize('values',[(0,0,0),(11,22,33)])
+def test_explicit_strict_usage_is_preserved(values):
+    adapter=usage_adapter();usage=dict(zip(('input_tokens','output_tokens','total_tokens'),values))
+    assert adapter['_extract_usage'](SimpleNamespace(usage=SimpleNamespace(**usage)))==usage
+    assert adapter['_extract_usage'](SimpleNamespace()) is None
+
+
+def test_actual_complete_does_not_carry_or_invent_usage_and_keeps_text():
+    adapter=usage_adapter();responses=[
+        SimpleNamespace(output_text='first',usage=SimpleNamespace(input_tokens=11,output_tokens=22,total_tokens=33)),
+        SimpleNamespace(output_text='second',usage=SimpleNamespace(input_tokens='1',output_tokens=2,total_tokens=3)),
+        SimpleNamespace(output_text='third',usage=None)]
+    calls=[]
+    def create(**kwargs):calls.append(kwargs);return responses.pop(0)
+    client=adapter['OpenAiLlmClient'](SimpleNamespace(responses=SimpleNamespace(create=create)),model='synthetic-model')
+    assert client.complete('synthetic-question')=='first' and client.last_usage==dict(input_tokens=11,output_tokens=22,total_tokens=33)
+    assert client.complete('synthetic-question')=='second' and client.last_usage is None
+    assert client.complete('synthetic-question')=='third' and client.last_usage is None
+    assert len(calls)==3 and 'openai' not in sys.modules

@@ -161,3 +161,9 @@ CF039/CF040 위의 후속 고정 검사는 검토된 별도 64-wheel site와 정
 기존 ScriptedLlm·합성 OHLCV로 normal/data_limited/regime_unavailable 세 경우의 원문/ID/as_of·결과·coverage·worker/slot 정리를 확인한다. 수집 전 파일/네트워크/프로세스 보호, 명시 config 초기화·intraday/trace 비활성, 원본 source 차단과 source/site 전후 provenance가 필수다. urllib3의 import-only IPv6 탐색은 검사 중 IPv4-only 플랫폼 가정으로 예방하며 실제 IPv6 검증으로 해석하지 않는다. CI self는 입구 보호만 검사하고 실제 그래프 unit은 별도 설치 site의 로컬 증거로 구분한다.
 
 이 결과는 KIS/OpenAI·캐시/trace 서비스·운영 활성화·public Technical 실행/저장/usage·전체 main 시작 성공이 아니다. [직접 결과와 한계](../work/technical-compiled-bridge.md)를 따른다. 앞 CF039/CF040의 graph 미실행 문장은 당시 이력이며, 그 보호 collection 자체를 완화하지 않는다.
+
+## Technical 선택적 provider 사용량
+
+기존 `OpenAiLlmClient.last_usage`는 명시된 input/output/total 세 값이 모두 비음수 exact integer이며 input+output==total일 때만 보존한다. 누락·None·bool·문자열·소수·음수·합계 불일치는 None이며 0으로 채우거나 정수로 강제 변환하지 않는다. 분석 텍스트는 유지하고 추가 호출하지 않는다.
+
+이는 마지막 호출의 선택적 증거이며 누적 사용량·가격 검증·비용 승인·예약/정산·청구 확정을 대신하지 않는다. None을 미사용/무료로 간주하지 않는다. [수정과 보호 회귀](../work/technical-usage-evidence.md)는 실제 어댑터의 선택 AST body와 fake SDK 객체를 사용하는 무키 검사이며 운영 SDK/실제 provider 검증은 아니다.

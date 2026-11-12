@@ -118,14 +118,15 @@ def _extract_usage(response: Any) -> dict[str, int] | None:
     usage = getattr(response, "usage", None)
     if usage is None:
         return None
-    try:
-        return {
-            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
-        }
-    except (TypeError, ValueError):
+    values = {name: getattr(usage, name, None)
+              for name in ("input_tokens", "output_tokens", "total_tokens")}
+    # Missing/invalid evidence is unknown, never an invented zero or a truncated
+    # number. bool is an int subclass, so require the exact wire integer type.
+    if any(type(value) is not int or value < 0 for value in values.values()):
         return None
+    if values["input_tokens"] + values["output_tokens"] != values["total_tokens"]:
+        return None
+    return values
 
 
 def default_openai_client(

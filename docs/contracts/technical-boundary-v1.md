@@ -196,6 +196,16 @@ strict는 최종 model/input projection과 원 prompt·request identity에 결�
 
 entered는 로컬 진입 권위이며 wire/처리/청구 관측이 아니다. SDK 객체의 retry 설정 검사와 adapter dispatch 횟수는 임의 callable의 내부 HTTP/재시도를 입증하지 않는다. 프로세스 재시작/동일 run의 새 budget 차단은 CF048 claim과 후속 단일 coordinator 조립의 책임이다. 실제 SDK/endpoint/proxy/계수 provenance·Backend→엔진→저장·durable 승인/정산·Supervisor dispatch·운영 활성화는 미완료다. [직접 검사와 한계](../work/CF-049-technical-request-llm-budget.md)를 따른다.
 
+## CF051 공식 count opt-in과 송신 전 pair 소비
+
+CF049의 count 뒤 소비 순서는 이번 명시 경로에서 count 전 pair/full worst-case hold 소비로 대체한다. 기존 요청 budget 하나의 최대1..4 pair(count≤1 + generation≤1, 최대8 POST)이며 실패 count도 ordinal/hold를 남기고 sticky closed다. count_entered/response_received/validated·입력 token 증거와 기존 generation entered/usage를 구분한다. 같은 원문이라도 receipt는 같은 budget·ordinal·request에만 유효하고 실제 사용량으로 소비를 환급하지 않는다. trusted DI의 계수 오류·송신 미확인은 미사용/무료가 아니다. 기본 counter=None은 여전히 SDK0으로 닫히며 legacy complete/default factory는 그대로다.
+
+명시 `official_count_openai_client`는 caller가 제공한 credential·원 budget·검토된 count version/provenance·각 wire cap으로 fresh 공식 OpenAI SDK/HTTP client/transport를 소유한다. settings/dotenv/key source를 찾지 않는다. SDK2.44.0의 `responses.input_tokens.with_streaming_response.count`를 사용하고 `{model,input}` projection과 raw JSON의 정확 object/input_tokens만 검증한다. count receipt의 model은 요청 binding이지 provider의 독립 모델 보고가 아니다. generation은 stream=False이며 기존 usage/text 검사를 유지한다.
+
+소유 transport는 POST·정확 공식 HTTPS/443 두 path·무 query/userinfo·고정 header/JSON/SDK identity와 원 deadline을 확인하고 inner 전송 직전에 각 phase 권위를 한 번 소비한다. I/O 중 lock을 잡지 않는다. TLS verify/trust_env=False/proxy 없음·retry0·redirect 없음으로 직접 구성하고, OPENAI_CUSTOM_HEADERS presence와 현재 SDK DEBUG를 닫는다. 명시 key/base 및 보조 constructor 인자로 fallback을 차단하며 다른 SDK/Azure/module-client 설정의 존재만으로 거절하지 않는다. non-200은 SDK error-body read 전에 닫고 200도 SDK 아래 identity stream에서 Content-Length·누적 byte cap·기한을 검사한다. request/count/generation cap은 필수 양의 정수·각2MiB 이하이며 timeout은 SDK 생성값과 송신 직전 최신 잔여 중 짧은 값으로 좁힌다. 동기 worker hard-kill 보장은 아니다.
+
+count 응답 close는 bundle을 닫지 않는다. caller의 run 종료 close는 미진입 phase를 막고 이미 진입한 실제 작업이 종료된 뒤 자기 HTTP 자원만 정리한다. 이 gate와 합성 HTTP 검증은 실제 TLS/SDK wire 수용·공식 무료 count/가격 근거·운영 정책·CF048 durable 송신 승인/정산·엔진/Supervisor 조립을 대신하지 않는다. 그 전제 없이 자동 활성화하거나 count 요금을 임의0으로 정하지 않는다. [변경·검증과 미완료](../work/CF-051-technical-count-pairs.md)를 따른다.
+
 ## CF050 같은 Technical run의 결과 수신과 저장 복구
 
 `TechnicalCompletionProfile`은 이미 CF048에서 접수·claim ACK가 끝난 run의 결과만 받는다. 기존 `AnalysisCoordinator.receive(expected, token, response)`와 명시 `publish(id)`가 snapshot/게시 commit을 소유하며 post 재접수·재claim·엔진 dispatch는 없다. 원 CF048 SPEC·provider_authority=False/settlement=False·ID/시각/period/policy·예약/hold를 보존한다. 실제 public HTTP route/launch와 기존 synthetic wire는 변경하지 않는다.

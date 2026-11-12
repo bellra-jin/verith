@@ -3213,3 +3213,87 @@ def test_retry4_once_cannot_be_multiplied_by_new_invocation_source_or_consent(tm
     scope,*_=retry4_inputs(tmp_path);d=scope.data;once=S.once_identity(scope)
     d.update(invocation='9'*64,source={},consent_at='2030-01-01T00:00:00Z');d['retry']['consent_message_id']='Sentinel_'+'9'*32
     assert S.once_identity(S.Scope(C.canonical(d),scope.artifacts))==once
+
+
+async def canonical_epoch_binding_fixture(fresh_kind='driver', *, rejected=False):
+    """Real SQL-driver UUID type, actual initializer; all connection/SQL IO is DI."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+    from uuid import UUID
+    from asyncpg.pgproto.pgproto import UUID as DriverUUID
+    from src.modules.auth.application import session_service as auth
+    from db.models.supervisor.preparation import SupervisorMeaningEpoch as Epoch
+    now=datetime.now(timezone.utc)
+    principal=auth.Principal(uuid4(),uuid4(),now+timedelta(minutes=5),b's'*32)
+    added=[];sessions=[];fresh_rows=[]
+    first=NS(scalar=AsyncMock(side_effect=[None,now]),commit=AsyncMock(),add=lambda row:added.append(row))
+    async def fresh_scalar(_):
+        row=added[-1]
+        values={column.name:getattr(row,column.name) for column in Epoch.__table__.columns}
+        class UUIDLike:
+            def __str__(self):return str(row.id)
+        values['id']={'driver':lambda:DriverUUID(str(row.id)),
+                      'string':lambda:str(row.id),'invalid_string':lambda:'not-a-UUID',
+                      'integer':lambda:row.id.int,'bytes':lambda:row.id.bytes,
+                      'object':UUIDLike,'none':lambda:None,
+                      'wrong_UUID':uuid4}[fresh_kind]()
+        fresh=Epoch(**values);fresh_rows.append(fresh)
+        return fresh
+    second=NS(scalar=AsyncMock(side_effect=fresh_scalar),commit=AsyncMock())
+    @asynccontextmanager
+    async def checked(proof,session):
+        index=len(sessions);sessions.append(index)
+        assert index<2
+        yield first if index==0 else second
+    proof=NS(_owner=NS(receipt=object()));session=NS(check=lambda:None)
+    with patch.object(S,'checked_session',checked),patch.object(auth,'validate_principal',AsyncMock()) as validate:
+        if rejected:
+            with pytest.raises(S.Closed,match='^EPOCH_ACK_UNKNOWN$'):
+                await S.initialize_checked_epoch(proof,principal,str(uuid4()),session)
+        else:
+            binding=await S.initialize_checked_epoch(proof,principal,str(uuid4()),session)
+    assert sessions==[0,1] and validate.await_count==1
+    if rejected:
+        assert first.commit.await_count==1 and second.commit.await_count==0
+        return
+    assert first.commit.await_count==second.commit.await_count==1
+    fresh=fresh_rows[0]
+    assert type(fresh.id) is DriverUUID and isinstance(fresh.id,UUID)
+    assert type(binding.epoch_id) is UUID and str(binding.epoch_id)==str(fresh.id)==str(added[0].id)
+    assert binding.epoch_created_at==fresh.created_at and binding.epoch_state_sha256==C.digest(V.epoch_state(fresh))==C.digest(V.epoch_state(added[0]))
+    assert binding.proof is proof and binding.receipt is proof._owner.receipt and binding.mode=='live'
+    return principal,binding,fresh.id
+
+
+@pytest.mark.asyncio
+async def test_epoch_binding_normalizes_actual_driver_UUID_without_changing_identity_or_hash():
+    await canonical_epoch_binding_fixture()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fresh_kind',['string','invalid_string','integer','bytes','object','none','wrong_UUID'])
+async def test_epoch_binding_rejects_non_UUID_or_different_identity_from_actual_fresh_requery(fresh_kind):
+    await canonical_epoch_binding_fixture(fresh_kind,rejected=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('epoch_kind',['driver','canonical','none'])
+async def test_actual_preparation_strict_gate_rejects_driver_subtype_before_auth_but_preserves_canonical_and_default_none(epoch_kind):
+    from unittest.mock import AsyncMock
+    from src.modules.auth.application import session_service as auth
+    from src.modules.supervisor.application import preparation_service as P
+    from src.modules.supervisor.infrastructure import preparation_repository as repo
+    from src.modules.supervisor.domain.contracts import PreparationRequest
+    principal,binding,driver_id=await canonical_epoch_binding_fixture()
+    body=PreparationRequest.model_validate(dict(prepare_key=str(uuid4()),parent_preparation_id=None,draft=dict(original_query='현대건설 외국인 말고 3주 수급',answers=[],revision=0,selected_ticker=None,candidate_ref=None)))
+    session=NS(rollback=AsyncMock(),commit=AsyncMock(),flush=AsyncMock())
+    client=NS(plan_supervisor_core=AsyncMock())
+    raw_driver=epoch_kind=='driver'
+    service=P.PreparationService(session,principal=principal,client=client,epoch_id={'driver':driver_id,'canonical':binding.epoch_id,'none':None}[epoch_kind])
+    class AuthEntryReached(Exception):pass
+    with patch.object(P,'validate_principal',AsyncMock(side_effect=AuthEntryReached())) as validate,patch.object(repo,'admit',AsyncMock()) as admit:
+        with pytest.raises(auth.AuthenticationRequired if raw_driver else AuthEntryReached):
+            await service.post(body,uuid4())
+    assert validate.await_count==(0 if raw_driver else 1)
+    assert admit.await_count==client.plan_supervisor_core.await_count==session.commit.await_count==session.flush.await_count==0
+    assert session.rollback.await_count==(1 if raw_driver else 2)

@@ -948,9 +948,9 @@ async def initialize_checked_epoch(proof, principal, epoch_id, session):
         await database.commit()
     async with checked_session(proof, session) as database:
         fresh = await database.scalar(select(Epoch).where(Epoch.id == UUID(epoch_id)))
-        if fresh is None or fresh.created_at != row.created_at or epoch_state(fresh) != epoch_state(row):
+        if fresh is None or not isinstance(fresh.id, UUID) or fresh.created_at != row.created_at or epoch_state(fresh) != epoch_state(row):
             raise Closed("EPOCH_ACK_UNKNOWN")
-        binding = OwnedEpochBinding(proof, proof._owner.receipt, fresh.id, fresh.created_at,
+        binding = OwnedEpochBinding(proof, proof._owner.receipt, UUID(str(fresh.id)), fresh.created_at,
                                     C.digest(epoch_state(fresh)), "live")
         await database.commit()
     return binding

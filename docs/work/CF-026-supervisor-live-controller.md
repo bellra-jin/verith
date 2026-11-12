@@ -1003,3 +1003,11 @@ B6 준비의 최종 보호 self4·단일 unit465·private 합성45가 통과했�
 무키로 통과했다. 현재 ordinal4는 발급·로컬 claim·예약·키 내용 읽기·DB/API·활성화0이다.
 실제 한 번의 외부 실행은 별도의 구체 실행 승인 확인이 남아 보류하며, 준비 검사를
 실모델 의미 수용으로 보고하지 않는다. 기존350m과 비공개 실제 기록/False는 그대로다.
+
+## Private epoch UUID 경계 정규화
+
+최신 develop의 별도 수정에서 `initialize_checked_epoch`가 SQL로 다시 읽은 epoch ID를 UUID 계열인 경우에만 `UUID(str(fresh.id))` 한 값으로 정규화한다. asyncpg UUID는 표준 UUID의 subtype이어서 값은 같지만, 기존 `PreparationService.post`의 정확한 타입 검사에서 인증·admission 전에 거절됐다. 제품의 엄격한 타입/인증 검사를 넓히지 않고 private helper의 반환 경계를 맞춘다. 문자열·정수·bytes·UUID 유사 객체·None은 정규화하지 않으며, 다른 UUID도 기존 상태 대조에서 거절한다. UUID 문자열, epoch 상태 hash, proof/receipt와 기존 예산은 변하지 않는다.
+
+실제 asyncpg UUID 객체와 실제 initializer를 사용하되 connection/SQL만 명시 DI로 대체하고, 실제 post에서 raw subtype의 인증 전 거절과 정규화된 binding의 인증 진입을 비교하는 무키 회귀를 기존 controller 단일 collection에 추가한다. B6R 원 실행은 예외 type/line을 보존하지 않았으므로 이 재현을 유일한 소급 원인 로그로 쓰지 않는다. 소비된 source/input/private·once·누적400m과 실행 기록은 불변이며, 이번 수정은 새 ready·발급·모델/DB 실행이나 추가 호출 권한이 아니다. 필수 보호 검사 결과와 독립 검토/게시 상태는 인계에서 구분한다.
+
+최종 보호 `live-controller-self` 4개와 `live-controller-unit` 476개가 통과했고 guard 위반은 0이다. 자기 임시 root 제거를 확인했으며, 실제 PG·키 읽기·provider·ready·발급은 실행하지 않았다. 변경은 helper의 UUID 계열 검사/한 값 정규화, 기존 단일 unit의 회귀 11건, 이 기록의 정확 3파일이다. 실제 post의 운영 기본 `epoch_id=None`은 기존 인증 진입을 유지한다. 원 B6R source/input/private·소비 journal/phases의 해시를 다시 대조했다. 최신 develop `7e4defed`의 직접 겹치지 않는 Frontend 변경은 ff-only로 반영했다. 독립 최종 검토와 원격 CI·게시·머지는 이 로컬 검사 결과와 별도다.

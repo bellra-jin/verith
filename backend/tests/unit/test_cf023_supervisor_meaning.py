@@ -1223,3 +1223,99 @@ async def test_cf043_child_ancestor_must_match_independent_current_spec_and_epoc
         draft=h.body.draft.model_copy(update={'selected_ticker':'005930', 'candidate_ref':root['plan']['candidate_ref']}))
     with pytest.raises(PreparationConflict): await h.service.post(child, uuid4())
     assert h.phases == ['start', 'continue']
+
+
+# CF044: isolated durable accounting primitives, no provider or new test mode.
+from src.modules.supervisor.domain import meaning_accounting as A44
+from src.modules.supervisor.application.meaning_accounting_service import MeaningAccountingService as Accounting44
+from src.modules.supervisor.infrastructure import meaning_accounting_repository as AR44
+from datetime import datetime, UTC, timedelta
+from dataclasses import replace
+
+def accounting_policy44():
+    return A44.Policy(operation='meaning',scope='{"budget":"synthetic"}',starts_at=datetime(2026,1,1,tzinfo=UTC),ends_at=datetime(2030,1,1,tzinfo=UTC),limit_nano=1000000,attempt_nano=500000,max_attempts=2,semantic_json=A44.canonical(B.MEANING_SPEC),price_json=A44.canonical(B.MEANING_SPEC['price']),model=B.MEANING_SPEC['model'],tier='default',input_cap=16384,output_cap=2048)
+
+@pytest.mark.parametrize('field,value', [('limit_nano',True),('attempt_nano',-1),('max_attempts',1.0),('input_cap',2**63),('scope','{}'),('price_json','{}'),('semantic_json','{ "a":1}'),('model','')])
+def test_cf044_policy_is_strict_and_no_defaults(field,value):
+    with pytest.raises((A44.AccountingConflict,ValueError)): replace(accounting_policy44(),**{field:value})
+
+def test_cf044_integer_estimate_and_immutable_inputs():
+    p=accounting_policy44()
+    e=dict(state='observed',model=p.model,tier=p.tier,input=10,cached=2,output=5,total=15,request_sha256='a'*64,projection_sha256='b'*64,binding_sha256='c'*64,semantic_sha256='d'*64,price_sha256='e'*64)
+    assert A44.settlement(p,e)==('observed',28650)
+    assert A44.settlement(p,{'state':'unknown'})==('unknown',None)
+    for k,v in [('input',True),('cached',11),('output',2049),('total',16),('model','other'),('input',2**63),('output',-1)]:
+        assert A44.settlement(p,e|{k:v})==('anomalous',None)
+    assert e['input']==10
+    with pytest.raises(Exception):p.limit_nano=1
+
+async def test_cf044_mutation_commit_ack_cancel_and_rollback():
+    for exc in [RuntimeError(),asyncio.CancelledError()]:
+        session=NS(commit=AsyncMock(side_effect=exc),rollback=AsyncMock())
+        service=Accounting44(session);action=AsyncMock(return_value={'safe':'receipt'})
+        with pytest.raises(type(exc)):await service.mutation(action)
+        session.rollback.assert_awaited_once()
+    session=NS(commit=AsyncMock(),rollback=AsyncMock());service=Accounting44(session)
+    assert await service.mutation(AsyncMock(return_value='ok'))=='ok'
+    session.commit.assert_awaited_once();session.rollback.assert_not_awaited()
+
+async def test_cf044_readonly_reconcile_never_mutates():
+    from contextlib import nullcontext
+    owner,account,rid=uuid4(),uuid4(),uuid4()
+    binding=A44.Binding(uuid4(),uuid4(),uuid4(),*['a'*64]*5,datetime(2027,1,1,tzinfo=UTC))
+    row=NS(id=rid,account_id=account,binding_json=binding.snapshot(),binding_sha256=A44.sha(binding.snapshot()),state='unknown',reserved_nano=500,estimated_nano=None,receipt_sha256='b'*64)
+    session=NS(no_autoflush=nullcontext(),scalar=AsyncMock(side_effect=[NS(id=account),row]),commit=AsyncMock(),rollback=AsyncMock())
+    assert (await Accounting44(session).reconcile(owner_id=owner,account_id=account,binding=binding))['state']=='unknown'
+    for call in session.scalar.call_args_list:
+        sql=str(call.args[0]);assert 'FOR UPDATE' not in sql and 'INSERT' not in sql and 'UPDATE ' not in sql
+    session.commit.assert_not_awaited();session.rollback.assert_not_awaited()
+
+
+def test_cf044_model_migration_checks_and_single_head():
+    import ast
+    from db.models.supervisor.meaning_accounting import ACCOUNT_CHECKS,RESERVATION_CHECKS
+    file=ROOT/'backend/db/migrations/versions/20261111_c44001a7e0001_supervisor_accounting.py'
+    tree=ast.parse(file.read_text())
+    values={n.targets[0].id:ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name)}
+    assert values['ACCOUNT_CHECKS']==ACCOUNT_CHECKS and values['RESERVATION_CHECKS']==RESERVATION_CHECKS
+    assert values['down_revision']=='c35001a7e0001'
+    source=file.read_text();assert source.index('LOCK TABLE')<source.index('SELECT EXISTS')<source.index("op.drop_table")
+
+
+@pytest.mark.parametrize('field,value',[('model','other'),('tier','other'),('input_cap',1),('output_cap',1)])
+def test_cf044_policy_snapshot_must_match_current_contract(field,value):
+    with pytest.raises(A44.AccountingConflict):replace(accounting_policy44(),**{field:value})
+
+@pytest.mark.parametrize('invalid',[{'state':'observed','secret':'synthetic-private'}, {'state':'observed','input':-1}, {'state':'observed','input':1.5}, {'state':'observed','input':2**63}])
+async def test_cf044_anomalous_is_blocked_without_raw_strings(invalid):
+    p=accounting_policy44();binding=A44.Binding(uuid4(),uuid4(),uuid4(),*['a'*64]*3,A44.sha(p.semantic_json),A44.sha(p.price_json),datetime(2027,1,1,tzinfo=UTC))
+    row=NS(id=uuid4(),account_id=uuid4(),binding_json=binding.snapshot(),binding_sha256=A44.sha(binding.snapshot()),state='held',reserved_nano=p.attempt_nano,estimated_nano=None,receipt_sha256=None)
+    account=NS(id=row.account_id,policy_json=p.snapshot(),policy_sha256=A44.sha(p.snapshot()),scope_json=p.scope,scope_sha256=A44.sha(p.scope),reserved_nano=p.attempt_nano,observed_nano=0,blocked=False,**{k:getattr(p,k) for k in ('operation','starts_at','ends_at','limit_nano','attempt_nano','max_attempts')})
+    session=NS(commit=AsyncMock(),rollback=AsyncMock(),flush=AsyncMock())
+    with patch.object(AR44,'account',AsyncMock(return_value=account)),patch.object(AR44,'reservation',AsyncMock(return_value=row)):
+        result=await Accounting44(session).settle(owner_id=uuid4(),account_id=account.id,reservation_id=row.id,binding_sha256=row.binding_sha256,evidence=invalid)
+    assert result['state']=='anomalous' and result['estimated_nano'] is None and account.blocked
+    assert account.reserved_nano==p.attempt_nano and account.observed_nano==0
+    assert 'synthetic-private' not in row.receipt_json
+    assert set(json.loads(row.receipt_json))=={'state','reason','evidence_sha256'}
+    session.commit.assert_awaited_once()
+
+
+def test_cf044_historical_price_snapshot_settles_but_cannot_issue_new_budget(monkeypatch):
+    p=accounting_policy44()
+    monkeypatch.setattr(B,'MEANING_SPEC',dict(B.MEANING_SPEC,model='future-contract'))
+    with pytest.raises(A44.AccountingConflict):p.require_current()
+    assert replace(p).snapshot()==p.snapshot()
+    e=dict(state='observed',model=p.model,tier=p.tier,input=10,cached=2,output=5,total=15,request_sha256='a'*64,projection_sha256='b'*64,binding_sha256='c'*64,semantic_sha256='d'*64,price_sha256='e'*64)
+    assert A44.settlement(p,e)==('observed',28650)
+
+
+async def test_cf044_commit_cancellation_survives_rollback_failure():
+    session=NS(commit=AsyncMock(side_effect=asyncio.CancelledError()),rollback=AsyncMock(side_effect=RuntimeError()))
+    with pytest.raises(asyncio.CancelledError):await Accounting44(session).mutation(AsyncMock(return_value='not-acknowledged'))
+    session.rollback.assert_awaited_once()
+
+
+async def test_cf044_new_cancellation_during_rollback_is_not_swallowed():
+    session=NS(commit=AsyncMock(side_effect=RuntimeError()),rollback=AsyncMock(side_effect=asyncio.CancelledError()))
+    with pytest.raises(asyncio.CancelledError):await Accounting44(session).mutation(AsyncMock(return_value='not-acknowledged'))

@@ -1113,3 +1113,187 @@ async def _verify_meaning_flow_crosspath(proof):
         return dict(groups=groups,meaning_mock_count=2,meaning_mock_generation=2,synthetic_supplier=2,fake_flow_dispatch=1,flow_before=before,flow_budget_denied=snapshots['budget_denied'],flow_after=after,meaning_epoch_snapshots={k:snapshots[k] for k in ('ready','unknown')},meaning_epoch_sha256=sha(held_snapshot),meaning_epoch_final_sha256=sha(await epoch_snapshot()),real_provider_requests=0,real_credential_reads=0,google_requests=0,note='PreparationService private initial preparation; actual authenticated ASGI GET/confirmation/report; fake Flow only. Nine provider rows are not_called reservations.')
     finally:
         app.dependency_overrides.clear();app.dependency_overrides.update(previous)
+
+
+async def verify_meaning_accounting(proof):
+    """Only fresh owned PG; real SQL transactions and two-session contention."""
+    from scripts.cf003_admission_check import isolated_application,check,migration
+    with isolated_application(proof) as denied:
+        try:
+            result=await _verify_meaning_accounting(proof)
+        except BaseException as error:
+            from scripts.cf002_interactive_login import safe_print
+            frames=[];tb=error.__traceback__
+            while tb:
+                if tb.tb_frame.f_code.co_filename==__file__:
+                    frames.append({'function':tb.tb_frame.f_code.co_name,'line':tb.tb_lineno})
+                tb=tb.tb_next
+            safe_print({'phase':'cf044_checker_failure','error_type':type(error).__name__ if type(error).__name__ in {'AccountingConflict','AssertionError','IntegrityError','VerificationFailure','RuntimeError','InvalidRequestError','NameError','TypeError','AttributeError'} else 'other','frames':frames[-6:]})
+            raise
+        check(not any(denied.values()),'CF044 forbidden IO')
+        return result|{'observed_denials':dict(denied),'provider_requests':0}
+
+
+async def _verify_meaning_accounting(proof):
+    import asyncio
+    from dataclasses import replace
+    from datetime import timedelta
+    from uuid import uuid4,UUID
+    from sqlalchemy import select,text
+    from db.models.auth.models import AuthUser,AuthSession
+    from db.models.supervisor.preparation import SupervisorMeaningPreparation as Preparation
+    from db.models.supervisor.meaning_accounting import SupervisorMeaningAccount as Account,SupervisorMeaningReservation as Reservation
+    from src.modules.auth.application.session_service import issue_session
+    from src.modules.supervisor.domain.contracts import MEANING_SPEC
+    from src.modules.supervisor.domain.meaning_accounting import Policy,Binding,AccountingConflict,canonical,sha
+    from src.modules.supervisor.application.meaning_accounting_service import MeaningAccountingService as Service
+    from src.modules.supervisor.infrastructure.meaning_accounting_repository import projection
+    from scripts.cf002_interactive_login import owned_session,migrate_owned,safe_print
+    from scripts.cf003_admission_check import check,migration
+    groups=[]
+    def mark(label):
+        groups.append(label);safe_print({'phase':'cf044_check','label':label,'status':'passed'})
+    async def sql(q,params=None):
+        async with owned_session(proof) as s:return await s.scalar(text(q),params or {})
+    async def fail(call, expected=AccountingConflict):
+        try:await call
+        except expected:
+            return
+        raise AssertionError('CF044 expected refusal')
+    async with owned_session(proof) as s:
+        now=await s.scalar(text('SELECT clock_timestamp()'));user=AuthUser(id=uuid4());other=AuthUser(id=uuid4());s.add_all([user,other]);await s.flush()
+        _,principal=await issue_session(s,user);_,foreign=await issue_session(s,other);await s.commit()
+    before=await sql('SELECT count(*) FROM auth_users')
+    await migration(proof,'c35001a7e0001',downgrade=True);await migrate_owned(proof)
+    check(await sql('SELECT count(*) FROM auth_users')==before,'CF044 additive preserved')
+    check(await sql('SELECT version_num FROM alembic_version')=='c44001a7e0001','CF044 single head')
+    mark('empty_downgrade_reupgrade_preserves_old_rows')
+    policy=Policy(operation='meaning',scope='{"scope":"cf044-synthetic"}',starts_at=now-timedelta(seconds=10),ends_at=now+timedelta(minutes=5),limit_nano=1500000,attempt_nano=500000,max_attempts=3,semantic_json=canonical(MEANING_SPEC),price_json=canonical(MEANING_SPEC['price']),model=MEANING_SPEC['model'],tier=MEANING_SPEC['service_tier'],input_cap=MEANING_SPEC['caps']['input_tokens'],output_cap=MEANING_SPEC['caps']['output_tokens'])
+    async def create(p=policy,identity=None):
+        async with owned_session(proof) as s:return UUID(await Service(s).create_account(principal,p,account_id=identity or uuid4()))
+    account=await create()
+    check(await create()==account,'CF044 scope cannot duplicate by id')
+    for changed in (replace(policy,ends_at=policy.ends_at+timedelta(seconds=1)),replace(policy,limit_nano=2000000)):
+        await fail(create(changed))
+    async def prep(who=principal,*,expired=False):
+        async with owned_session(proof) as s:
+            pid,attempt=uuid4(),uuid4();expires=now-timedelta(seconds=1) if expired else now+timedelta(minutes=4)
+            created=now-timedelta(minutes=5) if expired else now
+            row=Preparation(id=pid,owner_user_id=who.user_id,prepare_key_digest=uuid4().bytes*2,request_digest='a'*64,draft_digest='b'*64,semantic_json=policy.semantic_json,semantic_sha256=sha(policy.semantic_json),root_id=pid,parent_id=None,depth=0,attempt_id=attempt,epoch_id=None,state='pending',meaning_status='unavailable',created_at=created,expires_at=expires)
+            s.add(row);await s.flush();bound=Binding(pid,attempt,who.session_id,row.request_digest,row.draft_digest,projection(row),row.semantic_sha256,sha(policy.price_json),expires);await s.commit();return bound
+    async def reserve(b,who=principal,acc=account):
+        async with owned_session(proof) as s:return await Service(s).reserve(who,acc,b)
+    b=await prep()
+    first,second=await asyncio.gather(reserve(b),reserve(b))
+    check(first==second and await sql('SELECT count(*) FROM supervisor_meaning_reservations')==1,'CF044 concurrent winner one')
+    check(await sql('SELECT reserved_nano FROM supervisor_meaning_accounts WHERE id=:id',{'id':account})==500000,'CF044 single consumption')
+    await fail(reserve(replace(b,request_sha256='c'*64)));await fail(reserve(replace(b,session_id=foreign.session_id),foreign))
+    await fail(reserve(b,acc=uuid4()))
+    for field,value in [('attempt_id',uuid4()),('draft_sha256','c'*64),('semantic_sha256','c'*64),('projection_sha256','c'*64),('price_sha256','c'*64),('expires_at',now-timedelta(seconds=1))]:
+        await fail(reserve(replace(b,**{field:value})))
+    await fail(reserve(replace(b,session_id=foreign.session_id)))
+    from sqlalchemy.exc import IntegrityError
+    for table,identity,column,value in [('supervisor_meaning_accounts',account,'policy_json','{}'),('supervisor_meaning_accounts',account,'policy_json',canonical(__import__('json').loads(policy.snapshot())|{'operation':None})),('supervisor_meaning_reservations',UUID(first['reservation_id']),'binding_json','{}'),('supervisor_meaning_reservations',UUID(first['reservation_id']),'binding_json',canonical(__import__('json').loads(b.snapshot())|{'session_id':None}))]:
+        async with owned_session(proof) as session:
+            try:
+                hash_column='policy_sha256' if column=='policy_json' else 'binding_sha256'
+                await session.execute(text('UPDATE '+table+' SET '+column+'=:value,'+hash_column+'=:digest WHERE id=:id'),{'value':value,'digest':sha(value),'id':identity})
+                await session.flush()
+            except IntegrityError as error:
+                check(error.orig.sqlstate=='23514','CF044 missing/null JSON CHECK violation')
+                await session.rollback()
+            else:raise AssertionError('CF044 malformed binding must fail DB CHECK')
+    # Exercise physical composite owner FKs, not just service prechecks.
+    async with owned_session(proof) as session:
+        foreign_account=UUID(await Service(session).create_account(foreign,policy,account_id=uuid4()))
+    foreign_binding=await prep(foreign);own_binding=await prep()
+    for acc,bound in [(foreign_account,own_binding),(account,foreign_binding)]:
+        async with owned_session(proof) as session:
+            row=Reservation(id=uuid4(),account_id=acc,owner_user_id=principal.user_id,owner_session_id=bound.session_id,preparation_id=bound.preparation_id,attempt_id=bound.attempt_id,binding_json=bound.snapshot(),binding_sha256=sha(bound.snapshot()),expires_at=bound.expires_at,reserved_nano=500000,state='held')
+            session.add(row)
+            try:await session.flush()
+            except IntegrityError as error:
+                check(error.orig.sqlstate=='23503','CF044 composite owner FK enforced');await session.rollback()
+            else:raise AssertionError('CF044 physical owner FK must refuse')
+    expired=await prep(expired=True)
+    await fail(reserve(expired))
+    deleted=await prep()
+    async with owned_session(proof) as session:
+        await session.execute(text("UPDATE supervisor_meaning_preparations SET state='deleted',redacted_at=clock_timestamp() WHERE id=:id"),{'id':deleted.preparation_id});await session.commit()
+    await fail(reserve(deleted))
+    mark('scope_unique_concurrent_winner_and_binding_owner_denials')
+    async def settle(binding,receipt,evidence):
+        async with owned_session(proof) as s:return await Service(s).settle(owner_id=principal.user_id,account_id=account,reservation_id=UUID(receipt['reservation_id']),binding_sha256=sha(binding.snapshot()),evidence=evidence)
+    observed=dict(state='observed',model=policy.model,tier=policy.tier,input=10,cached=2,output=5,total=15,request_sha256=b.request_sha256,projection_sha256=b.projection_sha256,binding_sha256=sha(b.snapshot()),semantic_sha256=b.semantic_sha256,price_sha256=b.price_sha256)
+    result=await settle(b,first,observed);check(result['estimated_nano']==28650 and result['state']=='observed','CF044 integer estimate')
+    check(await settle(b,first,observed)==result,'CF044 terminal replay')
+    await fail(settle(b,first,{'state':'unknown'}))
+    # Settlement survives revoked session and redacted source, retaining stored binding.
+    async with owned_session(proof) as s:
+        await s.execute(text('UPDATE auth_sessions SET revoked_at=clock_timestamp() WHERE id=:id'),{'id':principal.session_id})
+        await s.execute(text("UPDATE supervisor_meaning_preparations SET state='deleted',redacted_at=clock_timestamp(),draft_json=NULL WHERE id=:id"),{'id':b.preparation_id});await s.commit()
+    check(await settle(b,first,observed)==result,'CF044 settlement independent of current auth/redaction')
+    async with owned_session(proof) as s:
+        await s.execute(text('UPDATE auth_sessions SET revoked_at=NULL WHERE id=:id'),{'id':principal.session_id});await s.commit()
+    b2=await prep()
+    # A real committed reservation with simulated lost ACK. Its ID is not returned.
+    async with owned_session(proof) as s:
+        commit=s.commit
+        async def lost_ack():await commit();raise RuntimeError('synthetic ACK loss')
+        s.commit=lost_ack
+        await fail(Service(s).reserve(principal,account,b2),RuntimeError)
+    async with owned_session(proof) as s:
+        dirty=AuthUser(id=uuid4());s.add(dirty)
+        recovered=await Service(s).reconcile(owner_id=principal.user_id,account_id=account,binding=b2)
+        check(dirty in s.new,'CF044 readonly no autoflush')
+        await s.rollback()
+    unknown=await settle(b2,recovered,{'state':'unknown'})
+    check(unknown['state']=='unknown','CF044 unknown hold')
+    await fail(settle(b2,recovered,observed))
+    check(await sql('SELECT reserved_nano FROM supervisor_meaning_accounts WHERE id=:id',{'id':account})==1000000,'CF044 no refund')
+    check(await sql('SELECT blocked FROM supervisor_meaning_accounts WHERE id=:id',{'id':account}) is True,'CF044 durable block')
+    await fail(reserve(await prep()))
+    mark('integer_settlement_ack_loss_readonly_recovery_terminal_hold_restart')
+    # A failed commit before persistence rolls both reservation and account back.
+    p2=replace(policy,scope='{"scope":"cf044-limit"}',limit_nano=500000,max_attempts=1)
+    a2=await create(p2);b3=await prep()
+    async with owned_session(proof) as s:
+        async def before_ack():raise RuntimeError('synthetic rollback before commit')
+        s.commit=before_ack
+        await fail(Service(s).reserve(principal,a2,b3),RuntimeError)
+    async with owned_session(proof) as s:
+        row=await s.get(Account,a2)
+        check(row.attempts==row.reserved_nano==0,'CF044 rollback no partial account')
+        check(await s.scalar(select(Reservation.id).where(Reservation.preparation_id==b3.preparation_id)) is None,'CF044 rollback no reservation')
+    held=await reserve(b3,acc=a2)
+    await fail(reserve(await prep(),acc=a2))
+    check(await reserve(b3,acc=a2)==held,'CF044 replay at exact limit')
+    async with owned_session(proof) as session:
+        await session.execute(text("UPDATE auth_sessions SET expires_at=clock_timestamp()+interval '1 millisecond' WHERE id=:id"),{'id':principal.session_id})
+        await session.commit()
+    await asyncio.sleep(.02)
+    async with owned_session(proof) as session:
+        expired_settlement=await Service(session).settle(owner_id=principal.user_id,account_id=a2,reservation_id=UUID(held['reservation_id']),binding_sha256=sha(b3.snapshot()),evidence={'state':'unknown'})
+        check(expired_settlement['state']=='unknown','CF044 expired session does not erase settlement')
+    async with owned_session(proof) as session:
+        await session.execute(text('UPDATE auth_sessions SET expires_at=:expires WHERE id=:id'),{'expires':principal.expires_at,'id':principal.session_id});await session.commit()
+    mark('atomic_rollback_and_exact_limit_no_extra_consumption')
+    # Each malformed usage is a terminal held/account-blocked result, never raw text.
+    bad=[{'state':'observed','secret':'do-not-store-synthetic'},observed|{'input':True},observed|{'input':-1},observed|{'input':1.5},observed|{'input':2**63},observed|{'model':'do-not-store-synthetic'},observed|{'cached':99}]
+    for i,e in enumerate(bad):
+        pa=replace(policy,scope=canonical({'scope':'cf044-anomalous-'+str(i)}))
+        aa=await create(pa);bb=await prep();rr=await reserve(bb,acc=aa)
+        async with owned_session(proof) as session:
+            value=await Service(session).settle(owner_id=principal.user_id,account_id=aa,reservation_id=UUID(rr['reservation_id']),binding_sha256=sha(bb.snapshot()),evidence=e)
+        check(value['state']=='anomalous' and value['estimated_nano'] is None,'CF044 invalid usage preserves hold')
+        async with owned_session(proof) as session:
+            ar=await session.get(Account,aa);res=await session.get(Reservation,UUID(rr['reservation_id']))
+            check(ar.blocked and ar.reserved_nano==500000 and ar.observed_nano==0,'CF044 anomalous durable block')
+            check('do-not-store' not in res.receipt_json and set(__import__('json').loads(res.receipt_json))=={'state','reason','evidence_sha256'},'CF044 raw strings never stored')
+        await fail(reserve(await prep(),acc=aa))
+    mark('strict_usage_anomalous_hold_block_sanitized_receipts')
+    # Populated downgrade must refuse atomically; existing records remain.
+    await fail(migration(proof,'c35001a7e0001',downgrade=True),RuntimeError)
+    check(await sql('SELECT count(*) FROM supervisor_meaning_reservations')==10,'CF044 populated downgrade preserved')
+    mark('populated_downgrade_denied')
+    return {'groups':groups,'ack_loss':'commit-wrapper-simulation-after-real-commit','actual_SQL':True,'actual_provider':False}

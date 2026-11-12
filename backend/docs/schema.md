@@ -347,3 +347,9 @@ UPDATE trigger로 snapshot 변경을 거절한다. root 삭제의 CASCADE는 유
 
 이 표는 실행·예산 원장이 아니다. root/자식의 JSONB projection과 정확 TEXT를 구분한다. downgrade는 owned
 root/snapshot/index가 있으면 거절하며 기존 데이터나 소유자를 자동 정리하지 않는다.
+
+## CF044 · Supervisor 독립 회계 (운영 미조립)
+
+`supervisor_meaning_accounts`: UUID PK, auth owner FK; operation/owner/canonical scope SHA UNIQUE. 정책·기간·model/spec/price/caps canonical TEXT/hash와 필수 총액/시도액/횟수, 누적예약·관측추정액·blocked. 예약 자동환급 없음.
+`supervisor_meaning_reservations`: account+owner/preparation+owner 복합 FK, 저장 session FK, preparation/attempt UNIQUE. 고정 binding TEXT/SHA·예약액·TTL·held/observed/unknown/anomalous와 정제 receipt TEXT/hash.
+새 revision c44001a7e0001은 c35001a7e0001 뒤 additive이며 기존 표를 변경하지 않는다. 두 새 표 ACCESS EXCLUSIVE 잠금 후 비어 있을 때만 downgrade한다. 운영 정책 발급·Gateway/송신 권위는 연결하지 않는다.

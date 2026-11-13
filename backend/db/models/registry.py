@@ -106,3 +106,5 @@ from db.models.supervisor.preparation import SupervisorMeaningPreparation, Super
 
 from db.models.supervisor.meaning_accounting import SupervisorMeaningAccount, SupervisorMeaningReservation  # noqa: F401
 from db.models.supervisor.meaning_accounting import SupervisorMeaningGrant  # noqa: F401
+
+from db.models.supervisor.composition import SupervisorComposition  # noqa: F401

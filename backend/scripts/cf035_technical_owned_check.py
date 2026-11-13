@@ -637,7 +637,7 @@ async def _verify_completion(proof):
         async with owned_session(proof) as s:return await E.TechnicalOwnedReportService(s,principal=p).read(item['claimed'].run.report_id)
 
     config=Config();config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
-    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c54001a7e0001'],'CF054 single migration head')
+    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c60001a7e0001'],'Composition single migration head')
     check(await scalar('SELECT version_num FROM alembic_version')==heads[0],'CF050 current head')
     async with owned_session(proof) as s:s.add(Stock(stock_code='000720',stock_name='CF050 synthetic canonical',market='KOSPI'));await s.commit()
     p,a2=await user();other,_=await user()
@@ -1250,6 +1250,8 @@ async def _verify_provider(proof,policy,intent,user,totals,scalar,refused,mark):
 
     await migration(proof,'c54001a7e0001')
     await _verify_supervisor_handoff(proof,cfg,policy,ai,client,backend,runner_calls,factory_calls,mark,scalar,refused,totals,load)
+    await migration(proof,'c60001a7e0001')
+    await _verify_composition(proof,cfg,policy,mark,scalar,refused,totals)
     return labels
 
 
@@ -1500,3 +1502,201 @@ async def _verify_supervisor_handoff(proof,cfg,policy,ai,client,backend,runner_c
         mark('CF054_populated_downgrade_denied_before_drop')
     finally:
         app.dependency_overrides.clear();app.dependency_overrides.update(original_overrides)
+
+
+async def _verify_composition(proof,cfg,policy,mark,scalar,refused,totals):
+    """Native SQL admission/link/owner observation, never a new dispatcher."""
+    import asyncio,time
+    from dataclasses import replace
+    from datetime import timedelta
+    from types import SimpleNamespace as NS
+    from unittest.mock import patch
+    from sqlalchemy import text
+    from db.models.auth.models import AuthUser
+    from src.modules.auth.application.session_service import issue_session,revoke_session,AuthenticationRequired
+    from src.modules.supervisor.domain import contracts as B
+    from src.modules.supervisor.domain.composition import CompositionSnapshot,VERSION,fixed_child_key
+    from src.modules.supervisor.application import composition_service as C
+    from src.modules.supervisor.infrastructure import composition_repository as R
+    from src.modules.technical.application.execution_admission_service import TechnicalAdmissionService as Admission
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.modules.flow.application.analysis_service import AnalysisService as Flow
+    from src.shared.config import settings
+    from scripts.cf002_interactive_login import owned_session
+    from scripts.cf003_admission_check import check,migration
+
+    async def identity():
+        async with owned_session(proof) as s:
+            owner=AuthUser(id=uuid4());s.add(owner);await s.flush()
+            _,p=await issue_session(s,owner);_,a2=await issue_session(s,owner);await s.commit();return p,a2
+    p,a2=await identity();other,_=await identity()
+    stock=await scalar("SELECT json_build_object('stock_code',stock_code,'stock_name',stock_name,'market',market)::text FROM stocks WHERE stock_code='000720'")
+    query='000720 수급과 차트';views=['flow','technical']
+    frame=dict(original_query=query,query_sha256=B.sha(query),revision=0,answers=[],
+        mentions=[dict(text='000720',negated=False,evidence=dict(source_kind='original_query',answer_id=None,start=0,end=6,text='000720'))],
+        requested_views=views,negated_views=[],conditions=[],unresolved_slots=[],interpretation_source='deterministic')
+    snapshot=CompositionSnapshot(B.canonical(dict(schema_version=VERSION,draft=dict(original_query=query,answers=[],revision=0,selected_ticker=None,candidate_ref=None),
+        frame=frame,stock=json.loads(stock),selected_views=views,consent=dict(allow_views=views,allow_partial_results=True,waived_conditions=[]),
+        flow_policy=dict(supported_tickers=['000720'],user_limit=100,service_limit=100,budget=10000000000),technical_configuration=cfg.text)))
+    async def admitted(service,key=None):
+        stamp=await R.clock(service.session)
+        return await service.admit(key or str(uuid4()),snapshot,request_started_at=stamp)
+    async def observe(owner,id):
+        async with owned_session(proof) as s:return await C.CompositionService(s,principal=owner).get(id)
+    async def expect(call,codes):
+        try:await call
+        except C.CompositionError as error:check(error.code in codes,'composition fixed error');return
+        check(False,'composition operation must refuse')
+    baseline=await totals()
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=p);key=str(uuid4());first=await admitted(service,key)
+        replay=await admitted(service,key)
+        check(first.newly_admitted and not replay.newly_admitted and replay.token is None,'composition no replay token')
+        row=await R.read(s,p.user_id,id=first.id)
+        check(str(await s.scalar(text("SELECT c60001_child_key(:id,'technical',:seed)"),dict(id=first.id,seed=row.claim_digest)))==fixed_child_key(first.id,'technical',bytes(row.claim_digest)),'composition SQL/Python UUID parity')
+        await s.rollback()
+        right=await service.start(first);check(right.newly_started,'composition fresh start ACK')
+        check(not (await service.start(first)).newly_started,'composition second start closed')
+        await service.handoff(right,'technical');native_key,_=service.take_handoff(right,'technical')
+        native=await Admission(s,principal=p,policy=policy).admit_provider(native_key,service.technical_intent(snapshot),cfg)
+        await service.link(right,'technical',native)
+        row=await R.read(s,p.user_id,id=first.id)
+        check(row.analysis_as_of==native.run.as_of and row.technical_run_id==native.run.analysis_id,'composition SQL UUID normalization and shared native clock')
+        await s.rollback()
+        # These native services are invoked explicitly by the fixture. The
+        # composition service itself neither invokes nor republishes children.
+        from src.modules.technical.application.execution_authority_service import TechnicalExecutionAuthority
+        from src.modules.technical.domain import provider_execution as P
+        from src.modules.technical.application import execution_completion as E
+        from src.modules.analysis.application.coordinator import AnalysisCoordinator
+        claim=await Admission(s,principal=p,policy=policy).dispatch_provider_claim(native.run,native.claim_token,cfg)
+        execution=P.decode(claim.execution_json);boundary=execution['boundary_request']
+        start=await TechnicalExecutionAuthority(s,configuration=cfg).start(dict(schema_version=P.SCHEMA,
+            analysis_id=str(claim.run.analysis_id),control_sha256=execution['control_sha256'],executor_id=str(uuid4())),claim.grant)
+        raw=copy.deepcopy(json.loads(storage_fixture(uuid4())[1].result_json)['data']['result'])
+        raw.update(request_id=boundary['request_id'],trace_id=boundary['trace_id'],ticker='000720',
+            as_of=boundary['data']['requested_as_of'],resolved_stock_name=snapshot.data()['stock']['stock_name'])
+        response=P.result(boundary,raw,{k:start[k] for k in ('control_sha256','start_sha256','executor_id')})
+        result=await AnalysisCoordinator(s,principal=p,client=None,profile=E.TechnicalCompletionProfile(policy=policy)).receive(claim.run,native.claim_token,response)
+        check(result.run.state=='stored','composition native stored child fixture')
+        await service.handoff(right,'flow');flow_key,as_of=service.take_handoff(right,'flow')
+        async def unavailable(*args,**kwargs):raise OSError('fixed synthetic no Flow provider')
+        flow_service=Flow(s,principal=p,client=NS(analyze_flow=unavailable))
+        flow_service.usage_control.settings=NS(FLOW_USAGE_LIMITS_ENABLED='true',FLOW_SUPPORTED_TICKERS='000720',
+            FLOW_USER_DAILY_REQUEST_LIMIT='100',FLOW_SERVICE_DAILY_REQUEST_LIMIT='100',FLOW_SERVICE_DAILY_BUDGET_USD='10')
+        flow=await flow_service.post(dict(ticker='000720',question=query,as_of=as_of.isoformat(),idempotency_key=flow_key,allow_analysis=True),uuid4())
+        check(flow.state=='unknown','composition independent child uncertainty')
+        await service.link(right,'flow',flow)
+        await service.close(right)
+        try:service.take_handoff(right,'flow')
+        except C.CompositionError:pass
+        else:check(False,'composition close consumes unspent local ticket')
+    before=await totals()
+    for owner in (p,a2):
+        view=await observe(owner,first.id)
+        check(view['state']=='closed' and view['coverage']=='partial','composition A1/A2 partial owner read')
+        states={item['view']:item['state'] for item in view['views']}
+        check(states=={'flow':'unknown','technical':'stored'},'composition stored survives other child unknown')
+        check(all(secret not in json.dumps(view) for secret in ('claim_digest',native_key,flow_key)),'composition response no capabilities')
+    await expect(observe(other,first.id),{'NOT_FOUND'})
+    check(await totals()==before,'composition GET/restart no new native accounting')
+    mark('composition_actual_owner_A2_stored_plus_unknown_fixed_children_no_reexecution')
+
+    # One winner across independent SQL sessions; the loser never receives a
+    # fresh right even though it has the original admission receipt in memory.
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=p);race=await admitted(service)
+    async def start_once():
+        async with owned_session(proof) as s:return await C.CompositionService(s,principal=p).start(race)
+    rights=await asyncio.gather(start_once(),start_once())
+    check(sum(r.newly_started for r in rights)==1,'composition concurrent start single winner')
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=p);lost=await admitted(service);original=s.commit
+        async def missing_ack():await original();raise OSError('fixed synthetic lost ACK')
+        s.commit=missing_ack
+        await expect(service.start(lost),{'ACK_UNKNOWN'})
+        s.commit=original
+        check((await service.get(lost.id))['state']=='claimed','composition durable lost ACK observation')
+        await expect(service.start(lost),{'ACK_UNKNOWN'})
+    check(await totals()==before,'composition races/ACK do not admit native children')
+    mark('composition_concurrent_start_ACK_loss_observation_no_native_reservation')
+
+    # An unlinked consumed handoff remains unknown, not proof of no call; an
+    # expired unstarted parent closes once and cannot remain pending forever.
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=p);uncertain=await admitted(service);right=await service.start(uncertain)
+        await service.handoff(right,'technical');await service.close(right)
+    check((await observe(a2,uncertain.id))['coverage']=='unknown','composition consumed unconfirmed unknown')
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=p);expired=await admitted(service)
+    real_clock=R.clock
+    async def later(session):return await real_clock(session)+timedelta(seconds=141)
+    with patch.object(R,'clock',later):
+        view=await observe(a2,expired.id)
+    check(view['state']=='closed' and view['coverage']=='unfulfilled','composition expiry closes nonstarted dispatch')
+    mark('composition_missing_receipt_unknown_expired_nonstarted_closed')
+
+    # Cancel the actual handoff while its SQL/auth/root locks are held. The
+    # service rethrows immediately; its owning session context rolls back.
+    locked=asyncio.Event();cancelled_id=[];original_change=R.change
+    async def pause_handoff(session,row,values):
+        changed=await original_change(session,row,values)
+        if 'technical_handoff_at' in values:
+            locked.set();await asyncio.Event().wait()
+        return changed
+    async def cancelled_owner():
+        async with owned_session(proof) as s:
+            service=C.CompositionService(s,principal=p);item=await admitted(service);right=await service.start(item)
+            cancelled_id.append(item.id)
+            with patch.object(R,'change',pause_handoff):await service.handoff(right,'technical')
+    task=asyncio.create_task(cancelled_owner());await locked.wait();task.cancel()
+    try:await task
+    except asyncio.CancelledError:pass
+    async with owned_session(proof) as s:
+        await s.execute(text("SET LOCAL lock_timeout='1000ms'"))
+        await s.execute(text('SELECT id FROM auth_sessions WHERE id=:id FOR UPDATE NOWAIT'),{'id':p.session_id})
+        row=(await s.execute(text('SELECT technical_handoff_at FROM supervisor_compositions WHERE id=:id FOR UPDATE NOWAIT'),{'id':cancelled_id[0]})).one()
+        check(row[0] is None,'composition cancelled uncommitted handoff rolled back by context')
+    mark('composition_cancel_owner_session_context_releases_auth_root_locks')
+
+    # The persisted handoff itself is atomic across independent connections.
+    async def consume_handoff():
+        async with owned_session(proof) as s:
+            result=await s.scalar(text('UPDATE supervisor_compositions SET technical_handoff_at=clock_timestamp() WHERE id=:id AND technical_handoff_at IS NULL RETURNING id'),{'id':race.id})
+            await s.commit();return result
+    winners=await asyncio.gather(consume_handoff(),consume_handoff())
+    check(sum(value is not None for value in winners)==1,'composition concurrent handoff single winner')
+    revoked,revoked_a2=await identity()
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=revoked);item=await admitted(service);right=await service.start(item)
+        await revoke_session(s,revoked)
+        try:await service.handoff(right,'technical')
+        except AuthenticationRequired:pass
+        else:check(False,'composition revoked original must not hand off')
+    await refused('UPDATE supervisor_compositions SET technical_handoff_at=clock_timestamp() WHERE id=:id',{'id':item.id})
+    check((await observe(revoked_a2,item.id))['views'][1]['state']=='not_started','composition A2 observes revoked original without authority')
+    mark('composition_actual_SQL_handoff_race_revoked_original_A2_read_only')
+
+    # Redaction may remove scope, but may never add previously absent links.
+    async with owned_session(proof) as s:
+        service=C.CompositionService(s,principal=other);foreign=await admitted(service);fr=await service.start(foreign)
+        await service.handoff(fr,'technical');fk,_=service.take_handoff(fr,'technical')
+        foreign_native=await Admission(s,principal=other,policy=policy).admit_provider(fk,service.technical_intent(snapshot),cfg)
+        await service.link(fr,'technical',foreign_native)
+    await refused("UPDATE supervisor_compositions SET state='redacted',snapshot_json=NULL,closed_at=clock_timestamp(),technical_run_id=:foreign,analysis_as_of=:asof WHERE id=:id",dict(id=uncertain.id,foreign=foreign_native.run.analysis_id,asof=foreign_native.run.as_of))
+    await refused('UPDATE supervisor_compositions SET technical_run_id=:foreign,analysis_as_of=:asof WHERE id=:id',dict(id=race.id,foreign=foreign_native.run.analysis_id,asof=foreign_native.run.as_of))
+    await refused('DELETE FROM supervisor_compositions WHERE id=:id',{'id':first.id})
+    await refused('TRUNCATE supervisor_compositions')
+    await refused('DELETE FROM technical_analysis_runs WHERE id=:id',{'id':native.run.analysis_id})
+    # Redaction is still a valid one-direction privacy transition when all
+    # consumed identity fields are held exactly unchanged.
+    async with owned_session(proof) as s:
+        await s.execute(text("UPDATE supervisor_compositions SET state='redacted',snapshot_json=NULL WHERE id=:id"),{'id':uncertain.id});await s.commit()
+    check((await observe(a2,uncertain.id))['coverage']=='deleted','composition redacted owner tombstone')
+    mark('composition_direct_SQL_foreign_link_redaction_null_link_delete_truncate_refused')
+    before=await totals()
+    try:await migration(proof,'c54001a7e0001',downgrade=True)
+    except RuntimeError:pass
+    else:check(False,'composition history blocks downgrade')
+    check(await scalar('SELECT version_num FROM alembic_version')=='c60001a7e0001' and await totals()==before,'composition populated downgrade retains all old holds')
+    mark('composition_populated_downgrade_retained_old_native_holds')

@@ -1,5 +1,9 @@
 # 문서 목록과 권위
 
+## Supervisor Flow/Technical 내부 조합 기반
+
+[조합 계약](contracts/supervisor-composition-v1.md)·[구현/검증 범위](work/supervisor-composition-foundation.md)를 따른다. 영속 접수·원 세션의 단일 시작/인계·고정 자식 연결·소유자 상태 조회를 제공한다. 공개 복수 실행 API와 native dispatch는 후속이며, 기존 단독 실행/회계/unknown hold는 유지한다. 실제 공급자 호출·운영 활성화를 포함하지 않는다.
+
 ## CF-021 내부 Technical typed boundary
 
 [공통 envelope](contracts/analysis-agent-envelope-v1.md)·[Technical boundary](contracts/technical-boundary-v1.md)·[이식/직접 검사와 한계](work/CF-021-technical-boundary.md)를 따른다. 기존 WIP를 최신 develop의 별도 작업공간에서 완성한 비영속 합성 왕복과 차트 props 검증이다. public Supervisor/Technical·owner 저장/usage·실제 engine/provider·브라우저 수용은 열지 않는다. 기존 Flow/Fundamental 계약과 News 제외를 보존한다.

@@ -259,6 +259,11 @@ def parse_llm_output(raw: str) -> dict:
             extra_detail = set(entry) - _ALLOWED_DETAIL_KEYS
             if extra_detail:
                 raise LlmOutputParseError(f"details 항목에 허용되지 않은 key: {sorted(extra_detail)}")
+            for key in _ALLOWED_DETAIL_KEYS:
+                if key in {"detail_reason", "detail_caution", "detail_watchpoint"} and entry.get(key) is None:
+                    continue  # Existing nullable additive input uses deterministic defaults.
+                if key in entry and not isinstance(entry[key], str):
+                    raise LlmOutputParseError(f"details.{key}는 문자열이어야 합니다")
     return parsed
 
 
@@ -499,7 +504,7 @@ def fallback_interpretation(
 
     확정값(final_regime·consensus·confidence_level·risk flags·timeframe·signals)만 문장화한다. 새 판단 없음.
     LLM 이 죽어도 프론트가 같은 섹션 구조로 렌더할 수 있게 한다(확정 5)."""
-    # 신호 흐름 요약 — 5구조(전체 판단/약세 근거/완충 신호/주의할 점/다음 관찰 기준)로 줄바꿈 분리.
+    # 확정 국면과 개별 부정/긍정 신호를 구분해 문장화한다. 방향 전환을 추가 판단하지 않는다.
     # 프론트가 whitespace-pre-wrap 로 렌더하므로 라벨+개행이 그대로 보인다(빈약한 한 줄 착지 방지).
     bearish = [INDICATOR_LABELS[s.indicator] for s in signals if s.signal == Signal.NEGATIVE]
     supportive = [INDICATOR_LABELS[s.indicator] for s in signals if s.signal == Signal.POSITIVE]
@@ -509,13 +514,13 @@ def fallback_interpretation(
     ]
     if bearish:
         lines.append(
-            "약세 근거: " + "·".join(bearish)
-            + "이(가) 약세 쪽으로 읽혀 추세 복원 신호가 아직 충분하지 않은 상태입니다."
+            "부정 신호: " + "·".join(bearish)
+            + "에서 부정 신호가 확인됩니다. 개별 신호만으로 전체 추세의 약화나 방향 전환을 확정하지 않습니다."
         )
     if supportive:
         lines.append(
-            "완충 신호: " + "·".join(supportive)
-            + "이(가) 하락 압력을 다소 완화하지만, 방향 전환 확정으로 보기엔 이른 수준입니다."
+            "긍정 신호: " + "·".join(supportive)
+            + "에서 긍정 신호가 확인됩니다. 개별 신호만으로 현재 국면의 유지나 전환을 단정하지 않습니다."
         )
     lines.append(
         "주의할 점: " + (_risk_text(risks) if risks

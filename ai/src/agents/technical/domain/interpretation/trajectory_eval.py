@@ -56,7 +56,7 @@ class EvalResult:
 
     @property
     def interpretation_failed(self) -> bool:
-        return any(f.target == "interpretation.text" for f in self.failures)
+        return any(f.target.startswith("interpretation.") for f in self.failures)
 
     @property
     def details_structure_failed(self) -> bool:
@@ -181,7 +181,7 @@ def evaluate_details(
     *,
     signals: Sequence[tuple[IndicatorType, Signal]],
 ) -> list[TargetFailure]:
-    """details 구조(개수·indicator 일치) + 각 detail의 signal 왜곡·금지어 검사."""
+    """details 구조와 네 서술 필드를 검사한다. 대표 표현은 detail에만 필수다."""
     failures: list[TargetFailure] = []
     expected = {ind.value: sig for ind, sig in signals}
 
@@ -198,21 +198,33 @@ def evaluate_details(
             failures.append(TargetFailure("details", "invalid_entry"))
             continue
         indicator = entry.get("indicator")
-        detail_text = entry.get("detail", "")
         if indicator not in expected:
             failures.append(TargetFailure("details", "indicator_mismatch", str(indicator)))
             continue
         seen.add(indicator)
-        target = f"technical_signals[{indicator}].detail"
-        if not isinstance(detail_text, str) or not detail_text.strip():
-            failures.append(TargetFailure(target, "missing_text", indicator))
-            continue
-        for term in contains_forbidden_terms(detail_text):
-            failures.append(TargetFailure(target, "forbidden_term", indicator))
         rule = SIGNAL_RULES.get(expected[indicator])
-        if rule is not None:
-            for reason in check_label(detail_text, rule):
-                failures.append(TargetFailure(target, reason, indicator))
+        for field in ("detail", "detail_reason", "detail_caution", "detail_watchpoint"):
+            text = entry.get(field, "")
+            target = f"technical_signals[{indicator}].{field}"
+            # Missing additive fields are filled by deterministic defaults.
+            # They need not repeat the representative label, but any supplied
+            # text must obey the same forbidden/conflicting-label boundary.
+            if field != "detail" and text is None:
+                continue  # Same safe default as an omitted additive field.
+            if not isinstance(text, str):
+                failures.append(TargetFailure(target, "invalid_text", indicator))
+                continue
+            if not text.strip():
+                if field == "detail":failures.append(TargetFailure(target, "missing_text", indicator))
+                continue
+            for term in contains_forbidden_terms(text):
+                failures.append(TargetFailure(target, "forbidden_term", indicator))
+            if rule is not None:
+                checked = rule if field == "detail" else LabelRule(
+                    required_any=rule.required_any,conflict_any=rule.conflict_any,
+                    require_representative=False)
+                for reason in check_label(text, checked):
+                    failures.append(TargetFailure(target, reason, indicator))
 
     for missing in expected.keys() - seen:
         failures.append(TargetFailure("details", "indicator_missing", missing))

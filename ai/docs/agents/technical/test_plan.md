@@ -592,3 +592,28 @@ annotation은 전부 코드가 계산하며 `source=code`다. LLM은 좌표·발
 `scripts/diagnose_chart_annotations.py` 는 **"차트 전략(annotation)이 잘 안 보인다"의 원인을 숫자로 가르는** read-only 계측 도구다(기능 구현 아님, 프로덕션 무변경). `build_chart_payloads`(post-dedup 정본)와 chart_builder 내부 생성기(`_cross_annotations` 등)를 읽기 전용으로 호출해 period(3m/1y/5y)별로 다음을 계측한다: annotation kind별/importance별 개수, **dedup 전/후 개수**(pre−post = 줄어든 수), **capacity check**(각 detector 필요 봉 vs 확보 봉 → 봉 부족인지 조건 불충족인지), 미구현 kind의 **"contract exists but generator missing"** 표시(현재 **전 10종 구현 완료**라 목록은 비어 있음). 기본은 **fixture mode**(합성 OHLCV·KIS 호출 없음, `--fixture`), real KIS mode는 `--ticker`로만 켜지며 env 없으면 graceful skip한다. 출력 JSON은 gitignore된 `scripts/chart_annotation_diagnostics_output/`에 저장. 도구 계약(출력 shape·미구현 kind 표시·capacity·production 무변경)은 `test_chart_annotation_diagnostics.py`(fixture 기반)가 고정한다.
 
 이 진단은 단순 개수 확인뿐 아니라 **chart annotations와 technical_signals의 역할 분리**(`chart_annotation_spec.md §1.1·§7.1`)와 **period별 importance/display 정책**(`chart_annotation_spec.md §4.1`) 검증에도 쓴다 — 예: `5y`에서 medium이 대부분이라 high-only 표시면 대부분 숨겨지는지 등.
+
+
+## 설명 검증 실패 반영 보완 (2026-11-13, 첫 품질 단위)
+
+구조화 `interpretation.*` 섹션의 기존 검증 실패도 `interpretation_failed`로 집계한다.
+재생성까지 실패하면 해석 전체만 결정형 문장으로 대체하고 통과한 지표 설명은 유지한다.
+`detail_reason`/`detail_caution`/`detail_watchpoint`에도 detail과 같은 금지어·반대 signal 표현 검사를
+적용하되, 대표 표현 반복은 필수 detail에만 요구한다. 선택 필드의 정상 생략/null/빈 문자열은 기존
+결정형 보충을 유지한다. indicator/detail은 문자열을 요구하고 선택 서술 필드의 숫자·불린·객체·배열도
+강제 문자열 변환 없이 파싱 실패다.
+지표별 실패가 남아도 최종/trace의 label_matched는 false이며 outcome은 template_fallback이다.
+재생성 결과가 모두 통과한 경우에는 passed/label_matched=true와 regen_count로 복구를 표시한다.
+
+결정형 요약은 현재 확정 국면을 유지하고 개별 긍정/부정 신호를 구분해 설명한다.
+모든 긍정 지표를 하락 압력 완화로 설명하거나 개별 부정 지표만으로 추세 복원을 단정하지 않는다.
+수치·라벨·metrics·weight·기간·출력 schema·재생성 1회 한도와 실제 실행 권한은 바꾸지 않는다.
+
+고정 보호 graph unit은 최종 출력까지 잘못된 문장 제거·부분 source·검증 상태·확정 수치 보존을 검사한다.
+기존 원격 graph self에도 실제 순수 평가 모듈과 닫힌 AST의 fallback 분기를 검사하는 두 회귀가 있다.
+새 mode/프레임워크/설치는 없고 실제 provider/DB를 쓰지 않는다.
+
+이 단계는 자유 문장의 숫자-지표/필드 의미 대조나 구조화 요약의 모든 라벨 의미를 보증하지 않는다.
+전역 숫자 집합·다른 지표의 같은 숫자·임의 반올림을 정당화하지 않는다. 해당 숫자/라벨 계약은
+그 문장이 참조하는 지표·필드의 확정 근거에 결합하는 별도 후속이며, support/resistance 동시근접,
+OHLC/warmup/confidence 정책은 이 변경에 포함하지 않는다.

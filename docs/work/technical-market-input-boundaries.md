@@ -47,3 +47,18 @@ PR73·74와 다른 작업 공간의 변경을 포함하지 않는다.
 별도로 확인하며 사용자가 직접 머지한다. 실제 OpenAI/KIS·키/env·DB·운영 활성화·새 예약은 없다.
 기존 실제 실행 기록과 **$0.70 보류**를 보존했다. 숫자 grounding, warmup, confidence 가중치와
 실제 공급자 품질은 이번 단위의 완료 범위가 아니다.
+
+## 게시 후 CI의 기존 취소 회귀 수선
+
+사용자 승인 `Sentinel_925bf576ca748191b82f8bf29e2f35f0` 뒤 정확 11파일로 Ready PR76을
+게시했다. 같은 기준의 PR75 첫 CI에서는 기존 CF021 취소 검사의 마지막 정상 회복 요청이
+시험용 10ms timeout을 재사용해 실패했다(207 passed/1 failed, guard 0). 이 파일은 PR75의
+8파일에는 없으므로 PR75에 추가하지 않는다.
+
+PR76의 허용된 기존 검사 파일 안에서 첫 강제 timeout과 worker 생존 중 busy 검사는
+`remaining=.01`로 유지하고, 물리 worker 종료·취소 확인 뒤 정상 요청은 같은 runtime의
+기존 3초 기본 예산으로 확인하도록 수선했다. 반복 취소·worker 생존·busy·호출 수·종료 검사는
+삭제하지 않았고 제품 timeout/cancel/slot 코드나 보호 조건을 바꾸지 않았다. 최종 원격 CI는
+이 수선이 포함된 새 정확 head를 기준으로 확인한다.
+수선 후 기존 보호 boundary unit은 다시 **244 passed, guard 0**이었다. 제품·pin·graph 회귀는
+변하지 않아 기존 graph23/self3 결과를 유지하며 불필요하게 반복하지 않았다.

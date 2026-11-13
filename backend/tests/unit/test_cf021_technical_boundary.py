@@ -744,18 +744,20 @@ async def test_waiter_cancellation_is_immediate_without_releasing_running_thread
 
 
 async def test_repeated_inner_task_cancellation_cannot_complete_before_physical_worker():
-    probe=ThreadProbe();runtime=RUN.BoundaryRuntime(probe.bridge(),timeout=.01)
+    probe=ThreadProbe();runtime=RUN.BoundaryRuntime(probe.bridge())
     try:
-        with pytest.raises(RUN.BoundaryTimeout):await runtime.run(request())
+        # Only the first waiter is deliberately short; slot recovery is not a 10ms performance test.
+        with pytest.raises(RUN.BoundaryTimeout):await runtime.run(request(),remaining=.01)
         await wait_thread(probe)
         active=RUN._ACTIVE_TASK;assert active is not None and probe.entered.is_set()
         for _ in range(2):
             active.cancel();await asyncio.sleep(0)
             assert not active.done() and probe.threads[0].is_alive()
-            with pytest.raises(RUN.BoundaryBusy):await runtime.run(request())
+            with pytest.raises(RUN.BoundaryBusy):await runtime.run(request(),remaining=.01)
         assert len(probe.calls)==1
         await finish_thread(probe,active)
         assert active.cancelled()
+        assert runtime.timeout==A.WAIT_SECONDS
         assert (await runtime.run(request()))['data']['result']==result()
     finally:await finish_thread(probe)
 

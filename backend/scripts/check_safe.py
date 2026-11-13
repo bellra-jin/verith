@@ -401,9 +401,11 @@ CF022_SOURCES = CF022_SOURCES | frozenset(['backend/src/modules/supervisor/domai
 CF022_SOURCES = CF022_SOURCES | frozenset({
     'backend/src/modules/supervisor/domain/composition.py',
     'backend/src/modules/supervisor/application/composition_service.py',
+    'backend/src/modules/supervisor/application/composition_runtime.py',
     'backend/src/modules/supervisor/infrastructure/composition_repository.py',
     'backend/db/models/supervisor/composition.py',
     'backend/db/migrations/versions/20261113_c60001_supervisor_composition.py',
+    'backend/db/migrations/versions/20261113_c61001_supervisor_composition_projection.py',
 })
 NEW.update(CF022_INPUTS)
 NEW.update(CF022_SOURCES)

@@ -2,7 +2,7 @@
 from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from types import SimpleNamespace
-from sqlalchemy import func, select
+from sqlalchemy import func, select, literal
 from sqlalchemy.dialects.postgresql import insert
 from db.models.common.stock import Stock
 from db.models.technical.execution_admission import TechnicalAnalysisRun as Run, TechnicalUsagePeriod as Period
@@ -74,9 +74,15 @@ async def stock(session, code):
         .execution_options(populate_existing=True,autoflush=False))
 
 
-async def insert_run(session, values):
-    return await session.scalar(insert(Run).values(**values)
-        .on_conflict_do_nothing(constraint='uq_technical_analysis_key').returning(Run)
+async def insert_run(session, values, *, before=None):
+    statement=insert(Run)
+    if before is None:
+        statement=statement.values(**values)
+    else:
+        columns=[Run.__table__.c[name] for name in values]
+        statement=statement.from_select([c.name for c in columns],select(
+            *(literal(values[c.name],type_=c.type) for c in columns)).where(func.clock_timestamp()<before))
+    return await session.scalar(statement.on_conflict_do_nothing(constraint='uq_technical_analysis_key').returning(Run)
         .execution_options(populate_existing=True,autoflush=False))
 
 

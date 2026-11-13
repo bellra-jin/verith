@@ -355,14 +355,18 @@ def test_composition_child_keys_do_not_follow_public_parent_id_alone():
         with pytest.raises(CompositionInvalid):fixed_child_key(id,'flow',seed)
 
 
-def composition_snapshot(query='삼성전자 수급과 차트'):
+def composition_snapshot(query='삼성전자 수급과 차트',*,projected=False):
     from src.modules.supervisor.domain.composition import CompositionSnapshot,VERSION
     value=draft(query);frame=S.deterministic(value).model_dump(mode='json');views=[v for v in ('flow','technical') if v in frame['requested_views']]
-    return CompositionSnapshot(B.canonical(dict(schema_version=VERSION,draft=value.model_dump(mode='json'),
+    saved=dict(schema_version=VERSION,draft=value.model_dump(mode='json'),
         frame=frame,stock=resolution().stock.model_dump(mode='json'),selected_views=views,
         consent=dict(allow_views=views,allow_partial_results=len(views)==2,waived_conditions=[]),
         flow_policy=dict(supported_tickers=['005930'],user_limit=10,service_limit=100,budget=10000000000) if 'flow' in views else None,
-        technical_configuration=technical_configuration().text if 'technical' in views else None)))
+        technical_configuration=technical_configuration().text if 'technical' in views else None)
+    if projected:
+        from src.modules.supervisor.domain.composition import PROJECTED_VERSION,projected_inputs
+        saved.update(schema_version=PROJECTED_VERSION,child_inputs=projected_inputs(saved['stock'],query,views))
+    return CompositionSnapshot(B.canonical(saved))
 
 
 @pytest.mark.parametrize('query',['삼성전자 수급','삼성전자 차트','삼성전자 수급과 차트'])
@@ -540,3 +544,128 @@ async def test_composition_flow_result_link_does_not_restart_admission_window(mo
     await service.link(right,'flow',receipt)
     assert rows[first.id].flow_run_id==child.id
     with pytest.raises(C.CompositionError):await service.handoff(right,'flow')
+
+
+@pytest.mark.parametrize('query,expected',[
+    ('삼성전자 수급',['flow_admission','flow_execution']),
+    ('삼성전자 차트',['technical_admission','technical_execution']),
+    ('삼성전자 수급과 차트',['technical_admission','flow_admission','technical_execution','flow_execution']),
+])
+async def test_composition_runtime_admits_selected_children_before_any_execution(monkeypatch,query,expected):
+    from datetime import timedelta
+    from src.modules.supervisor.application import composition_runtime as R
+    C,root,session,clock,rows=composition_service_fixture(monkeypatch);events=[];limits=[]
+    snapshot=composition_snapshot(query,projected=True)
+    class Technical:
+        def __init__(self,*args,**kwargs):pass
+        async def admit_provider_once(self,key,intent,cfg,**kw):
+            events.append('technical_admission');limits.append(kw['admission_before']);clock.mono+=1
+            assert intent.data()['original_query']=='005930 차트' and snapshot.data()['draft']['original_query']==query
+            return NS(newly_admitted=True,run=NS(analysis_id=uuid4(),as_of=clock.now,deadline_at=clock.now+timedelta(seconds=120)),claim_token=b't'*32)
+        async def execute_provider_once(self,*args):events.append('technical_execution')
+    class Flow:
+        def __init__(self,*args,**kw):self.usage_control=NS(settings=None)
+        async def admit_only(self,body,rid,**kw):
+            events.append('flow_admission');limits.append(kw['admission_before'])
+            assert body['question']==query and kw['admission_deadline']==115.0 and kw['total_deadline']==240.0
+            return NS(view=NS(analysis_id=uuid4()),newly_admitted=True)
+        async def execute_admitted_once(self,*args):events.append('flow_execution')
+        def discard_continuations(self):events.append('discard')
+    monkeypatch.setattr(R,'FlowService',Flow);monkeypatch.setattr(R,'TechnicalExecutionRuntime',Technical)
+    first=await root.admit(str(uuid4()),snapshot,request_started_at=clock.now)
+    async def link(right,view,receipt):
+        row=rows[right.id]
+        if view=='technical':row.analysis_as_of=clock.now;row.technical_run_id=receipt.run.analysis_id
+        else:row.flow_run_id=receipt.analysis_id
+    monkeypatch.setattr(root,'link',link);monkeypatch.setattr(root,'get',AsyncMock(return_value={'observed':True}))
+    cfg=technical_configuration()
+    runtime=R.CompositionRuntime(session,principal=root.principal,flow_client=AIClient('https://flow.synthetic.invalid',125,service_token=TOKEN),
+        technical_client=AIClient(cfg.data()['ai_origin'],125,execution_token=TOKEN),enabled=True);runtime.root=root
+    timeouts=[];timeout_at=R.asyncio.timeout_at
+    def bounded(deadline):timeouts.append(deadline);return timeout_at(deadline)
+    monkeypatch.setattr(R.asyncio,'timeout_at',bounded)
+    result=await runtime.execute_once(first)
+    assert [e for e in events if e!='discard']==expected and result=={'observed':True}
+    assert all(t==rows[first.id].admission_before for t in limits) and rows[first.id].state=='closed'
+    assert not root._tickets and not root._taken
+    if 'technical' in snapshot.data()['selected_views']:assert 220.0 in timeouts
+    assert max(timeouts)==240.0
+
+
+async def test_composition_runtime_replay_and_default_off_have_no_native_invocation(monkeypatch):
+    from src.modules.supervisor.application.composition_runtime import CompositionRuntime
+    C,root,session,clock,rows=composition_service_fixture(monkeypatch)
+    first=await root.admit(str(uuid4()),composition_snapshot(),request_started_at=clock.now)
+    runtime=CompositionRuntime(session,principal=root.principal)
+    monkeypatch.setattr(runtime.root,'start',AsyncMock())
+    with pytest.raises(C.CompositionError):await runtime.execute_once(first)
+    assert runtime.root.start.await_count==0 and rows[first.id].state=='admitted'
+    replay=C.Admission(first.id,False,None)
+    monkeypatch.setattr(runtime.root,'get',AsyncMock(return_value={'observed':True}))
+    assert await runtime.execute_once(replay)=={'observed':True}
+    assert runtime.root.start.await_count==0
+
+
+async def test_composition_admission_late_ACK_closes_local_authority(monkeypatch):
+    C,root,session,clock,rows=composition_service_fixture(monkeypatch)
+    async def late():clock.mono+=16
+    session.commit.side_effect=late
+    receipt=await root.admit(str(uuid4()),composition_snapshot(),request_started_at=clock.now)
+    assert not receipt.newly_admitted and receipt.token is None and len(rows)==1
+    with pytest.raises(C.CompositionError):await root.start(receipt)
+
+
+@pytest.mark.parametrize('query',['삼성전자 수급','삼성전자 차트','삼성전자 수급과 차트'])
+def test_composition_v2_explicit_inputs_preserve_parent_and_v1_native_fingerprints(query):
+    from src.modules.supervisor.application.composition_service import CompositionService
+    from src.modules.supervisor.domain.composition import VERSION,PROJECTED_VERSION
+    old=composition_snapshot(query);new=composition_snapshot(query,projected=True)
+    assert old.data()['schema_version']==VERSION and new.data()['schema_version']==PROJECTED_VERSION
+    assert old.data()['draft']==new.data()['draft'] and old.data()['frame']==new.data()['frame']
+    if 'technical' in old.data()['selected_views']:
+        assert CompositionService.technical_intent(old).data()['original_query']==query
+        assert CompositionService.technical_intent(new).data()['original_query']=='005930 차트'
+        assert CompositionService.technical_intent(old).fingerprint!=CompositionService.technical_intent(new).fingerprint
+    if 'flow' in new.data()['selected_views']:assert new.data()['child_inputs']['flow']['question']==query
+
+
+@pytest.mark.parametrize('change',['technical_query','ticker','period','extra_view','flow_query','missing','v1_auto_conversion'])
+def test_composition_v2_rejects_unconfirmed_native_input_projection(change):
+    from src.modules.supervisor.domain.composition import CompositionSnapshot,CompositionInvalid,VERSION
+    v=composition_snapshot(projected=True).data()
+    if change=='technical_query':v['child_inputs']['technical']['original_query']='삼성전자 수급과 차트'
+    if change=='ticker':v['child_inputs']['technical']['ticker']='000720'
+    if change=='period':v['child_inputs']['technical']['conditions']['periods']=['3w']
+    if change=='extra_view':v['child_inputs']['news']={}
+    if change=='flow_query':v['child_inputs']['flow']['question']='수급만'
+    if change=='missing':del v['child_inputs']
+    if change=='v1_auto_conversion':v['schema_version']=VERSION
+    with pytest.raises(CompositionInvalid):CompositionSnapshot(B.canonical(v))
+
+
+async def test_composition_legacy_snapshot_read_is_not_new_projected_execution_authority(monkeypatch):
+    from src.modules.supervisor.application.composition_runtime import CompositionRuntime
+    C,root,session,clock,rows=composition_service_fixture(monkeypatch)
+    old=await root.admit(str(uuid4()),composition_snapshot(),request_started_at=clock.now)
+    runtime=CompositionRuntime(session,principal=root.principal,enabled=True);runtime.root=root
+    monkeypatch.setattr(root,'start',AsyncMock())
+    with pytest.raises(C.CompositionError) as error:await runtime.execute_once(old)
+    assert error.value.code=='INVALID' and root.start.await_count==0 and rows[old.id].state=='admitted'
+    assert (await root.get(old.id))['coverage']=='pending'
+
+
+def test_composition_projection_revision_is_additive_and_populated_downgrade_closed(monkeypatch):
+    import importlib.util
+    path=ROOT/'backend/db/migrations/versions/20261113_c61001_supervisor_composition_projection.py'
+    spec=importlib.util.spec_from_file_location('composition_projection_fixture',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    assert (module.revision,module.down_revision)==('c61001a7e0001','c60001a7e0001')
+    assert "IN ('supervisor.composition.v1','supervisor.composition.v2')" in module.GUARD
+    assert module.GUARD.count('Composition native projection invalid')==1
+    assert 'native.intent_sha256=encode(digest' in module.GUARD
+    commands=[];monkeypatch.setattr(module.op,'execute',lambda sql:commands.append(sql))
+    module.upgrade()
+    assert len(commands)==2 and commands[1]==module.GUARD and commands[1].count('CREATE OR REPLACE FUNCTION')==1
+    commands.clear();monkeypatch.setattr(module.op,'get_bind',lambda:NS(execute=lambda q:NS(scalar=lambda:True)))
+    with pytest.raises(RuntimeError,match='^Composition history retained$'):module.downgrade()
+    assert len(commands)==1 and commands[0].startswith('LOCK TABLE')

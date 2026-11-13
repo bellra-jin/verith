@@ -170,7 +170,7 @@ class TechnicalExecutionRuntime:
             return await self._client_failed(run,token,principal,policy,profile,'DISPATCH_UNCERTAIN')
         return await coordinator.receive(run,token,response)
 
-    async def admit_provider_once(self,key,intent,configuration):
+    async def admit_provider_once(self,key,intent,configuration,*,admission_before=None):
         """Readiness failure precedes admission and any new monetary hold."""
         from src.modules.technical.domain import provider_execution as P
         if (self.enabled is not True or type(self.client) is not AIClient or type(self.policy) is not Policy
@@ -179,7 +179,7 @@ class TechnicalExecutionRuntime:
         cfg=P.Configuration(configuration.text)
         captured=self.client._technical_execution_configuration(cfg)
         await self.client.technical_execution_ready(cfg,_configuration=captured)
-        return await TechnicalAdmissionService(self.session,principal=self.principal,policy=self.policy).admit_provider(key,intent,cfg)
+        return await TechnicalAdmissionService(self.session,principal=self.principal,policy=self.policy).admit_provider(key,intent,cfg,**({'admission_before':admission_before} if admission_before is not None else {}))
 
     async def execute_provider_once(self,expected,token,configuration):
         from src.modules.technical.domain import provider_execution as P

@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from uuid import UUID, uuid5
 
 
-VERSION = 'supervisor.composition.v1'
+VERSION = 'supervisor.composition.v1'  # Existing child-key namespace remains immutable.
+PROJECTED_VERSION = 'supervisor.composition.v2'
 VIEWS = ('flow', 'technical')
 STATES = frozenset({'not_started', 'not_admitted', 'admitted', 'running', 'claimed',
                     'result_ready', 'stored', 'failed', 'unknown', 'deleted'})
@@ -67,6 +68,23 @@ def coverage(children: tuple[ChildObservation, ...], *, dispatch_closed: bool) -
     return 'unfulfilled'
 
 
+def projected_inputs(stock,query,views):
+    """Explicit native scope projections; never remove the parent's raw frame.
+
+    Only the already fixed, condition-free single-stock profiles can use this
+    contract. Technical's existing single-view boundary receives a canonical
+    code/chart query, while the full original mixed question remains in root.
+    """
+    result={}
+    if 'flow' in views:
+        result['flow']=dict(operation='flow.analysis.v1',ticker=stock['stock_code'],question=query)
+    if 'technical' in views:
+        result['technical']=dict(operation='technical.analysis.v1',ticker=stock['stock_code'],
+            original_query=stock['stock_code']+' 차트',requested_views=['technical'],
+            conditions=dict(profile='technical.multiframe.v1',periods=['3m','1y','5y']))
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class CompositionSnapshot:
     """Internal confirmed scope, not an execution capability or a public DTO.
@@ -83,9 +101,10 @@ class CompositionSnapshot:
         from src.modules.technical.domain.execution_admission import Policy
         try:
             value = decode(self.text)
-            if (type(value) is not dict or set(value) != {'schema_version', 'draft', 'frame', 'stock',
-                    'selected_views', 'consent', 'flow_policy', 'technical_configuration'}
-                    or value['schema_version'] != VERSION or canonical(value) != self.text
+            base={'schema_version','draft','frame','stock','selected_views','consent','flow_policy','technical_configuration'}
+            if (type(value) is not dict or value.get('schema_version') not in {VERSION,PROJECTED_VERSION}
+                    or set(value)!=(base|{'child_inputs'} if value['schema_version']==PROJECTED_VERSION else base)
+                    or canonical(value) != self.text
                     or len(self.text.encode('utf8')) > 65536):
                 raise ValueError()
             draft = Draft.model_validate(value['draft'])
@@ -134,6 +153,8 @@ class CompositionSnapshot:
             elif technical is not None:
                 raise ValueError()
             if maximum > MAX_INT:
+                raise ValueError()
+            if value['schema_version']==PROJECTED_VERSION and value['child_inputs']!=projected_inputs(value['stock'],draft.original_query,views):
                 raise ValueError()
         except Exception:
             raise CompositionInvalid() from None

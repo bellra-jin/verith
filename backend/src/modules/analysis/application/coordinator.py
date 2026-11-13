@@ -8,6 +8,7 @@ from datetime import timedelta
 import hashlib
 import hmac
 import secrets
+import time
 from uuid import UUID,uuid4
 from sqlalchemy import select,func
 from db.models.common.stock import Stock
@@ -46,6 +47,11 @@ class AnalysisCoordinator:
         except Exception:pass # Never infer that a previous ambiguous commit did not happen.
 
     async def post(self,body,request_id):
+        row,view,dispatch,token,request=await self._admit(body,request_id)
+        if not dispatch:return view
+        return await self._dispatch_admitted(row,token,request)
+
+    async def _admit(self,body,request_id,*,admission_before=None,publish_ready=True):
         if isinstance(self.profile,ResultCompletionProfile):raise self._error('INPUT_INVALID')
         known=None
         try:
@@ -68,7 +74,14 @@ class AnalysisCoordinator:
                     request_json=normalized,spec_json=self.profile.spec_json(),claim_digest=hashlib.sha256(token).digest(),
                     started_at=stamp,deadline_at=stamp+timedelta(seconds=self.profile.deadline_seconds),state='running')
                 values.update(extra)
-                row=await self.profile.repository.admit(self.session,values)
+                if admission_before is None:
+                    row=await self.profile.repository.admit(self.session,values)
+                else:
+                    # The concrete profile supplies its narrow bounded INSERT.
+                    # Public POST and profiles without this opt-in are unchanged.
+                    bounded_admit=getattr(self.profile,'admit_before',None)
+                    if bounded_admit is None:raise self._error('INPUT_INVALID')
+                    row=await bounded_admit(self.session,values,admission_before)
                 winner=row is not None
                 if winner and self.usage_control is not None:await self.usage_control.reserve(row,stamp)
                 if row is None:row=await self.profile.repository.by_key(self.session,self.principal.user_id,key)
@@ -77,7 +90,7 @@ class AnalysisCoordinator:
             if row.input_fingerprint!=fingerprint:raise self._error('IDEMPOTENCY_CONFLICT',known)
             if row.state=='deleted':raise self._error('RESOURCE_NOT_FOUND',known)
             await self.profile.repository.expire(self.session,row)
-            if row.state=='result_ready':return await self._publish(row)
+            if row.state=='result_ready' and publish_ready:return None,await self._publish(row),False,None,None
             view=self._view(row);dispatch=winner and row.state=='running'
             request=None
             if dispatch:
@@ -90,7 +103,10 @@ class AnalysisCoordinator:
             await self._rollback();raise
         except Exception:
             await self._rollback();raise self._error('SERVICE_UNAVAILABLE',known) from None
-        if not dispatch:return view
+        return row,view,dispatch,token,request
+
+    async def _dispatch_admitted(self,row,token,request,*,deadline=None):
+        known=row.id
         try:
             response=await self.profile.dispatch(self.client,request)
         except asyncio.CancelledError:
@@ -108,6 +124,8 @@ class AnalysisCoordinator:
                 await self._rollback();raise
             except Exception:
                 await self._rollback();raise self._error('SERVICE_UNAVAILABLE',known) from None
+        if deadline is not None and time.monotonic()>=deadline:
+            return await self._failed(known,token,'unknown','SERVICE_UNAVAILABLE')
         return await self._receive(known,token,response)
 
     async def _failed(self,id,token,state,code):

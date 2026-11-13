@@ -774,3 +774,14 @@ async def test_injected_earlier_cooperative_deadline_is_never_renewed():
         with pytest.raises(RUN.BoundaryBusy):await runtime.run(request())
         await finish_thread(probe)
     finally:await finish_thread(probe)
+
+
+def test_composition_mixed_original_cannot_bypass_single_Technical_plan_but_explicit_projection_can():
+    mixed=request();code=mixed['data']['stock']['stock_code']
+    mixed['data']['original_query']=code+' 수급과 차트'
+    mixed['data']['context']['input_fingerprint']=A.fingerprint(mixed['data'])
+    with pytest.raises(ValueError):PLAN.build_plan(mixed)
+    projected=copy.deepcopy(mixed);projected['data']['original_query']=code+' 차트'
+    projected['data']['context']['input_fingerprint']=A.fingerprint(projected['data'])
+    assert PLAN.build_plan(projected).data.original_query==code+' 차트'
+    assert mixed['data']['original_query']==code+' 수급과 차트'

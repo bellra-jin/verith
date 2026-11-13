@@ -13,7 +13,7 @@ from src.modules.auth.application.session_service import Principal, validate_pri
 from src.modules.technical.domain.execution_admission import (
     AdmissionReceipt, ClaimReceipt, Intent, Policy, RunReceipt, TechnicalAdmissionError,
     OPERATION, REASONS, SPEC_JSON, SPEC_SHA256, canonical, decode, integer, sha, uid,
-    COMPLETION_FIELDS, CompletionReceipt, ProviderClaim,
+    COMPLETION_FIELDS, CompletionReceipt, ProviderClaim, utc,
 )
 from src.modules.technical.infrastructure import execution_admission_repository as repo
 from src.modules.technical.domain import provider_execution as P
@@ -168,13 +168,14 @@ class TechnicalAdmissionService:
             return True
         return False
 
-    async def admit_provider(self,key,intent,configuration):
+    async def admit_provider(self,key,intent,configuration,*,admission_before=None):
         if type(configuration) is not P.Configuration or self._policy_text()!=P.canonical(configuration.data()['policy']):
             raise TechnicalAdmissionError('POLICY_UNAVAILABLE')
-        return await self.admit(key,intent,_execution_configuration=configuration)
+        return await self.admit(key,intent,_execution_configuration=configuration,**({'_admission_before':admission_before} if admission_before is not None else {}))
 
-    async def admit(self, key, intent, *, _execution_configuration=None):
+    async def admit(self, key, intent, *, _execution_configuration=None,_admission_before=None):
         principal = self._principal();key_digest = self._key(key)
+        admission_before=utc(_admission_before) if _admission_before is not None else None
         if type(intent) is not Intent:
             raise TechnicalAdmissionError()
         frozen_intent = Intent(intent.text)
@@ -220,7 +221,7 @@ class TechnicalAdmissionService:
             stock_json=canonical({'stock_code':stock.stock_code,'stock_name':stock.stock_name,'market':stock.market})
             base=time.monotonic();stamp=await repo.clock(self.session)
             deadline=min(stamp+timedelta(seconds=limits['deadline_seconds']),period.period_end)
-            if stamp < period.period_start or stamp >= deadline:
+            if stamp < period.period_start or stamp >= deadline or admission_before is not None and stamp>=admission_before:
                 raise TechnicalAdmissionError('POLICY_UNAVAILABLE')
             token=secrets.token_bytes(32)
             row=await repo.insert_run(self.session,dict(id=uuid4(),owner_user_id=principal.user_id,
@@ -230,12 +231,12 @@ class TechnicalAdmissionService:
                 admission_request_id=uuid4(),attempt_id=uuid4(),planned_report_id=uuid4(),boundary_request_id=uuid4(),trace_id=uuid4(),
                 as_of=stamp,started_at=stamp,deadline_at=deadline,claim_digest=hashlib.sha256(token).digest(),claim_consumed_at=None,
                 execution_configuration_json=config_text,execution_configuration_sha256=P.sha(config_text) if config_text is not None else None,
-                reserved_nano=period.attempt_reserve_nano,held_nano=period.attempt_reserve_nano,state='admitted',unknown_reason=None,redacted_at=None))
+                reserved_nano=period.attempt_reserve_nano,held_nano=period.attempt_reserve_nano,state='admitted',unknown_reason=None,redacted_at=None),**({'before':admission_before} if admission_before is not None else {}))
             if row is None:
                 raise _ReplayRace()
             period.request_count=integer(period.request_count+1)
             period.reserved_nano=integer(period.reserved_nano+period.attempt_reserve_nano)
-            return AdmissionReceipt(self._receipt(row,period),True,token),base+(deadline-stamp).total_seconds()
+            return AdmissionReceipt(self._receipt(row,period),True,token),base+((min(deadline,admission_before) if admission_before is not None else deadline)-stamp).total_seconds()
 
         try:
             return await self._mutation(action)

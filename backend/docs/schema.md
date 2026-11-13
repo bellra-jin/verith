@@ -439,3 +439,15 @@ downgrade are refused; FKs use RESTRICT. Existing native schema/holds remain unc
 The internal service supports admission, one-time local handoff, validated native links
 and owner observation (including a new valid session). It adds no public multi-analysis
 route or native dispatcher. See [composition contract](../../docs/contracts/supervisor-composition-v1.md).
+
+
+## Supervisor explicit child input projection (c610)
+
+Revision `c61001a7e0001` follows c600; it replaces only the existing composition
+guard function. No table, column, ledger, price or native state is added. New
+`supervisor.composition.v2` snapshots include exact Flow/Technical child inputs.
+Technical uses the confirmed canonical code/chart profile; the root retains the
+complete original question/frame. SQL validates the projection and native Technical
+intent hash. v1 shape, derived-key namespace and owner reads remain unchanged.
+Populated downgrade is refused, including redacted history whose original version
+cannot safely be inferred. Existing c600 migration bytes are unchanged.

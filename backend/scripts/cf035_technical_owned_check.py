@@ -637,7 +637,7 @@ async def _verify_completion(proof):
         async with owned_session(proof) as s:return await E.TechnicalOwnedReportService(s,principal=p).read(item['claimed'].run.report_id)
 
     config=Config();config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
-    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c60001a7e0001'],'Composition single migration head')
+    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c61001a7e0001'],'Composition single migration head')
     check(await scalar('SELECT version_num FROM alembic_version')==heads[0],'CF050 current head')
     async with owned_session(proof) as s:s.add(Stock(stock_code='000720',stock_name='CF050 synthetic canonical',market='KOSPI'));await s.commit()
     p,a2=await user();other,_=await user()
@@ -1251,7 +1251,9 @@ async def _verify_provider(proof,policy,intent,user,totals,scalar,refused,mark):
     await migration(proof,'c54001a7e0001')
     await _verify_supervisor_handoff(proof,cfg,policy,ai,client,backend,runner_calls,factory_calls,mark,scalar,refused,totals,load)
     await migration(proof,'c60001a7e0001')
-    await _verify_composition(proof,cfg,policy,mark,scalar,refused,totals)
+    legacy=await _verify_composition(proof,cfg,policy,mark,scalar,refused,totals)
+    await migration(proof,'c61001a7e0001')
+    await _verify_composition_runtime(proof,cfg,policy,ai,client,runner_calls,sdk,runner_mode,legacy,mark,scalar,totals)
     return labels
 
 
@@ -1700,3 +1702,224 @@ async def _verify_composition(proof,cfg,policy,mark,scalar,refused,totals):
     else:check(False,'composition history blocks downgrade')
     check(await scalar('SELECT version_num FROM alembic_version')=='c60001a7e0001' and await totals()==before,'composition populated downgrade retains all old holds')
     mark('composition_populated_downgrade_retained_old_native_holds')
+    return dict(owner=a2,id=first.id)
+
+
+async def _verify_composition_runtime(proof,cfg,policy,ai,technical_client,runner_calls,sdk,runner_mode,legacy,mark,scalar,totals):
+    """Actual SQL -> production clients/two AI routes -> synthetic engines/store.
+
+    Neither this group nor the existing PG site imports the compiled graph/SDK
+    site. Both runtime/bridge paths execute injected engines and fake SDK/HTTP.
+    """
+    import asyncio,os,time,threading
+    from contextlib import ExitStack
+    from datetime import UTC
+    from types import SimpleNamespace as NS
+    from unittest.mock import patch
+    import httpx
+    from sqlalchemy import text,select
+    from db.models.auth.models import AuthUser
+    from db.models.flow.analysis_run import FlowAnalysisRun
+    from src.modules.auth.application.session_service import issue_session
+    from src.modules.supervisor.domain import contracts as B
+    from src.modules.supervisor.domain.composition import CompositionSnapshot,PROJECTED_VERSION,projected_inputs
+    from src.modules.supervisor.application.composition_service import CompositionService,CompositionError
+    from src.modules.supervisor.application.composition_runtime import CompositionRuntime
+    from src.modules.supervisor.infrastructure import composition_repository as roots
+    from src.modules.flow.application.analysis_service import AnalysisService as FlowService,AnalysisError
+    from src.modules.technical.application.execution_admission_service import TechnicalAdmissionService as Admission
+    from src.modules.technical.domain.execution_admission import TechnicalAdmissionError,REASONS
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    from scripts.cf002_interactive_login import owned_session,safe_print
+    from scripts.cf003_admission_check import check
+    from scripts.cf012_analysis_check import flow_app,engine_result
+    token='synthetic-composition-flow-token-at-least32';http_events=[];flow_calls=[];flow_mode=['normal']
+    entered=threading.Event();release=threading.Event()
+    def flow_engine(request,context):
+        flow_calls.append(str(request.analysis_id))
+        if flow_mode[0]=='fail':raise RuntimeError('fixed synthetic Flow failure')
+        if flow_mode[0]=='pause':entered.set();release.wait(5);context.check('synthetic_wait_end')
+        return engine_result(request,context)
+    flow_app_instance=flow_app(flow_engine)
+    async def observed_ai(scope,receive,send):
+        status=[None];raw=bytearray()
+        async def record(message):
+            if message['type']=='http.response.start':status[0]=message['status']
+            if message['type']=='http.response.body' and status[0] is not None and status[0]>=400:
+                if len(raw)+len(message.get('body',b''))<=2048:raw.extend(message.get('body',b''))
+                if not message.get('more_body',False):
+                    try:code=json.loads(raw).get('error',{}).get('code')
+                    except Exception:code=None
+                    allowed={'SERVICE_UNAVAILABLE','FEATURE_UNAVAILABLE','AUTH_REQUIRED','INPUT_INVALID','DEADLINE_EXCEEDED','RESULT_CONTRACT_INVALID','BUSY'}
+                    http_events.append(dict(status=status[0],code=code if type(code) is str and code in allowed else 'other'))
+            await send(message)
+        await ai(scope,receive,record)
+    tech_client=AIClient(cfg.data()['ai_origin'],10,httpx.ASGITransport(app=observed_ai),execution_token='a'*32)
+    flow_client=AIClient('http://flow.synthetic.invalid',125,httpx.ASGITransport(app=flow_app_instance),service_token=token)
+    async with owned_session(proof) as s:
+        owner=AuthUser(id=uuid4());other=AuthUser(id=uuid4());s.add_all([owner,other]);await s.flush()
+        _,p=await issue_session(s,owner);_,a2=await issue_session(s,owner);_,b=await issue_session(s,other);await s.commit()
+    stock=json.loads(await scalar("SELECT json_build_object('stock_code',stock_code,'stock_name',stock_name,'market',market)::text FROM stocks WHERE stock_code='000720'"))
+    def scope(views):
+        query='000720 '+('수급과 차트' if len(views)==2 else '수급' if views==['flow'] else '차트')
+        frame=dict(original_query=query,query_sha256=B.sha(query),revision=0,answers=[],
+            mentions=[dict(text='000720',negated=False,evidence=dict(source_kind='original_query',answer_id=None,start=0,end=6,text='000720'))],
+            requested_views=views,negated_views=[],conditions=[],unresolved_slots=[],interpretation_source='deterministic')
+        return CompositionSnapshot(B.canonical(dict(schema_version=PROJECTED_VERSION,child_inputs=projected_inputs(stock,query,views),draft=B.Draft(original_query=query,answers=[],revision=0).model_dump(mode='json'),
+            frame=frame,stock=stock,selected_views=views,consent=dict(allow_views=views,allow_partial_results=len(views)==2,waived_conditions=[]),
+            flow_policy=dict(supported_tickers=['000720'],user_limit=100,service_limit=100,budget=10000000000) if 'flow' in views else None,
+            technical_configuration=cfg.text if 'technical' in views else None)))
+    async def new(views=None):
+        snapshot=scope(views or ['flow','technical'])
+        async with owned_session(proof) as s:
+            first=await CompositionService(s,principal=p).admit(str(uuid4()),snapshot,request_started_at=await roots.clock(s))
+        return first,snapshot
+    async def read(who,id):
+        async with owned_session(proof) as s:return await CompositionService(s,principal=who).get(id)
+    async def accounting():
+        return tuple([await scalar(q) for q in (
+            'SELECT count(*) FROM flow_analysis_runs','SELECT coalesce(sum(request_count),0) FROM analysis_usage_periods',
+            'SELECT coalesce(sum(held_nano),0) FROM analysis_usage_periods','SELECT coalesce(sum(estimated_spend_nano),0) FROM analysis_usage_periods')])+(await totals())
+    def diagnostic(view):
+        safe_print(dict(phase='composition_runtime_diagnostic',coverage=view.get('coverage'),
+            child_states=[{k:item[k] for k in ('view','state') if k in item} for item in view.get('views',[])],
+            technical_HTTP_errors=http_events[-4:],fake_engine_runs=len(runner_calls),fake_SDK_HTTP=len(sdk.sent),flow_engine_runs=len(flow_calls)))
+    with patch.dict(os.environ,{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':token}):
+        old=await read(legacy['owner'],legacy['id'])
+        check(old['coverage']=='partial' and {v['view']:v['state'] for v in old['views']}=={'flow':'unknown','technical':'stored'},'composition v1 native input/owner read survives projection revision')
+        first,snapshot=await new();tech_before=len(runner_calls);flow_before=len(flow_calls);sdk_before=len(sdk.sent)
+        async with owned_session(proof) as s:
+            result=await CompositionRuntime(s,principal=p,flow_client=flow_client,technical_client=tech_client,enabled=True).execute_once(first)
+        diagnostic(result)
+        check(result['coverage']=='fulfilled' and {v['state'] for v in result['views']}=={'stored'},'composition both native runtime paths stored')
+        check(len(runner_calls)==tech_before+1 and len(flow_calls)==flow_before+1 and len(sdk.sent)==sdk_before+2,'composition actual two engines and one fake count/generation pair')
+        before=await accounting();calls=(len(runner_calls),len(flow_calls),len(sdk.sent))
+        for who in (p,a2):check((await read(who,first.id))==result,'composition fresh owner DB session restores both native refs')
+        try:await read(b,first.id)
+        except CompositionError as error:check(error.code=='NOT_FOUND','composition other owner blocked')
+        else:check(False,'composition other owner must fail')
+        for receipt in (first,replace(first,newly_admitted=False,token=None)):
+            async with owned_session(proof) as s:
+                replay=await CompositionRuntime(s,principal=p,flow_client=flow_client,technical_client=tech_client,enabled=True).execute_once(receipt)
+                check(replay==result,'composition POST replay only observes')
+        check(await accounting()==before and calls==(len(runner_calls),len(flow_calls),len(sdk.sent)),'composition GET/POST replay no engine or spend')
+        mark('composition_runtime_two_real_AI_routes_injected_engines_native_store_owner_A2_replay_no_cost')
+
+        for mode in ('flow_fail','technical_invalid'):
+            first,_=await new();flow_mode[0]='fail' if mode=='flow_fail' else 'normal';runner_mode[0]='invalid' if mode=='technical_invalid' else 'normal'
+            try:
+                async with owned_session(proof) as s:partial=await CompositionRuntime(s,principal=p,flow_client=flow_client,technical_client=tech_client,enabled=True).execute_once(first)
+            finally:flow_mode[0]='normal';runner_mode[0]='normal'
+            diagnostic(partial);states={v['view']:v['state'] for v in partial['views']}
+            check(partial['coverage']=='partial' and states==({'flow':'unknown','technical':'stored'} if mode=='flow_fail' else {'flow':'stored','technical':'unknown'}),'composition partial keeps stored child')
+            check((await read(a2,first.id))==partial,'composition partial durable owner read')
+        mark('composition_runtime_either_child_failure_keeps_other_stored_and_independent_holds')
+
+        first,_=await new();lost=[False];flows_before=len(flow_calls);tech_before=len(runner_calls)
+        async with owned_session(proof) as s:
+            original=s.commit
+            async def lose_flow_ACK():
+                await s.flush();root=await roots.read(s,p.user_id,id=first.id)
+                native=await roots.native(s,p.user_id,'flow',root.flow_key_digest)
+                hit=not lost[0] and native is not None and root.flow_run_id is None
+                await original()
+                if hit:lost[0]=True;raise OSError('fixed synthetic Flow admission ACK loss')
+            s.commit=lose_flow_ACK
+            result=await CompositionRuntime(s,principal=p,flow_client=flow_client,technical_client=tech_client,enabled=True).execute_once(first)
+        diagnostic(result)
+        check(lost[0] and len(flow_calls)==flows_before and len(runner_calls)==tech_before+1,'composition lost Flow ACK no Flow execution; confirmed Technical still executes')
+        check(result['coverage']=='partial' and {v['view']:v['state'] for v in result['views']}=={'flow':'unknown','technical':'stored'},'composition lost ACK remains unknown not uncalled')
+        before=await accounting()
+        async with owned_session(proof) as s:await CompositionRuntime(s,principal=p,flow_client=flow_client,technical_client=tech_client,enabled=True).execute_once(first)
+        check(await accounting()==before and len(flow_calls)==flows_before,'composition lost ACK replay cannot issue continuation')
+        mark('composition_runtime_real_Flow_admission_commit_ACK_loss_no_redispatch_full_unknown_hold')
+
+        # No continuation is reconstructed when two requests share the original
+        # receipt. Each request owns its own SQL session.
+        first,_=await new(['flow']);calls_before=len(flow_calls)
+        async def compete():
+            async with owned_session(proof) as s:return await CompositionRuntime(s,principal=p,flow_client=flow_client,enabled=True).execute_once(first)
+        await asyncio.gather(compete(),compete())
+        check(len(flow_calls)==calls_before+1 and (await read(a2,first.id))['coverage']=='fulfilled','composition concurrent root only one native execution')
+        mark('composition_runtime_actual_two_SQL_sessions_same_receipt_one_native_execution')
+
+        first,_=await new(['flow']);flow_mode[0]='pause';calls_before=len(flow_calls)
+        async def cancelled():
+            async with owned_session(proof) as s:return await CompositionRuntime(s,principal=p,flow_client=flow_client,enabled=True).execute_once(first)
+        task=asyncio.create_task(cancelled())
+        try:
+            async with asyncio.timeout(10):
+                while not entered.is_set():await asyncio.sleep(.005)
+            task.cancel();release.set()
+            try:await task
+            except asyncio.CancelledError:pass
+            else:check(False,'composition cancel must propagate')
+        finally:release.set();flow_mode[0]='normal'
+        before=await accounting()
+        async with owned_session(proof) as s:await CompositionRuntime(s,principal=p,flow_client=flow_client,enabled=True).execute_once(first)
+        check(len(flow_calls)==calls_before+1 and await accounting()==before,'composition cancellation consumes grant, replay cannot resend')
+        mark('composition_runtime_cancel_propagates_owned_session_cleanup_no_continuation_reissue')
+
+        # A UTC cutoff already elapsed while the caller's waiter remains live
+        # reaches the conditional INSERT and creates no run/reservation.
+        before=await accounting()
+        async with owned_session(proof) as s:
+            now=await roots.clock(s)
+            flow=FlowService(s,principal=p,client=flow_client)
+            flow.usage_control.settings=NS(FLOW_USAGE_LIMITS_ENABLED='true',FLOW_SUPPORTED_TICKERS='000720',FLOW_USER_DAILY_REQUEST_LIMIT='100',FLOW_SERVICE_DAILY_REQUEST_LIMIT='100',FLOW_SERVICE_DAILY_BUDGET_USD='10')
+            try:await flow.admit_only(dict(ticker='000720',question='synthetic cutoff',as_of=now.isoformat(),idempotency_key=str(uuid4()),allow_analysis=True),uuid4(),
+                admission_before=now-timedelta(seconds=1),admission_deadline=time.monotonic()+5,total_deadline=time.monotonic()+140)
+            except AnalysisError:pass
+            else:check(False,'composition expired Flow SQL INSERT must reject')
+        async with owned_session(proof) as s:
+            try:await Admission(s,principal=p,policy=policy).admit_provider(str(uuid4()),CompositionService.technical_intent(scope(['technical'])),cfg,admission_before=await roots.clock(s)-timedelta(seconds=1))
+            except TechnicalAdmissionError:pass
+            else:check(False,'composition expired Technical admission must reject')
+        check(await accounting()==before,'composition both native cutoffs reserve zero after original admission window')
+        mark('composition_runtime_SQL_cutoff_no_late_native_reservation')
+
+    # A bad projection is refused by its own new guard on a fresh INSERT, not
+    # by the old root's immutability, FK, clock or deferred native totals.
+    from sqlalchemy import insert
+    from sqlalchemy.exc import IntegrityError
+    from db.models.supervisor.composition import SupervisorComposition as Root
+    from src.modules.supervisor.domain.composition import fixed_child_key
+    fresh,snapshot=await new()
+    async with owned_session(proof) as s:
+        values=dict((await s.execute(select(Root.__table__).where(Root.id==fresh.id))).mappings().one())
+    altered=snapshot.data();altered['child_inputs']['technical']['original_query']='000720 수급과 차트'
+    values['snapshot_json']=B.canonical(altered);values['snapshot_sha256']=hashlib.sha256(values['snapshot_json'].encode()).hexdigest();values['confirm_digest']=values['snapshot_sha256']
+    values['id']=uuid4();values['client_key_digest']=hashlib.sha256(str(uuid4()).encode()).digest()
+    values.update({v+'_key_digest':hashlib.sha256(fixed_child_key(values['id'],v,bytes(values['claim_digest'])).encode()).digest() for v in ('flow','technical')})
+    async with owned_session(proof) as s:
+        stamp=await roots.clock(s);values.update(request_started_at=stamp,confirmed_at=stamp,admission_before=stamp+timedelta(seconds=15),deadline_at=stamp+timedelta(seconds=140))
+        try:await s.execute(insert(Root).values(**values))
+        except IntegrityError as error:
+            check('Composition native projection invalid' in str(error),'composition exact new projection guard; no other masking')
+            await s.rollback()
+        else:check(False,'composition malformed projection must fail at INSERT')
+    # A native run with this private fixed key but the old mixed question is
+    # not the v2 child input, even with identical owner/config/stock/as-of.
+    from src.modules.technical.domain.execution_admission import Intent
+    async with owned_session(proof) as s:
+        service=CompositionService(s,principal=p);right=await service.start(fresh)
+        await service.handoff(right,'technical');key,_=service.take_handoff(right,'technical')
+        wrong=snapshot.data()['child_inputs']['technical']|{'original_query':snapshot.data()['draft']['original_query']}
+        receipt=await Admission(s,principal=p,policy=policy).admit_provider(key,Intent.parse(wrong),cfg)
+        try:await service.link(right,'technical',receipt)
+        except CompositionError as error:check(error.code=='INVALID','composition v2 native intent mismatch fixed refusal')
+        else:check(False,'composition v2 wrong native input cannot link')
+        try:
+            await s.execute(text('UPDATE supervisor_compositions SET technical_run_id=:run,analysis_as_of=:asof WHERE id=:id'),dict(run=receipt.run.analysis_id,asof=receipt.run.as_of,id=fresh.id))
+        except IntegrityError as error:
+            check('Composition Technical reference invalid' in str(error),'composition SQL v2 exact input hash binding')
+            await s.rollback()
+        else:check(False,'composition direct SQL v2 wrong input must refuse')
+    mark('composition_runtime_v1_read_unchanged_v2_projection_and_native_input_SQL_binding')
+    before=await accounting()
+    from scripts.cf003_admission_check import migration
+    try:await migration(proof,'c60001a7e0001',downgrade=True)
+    except RuntimeError:pass
+    else:check(False,'composition v2 consumed history must block downgrade')
+    check(await scalar('SELECT version_num FROM alembic_version')=='c61001a7e0001' and await accounting()==before,'composition v2 populated downgrade preserves all holds')
+    mark('composition_runtime_projection_populated_downgrade_retains_v1_v2_identity_and_hold')

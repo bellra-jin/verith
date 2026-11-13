@@ -28,6 +28,8 @@ class Admission:
     id:UUID
     newly_admitted:bool
     token:bytes|None=field(repr=False)
+    deadline:float|None=field(default=None,repr=False)
+    admission_deadline:float|None=field(default=None,repr=False)
 
 
 @dataclass(frozen=True,slots=True)
@@ -127,7 +129,9 @@ class CompositionService:
             stock=await repo.stock(self.session,data['stock']['stock_code'])
             if stock is None or any(getattr(stock,k)!=data['stock'][k] for k in ('stock_code','stock_name','market')):
                 raise CompositionError('INVALID')
-            now=self._stamp(await repo.clock(self.session))
+            anchor=time.monotonic();now=self._stamp(await repo.clock(self.session))
+            local_deadline=anchor+(started+timedelta(seconds=140)-now).total_seconds()
+            admission_deadline=anchor+(started+timedelta(seconds=15)-now).total_seconds()
             if now>=started+timedelta(seconds=15):raise CompositionError('EXPIRED')
             id=uuid4();token=secrets.token_bytes(32)
             row=await repo.admit(self.session,dict(id=id,owner_user_id=self.principal.user_id,
@@ -144,7 +148,9 @@ class CompositionService:
                 return Admission(database_uuid(prior.id),False,None)
             self._checked(row,snapshot)
             await self._commit()  # Only this ACK returns the ephemeral admission token.
-            return Admission(database_uuid(row.id),True,token)
+            if time.monotonic()>=admission_deadline:
+                return Admission(database_uuid(row.id),False,None)
+            return Admission(database_uuid(row.id),True,token,local_deadline,admission_deadline)
         except asyncio.CancelledError:
             self._poisoned=True;self._tickets.clear();raise
         except Exception as error:return await self._fail(error)
@@ -170,6 +176,12 @@ class CompositionService:
             anchor=time.monotonic();now=self._stamp(await repo.clock(self.session))
             local_deadline=anchor+(row.deadline_at-now).total_seconds()
             admission_deadline=anchor+(row.admission_before-now).total_seconds()
+            if admission.deadline is not None:
+                if (type(admission.deadline) is not float or not math.isfinite(admission.deadline)
+                        or type(admission.admission_deadline) is not float or not math.isfinite(admission.admission_deadline)):
+                    raise CompositionInvalid()
+                local_deadline=min(local_deadline,admission.deadline)
+                admission_deadline=min(admission_deadline,admission.admission_deadline)
             if row.state!='admitted' or now>=row.admission_before or now>=row.deadline_at:
                 await self.session.rollback()
                 return Start(admission.id,self.principal.user_id,self.principal.session_id,False,None)
@@ -248,6 +260,8 @@ class CompositionService:
         from src.modules.technical.domain.execution_admission import Intent
         data=snapshot.data()
         if 'technical' not in data['selected_views']:raise CompositionInvalid()
+        from src.modules.supervisor.domain.composition import PROJECTED_VERSION
+        if data['schema_version']==PROJECTED_VERSION:return Intent.parse(data['child_inputs']['technical'])
         return Intent.parse(dict(operation='technical.analysis.v1',ticker=data['stock']['stock_code'],
             original_query=data['draft']['original_query'],requested_views=['technical'],
             conditions=dict(profile='technical.multiframe.v1',periods=['3m','1y','5y'])))
@@ -364,7 +378,7 @@ class CompositionService:
                 child,_=found;state=child.state
                 # A native unfinished run after its own deadline is uncertain,
                 # not a license to call its POST or to release its reservation.
-                if state in {'admitted','claimed','running'} and now>=child.deadline_at:state='unknown'
+                if state in {'admitted','claimed','running'} and (now>=child.deadline_at or row.state=='closed'):state='unknown'
                 children.append(ChildObservation(view,state,True,True))
                 report=child.planned_report_id if view=='technical' else child.adopted_report_id
                 items.append(dict(view=view,state=state,native_state=child.state,

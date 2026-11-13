@@ -17,9 +17,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import re
 
 from ..models.enums import AlignmentFlag, ConfidenceLevel, Consensus, IndicatorType, Regime, RiskFlag, Signal
-from .keyword_rules import ALIGNMENT_RULES, CONFIDENCE_RULES, CONSENSUS_RULES, FORBIDDEN_TERMS, REGIME_RULES, RISK_MENTION_TERMS, SIGNAL_RULES, LabelRule
+from .keyword_rules import ALIGNMENT_RULES, CONFIDENCE_RULES, CONSENSUS_RULES, FORBIDDEN_TERMS, NON_ASSERTIVE_LABEL_CAUTIONS, REGIME_RULES, RISK_MENTION_TERMS, SIGNAL_RULES, LabelRule
 
 # LLM 출력에 나타나면 "확정값을 재생성하려 한다"는 신호 → 실패(§5.2 조건 5, prompts §4.1).
 FORBIDDEN_OUTPUT_FIELDS: frozenset[str] = frozenset(
@@ -75,7 +76,46 @@ def _strip_md(text: str) -> str:
 def contains_forbidden_terms(text: str) -> list[str]:
     """금지어 등장 목록(부정문 안이어도 등장 자체가 위반, §5.3 규칙 5). 마크다운 제거 후 검사."""
     plain = _strip_md(text)
+    # Technical state nouns are not trading instructions. Only a separated,
+    # complete noun (optionally followed by a closed Korean particle) is masked;
+    # standalone 매수/매도, imperatives and every other forbidden term remain.
+    def technical_noun(match):
+        clause = plain[match.end():].split(".", 1)[0].split("\n", 1)[0]
+        # Even a spaced state noun cannot hide a following action directive.
+        if re.search(r"(?<!\w)(?:하(?:세요|십시오|시기|자|라|렴)|해(?:요|라|줘|주|\s*주))", clause):
+            return match.group()
+        return " "
+    plain = re.sub(
+        r"(?<!\w)과매(?:수|도)(?=(?:\s+(?:상태|구간|국면|기준|영역|여부)|"
+        r"·과매(?:수|도)\s+(?:상태|구간|국면|기준|영역|여부)|"
+        r"(?:은|는)\s+기술적\s+상태|입니다(?=$|[^\w])))",
+        technical_noun, plain)
     return [t for t in FORBIDDEN_TERMS if t in plain]
+
+
+def diagnostic_codes(result: EvalResult) -> list[dict[str, str]]:
+    """Bounded closed codes only: never copy candidate text, info or unknown keys."""
+    fields = {"output", "details", "interpretation.text"}
+    fields.update("interpretation." + k for k in _SECTION_STR_KEYS + _SECTION_LIST_KEYS)
+    fields.update(f"technical_signals[{i.value}].{f}" for i in IndicatorType
+                  for f in ("detail", "detail_reason", "detail_caution", "detail_watchpoint"))
+    reasons = {"missing_text", "missing_required", "forbidden_term", "forbidden_output_field",
+               "risk_not_mentioned", "missing_details", "count_mismatch", "invalid_entry",
+               "indicator_mismatch", "indicator_missing", "invalid_text", "numeric_claim_unsupported"}
+    conflicts = {"conflict:" + word for rules in (REGIME_RULES, CONSENSUS_RULES, ALIGNMENT_RULES,
+                 CONFIDENCE_RULES, SIGNAL_RULES) for rule in rules.values() for word in rule.conflict_any}
+    codes = set()
+    for failure in result.failures[:128]:
+        if type(failure) is not TargetFailure:
+            codes.add(("output", "unclassified")); continue
+        target = failure.target if type(failure.target) is str and failure.target in fields else "output"
+        if type(failure.target) is str:
+            indexed = re.fullmatch(r"interpretation\.(key_drivers|warning_points)\[(?:0|[1-9][0-9]*)\]", failure.target)
+            if indexed is not None:target = "interpretation." + indexed[1]
+        reason = (failure.reason if type(failure.reason) is str and failure.reason in reasons else
+                  "label_conflict" if type(failure.reason) is str and failure.reason in conflicts else "unclassified")
+        codes.add((target, reason))
+    return [dict(target=t, reason=r) for t, r in sorted(codes)[:12]]
 
 
 def check_label(text: str, rule: LabelRule) -> list[str]:
@@ -93,6 +133,10 @@ def check_label(text: str, rule: LabelRule) -> list[str]:
         reasons.append("missing_required")
 
     masked = text
+    for caution in NON_ASSERTIVE_LABEL_CAUTIONS:
+        # Exact complete code-owned wording only. A leading word/negation
+        # cannot attach to it and change the meaning of the recognized clause.
+        masked = re.sub(r"(?<!\w)" + re.escape(caution), " " * len(caution), masked)
     for term in sorted(rule.required_any, key=len, reverse=True):
         if term in masked:
             masked = masked.replace(term, " " * len(term))

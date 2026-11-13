@@ -528,7 +528,7 @@ def cf051_selected():
 
 ADAPTER_FIXTURES=cf051_selected()
 
-def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_remaining=None,fetcher_stop=None,data_fetcher=None):
+def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_remaining=None,fetcher_stop=None,data_fetcher=None,trace_sink=None,interpret_scripts=None):
     req=request();ids=[str(uuid4()) for _ in range(6)];req['request_id'],req['trace_id']=ids[:2]
     req['data']['context'].update(dict(zip(('analysis_id','admission_request_id','attempt_id','report_id'),ids[2:])))
     now=datetime.now(UTC);req['data']['requested_as_of']=now.isoformat()
@@ -539,19 +539,21 @@ def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_rema
         price_evidence_sha256='a'*64,input_nano_per_token=1,output_nano_per_token=1,
         input_token_cap=100000,output_token_cap=5000,input_byte_cap=100000,output_byte_cap=100000,max_calls=calls)
     cfg=P.Configuration.parse(dict(schema_version=P.SCHEMA,policy=p,counter={'free':True,'mapping':'technical.responses.model-input.v1','version':'synthetic.v1','provenance_sha256':'c'*64,'evidence_sha256':'d'*64},
-        caps={'request':131072,'count':4096,'generation':1048576},ai_origin='https://ai.invalid',authority_origin='https://backend.invalid',cache_mode='none',trace_mode='none'))
+        caps={'request':131072,'count':4096,'generation':1048576},ai_origin='https://ai.invalid',authority_origin='https://backend.invalid',cache_mode='none',trace_mode='none' if trace_sink is None else 'injected'))
     control={k:req['data']['context'][k] for k in ('analysis_id','admission_request_id','attempt_id','report_id')}
     control.update(boundary_request_id=req['request_id'],trace_id=req['trace_id'],spec_sha256=P.SPEC_SHA256,policy_sha256=cfg.policy_sha256,configuration_sha256=cfg.fingerprint,
         intent_sha256=P.sha(P.canonical(dict(operation='technical.analysis.v1',ticker=st.TICKER,original_query=req['data']['original_query'],requested_views=['technical'],conditions=req['data']['conditions']))),
         boundary_sha256=P.sha(P.canonical(req)),stock_sha256=P.sha(P.canonical(req['data']['stock'])),reserved_nano=p['attempt_reserve_nano'],started_at=now.isoformat(),deadline_at=(now+timedelta(seconds=60)).isoformat())
     value=P.execution(req,control,cfg);events=[];observations=[];starts=[];budgets=[];credentials=[];start_anchors=[]
-    scripts=list(graph_fixtures._HAPPY if case=='normal' else [st.NORM_OK,st.FOCUS_OK])
+    scripts=list(graph_fixtures._HAPPY if case=='normal' else [st.NORM_OK,st.FOCUS_OK]);generation_inputs=[]
+    if interpret_scripts is not None:scripts[2:]=interpret_scripts
     def inner(request,Parts):
         events.append((request.url.path,threading.get_ident()))
         if pause is not None and len(events)==1:
             pause[0].set();assert pause[1].wait(3)
         if request.url.path.endswith('input_tokens'):body={'object':'response.input_tokens','input_tokens':12}
         else:
+            generation_inputs.append(json.loads(request.content)['input'])
             body={'status':'completed','model':p['model'],'service_tier':'default','output_text':scripts.pop(0),'usage':{'input_tokens':12,'output_tokens':3,'total_tokens':15}}
         raw=json.dumps(body,ensure_ascii=False).encode()
         return httpx.Response(200,headers={'Content-Type':'application/json','Content-Length':str(len(raw))},stream=Parts([raw]))
@@ -580,9 +582,9 @@ def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_rema
         body=await request.json();observations.append(body)
         return JSONResponse({'schema_version':P.SCHEMA,'recorded':True,'analysis_id':body['analysis_id'],'evidence_sha256':body['evidence_sha256']})
     authority=ExecutionAuthorityClient(origin=cfg.data()['authority_origin'],token='b'*32,transport=httpx.ASGITransport(app=app))
-    options=ExecutionOptions(cfg,'a'*32,'b'*32,credential,data_fetcher or fetcher,None,None,fetcher_stop=fetcher_stop)
+    options=ExecutionOptions(cfg,'a'*32,'b'*32,credential,data_fetcher or fetcher,None,trace_sink,fetcher_stop=fetcher_stop)
     instance=TechnicalProviderRuntime(options,agent_module=actual_agent,steps_module=actual_steps,llm_module=llm,authority=authority)
-    return SimpleNamespace(instance=instance,value=value,events=events,observations=observations,starts=starts,budgets=budgets,credentials=credentials,helper=helper,cfg=cfg,start_anchors=start_anchors)
+    return SimpleNamespace(instance=instance,value=value,events=events,observations=observations,starts=starts,budgets=budgets,credentials=credentials,helper=helper,cfg=cfg,start_anchors=start_anchors,generation_inputs=generation_inputs)
 
 @pytest.mark.parametrize('case,expected',[('normal','normal'),('data_limited','data_limited'),('regime_unavailable','regime_unavailable')])
 async def test_CF053_actual_graph_one_start_one_budget_all_nodes_and_independent_usage(case,expected):
@@ -950,3 +952,203 @@ async def test_pinned_real_SDK_cookie_wire_and_wrapped_denial_under_existing_OS_
         assert not any(n=='openai' or n.startswith('openai.') for n in sys.modules)
     await asyncio.to_thread(exercise)
     assert not ATTEMPTS and runtime._ACTIVE_TASK is None
+
+
+@pytest.mark.parametrize('text',['과매수 상태입니다.','과매도 상태를 관찰합니다.','과매도 구간을 관찰합니다.','RSI는 **과매수**·**과매도** 기준을 확인합니다.','과매수는 기술적 상태입니다.'])
+def test_technical_state_nouns_are_not_trade_instructions(text):
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    assert ev.contains_forbidden_terms(text)==[]
+
+
+@pytest.mark.parametrize('text',['매수 신호는 아닙니다.','과매수 상태이므로 매수하세요.','과매도 구간에서 매도합니다.','과매수 추천','과매도 목표가','과매수하세요','초과매수','과매도하지 마세요'])
+def test_state_nouns_never_hide_trade_instructions_or_other_forbidden_terms(text):
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    assert ev.contains_forbidden_terms(text)
+
+
+def test_state_noun_fix_does_not_relax_signal_or_numeric_validation():
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    from src.agents.technical.domain.models.enums import IndicatorType,Signal
+    good=[{'indicator':'rsi','detail':'과매수 상태이며 부정 신호입니다.'}]
+    assert not ev.evaluate_details(good,signals=[(IndicatorType.RSI,Signal.NEGATIVE)])
+    assert ev.evaluate_details(good,signals=[(IndicatorType.RSI,Signal.POSITIVE)])
+    good=json.loads(qualitative_response());good['details'][0]['detail_reason']='과매수 상태의 현재값은 99입니다.'
+    context=numeric_context()
+    result=context.node.verify(good,regime=context.regime,signal=context.signal,signals=context.rows,risks=context.risks)
+    assert any(f.reason=='numeric_claim_unsupported' for f in result.failures)
+
+
+def test_diagnostic_codes_are_closed_deduplicated_and_bounded(caplog):
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    from src.agents.technical.application.orchestration import pipeline_steps as steps
+    from src.agents.technical.infrastructure.observability.trace_logger import InMemoryTraceSink,TraceLogger
+    sentinel='private-model-response-should-never-appear'
+    failures=[ev.TargetFailure('interpretation.text','numeric_claim_unsupported'),
+              ev.TargetFailure('technical_signals[rsi].detail','conflict:긍정','rsi'),
+              ev.TargetFailure('technical_signals[pattern].detail',sentinel,sentinel),
+              ev.TargetFailure(sentinel,sentinel,sentinel)]*100
+    result=ev.EvalResult(False,tuple(failures));codes=ev.diagnostic_codes(result)
+    assert len(codes)<=12 and len({(x['target'],x['reason']) for x in codes})==len(codes)
+    assert {'target':'interpretation.text','reason':'numeric_claim_unsupported'} in codes
+    assert {'target':'technical_signals[rsi].detail','reason':'label_conflict'} in codes
+    sink=InMemoryTraceSink();steps._emit_validation(TraceLogger(sink,trace_id='fixed-diagnostic'),steps._Attempt(False,{},result),1)
+    assert sentinel not in json.dumps(sink.events) and sentinel not in str([x.__dict__ for x in caplog.records])
+    assert sink.events[0]['output_summary']['failures']==codes
+
+
+async def test_provider_runtime_preserves_bounded_validation_codes_via_existing_injected_trace():
+    # Fake SDK + the actual graph/runtime, no new wire/schema or provider call.
+    from src.agents.technical.infrastructure.observability.trace_logger import InMemoryTraceSink
+    bad=json.loads(qualitative_response());bad['one_line_summary']='현재 가격은 999원입니다.'
+    next(x for x in bad['details'] if x['indicator']=='rsi')['detail_caution']='현재 RSI는 88입니다.'
+    raw=json.dumps(bad,ensure_ascii=False);sink=InMemoryTraceSink()
+    h=execution_fixture(trace_sink=sink,interpret_scripts=[raw,raw])
+    result=await h.instance.execute(h.value,'f'*64)
+    assert result['data']['result']['verification']['label_matched'] is False
+    events=[x for x in sink.events if x['event_type']=='validation' and x['node']=='interpret_report']
+    assert len(events)==2
+    for event in events:
+        codes=event['output_summary']['failures']
+        assert {'target':'interpretation.one_line_summary','reason':'numeric_claim_unsupported'} in codes
+        assert {'target':'technical_signals[rsi].detail_caution','reason':'numeric_claim_unsupported'} in codes
+    summaries=[event['output_summary'] for event in events]
+    assert '999' not in json.dumps(summaries) and '88' not in json.dumps(summaries)
+    assert 'validation_feedback' not in json.dumps(h.generation_inputs[-2])
+    assert 'validation_feedback' in json.dumps(h.generation_inputs[-1])
+    assert 'numeric_claim_unsupported' in json.dumps(h.generation_inputs[-1])
+    assert '현재 가격은 999원입니다.' not in json.dumps(h.generation_inputs[-1],ensure_ascii=False)
+    assert len(h.budgets)==1 and len(h.events)==8 and len(h.starts)==len(h.observations)==1
+    assert runtime._ACTIVE_TASK is None
+
+
+def kis_bar(date='20240105',close='100'):
+    return dict(stck_bsop_date=date,stck_oprc='100',stck_hgpr='105',stck_lwpr='95',stck_clpr=close,acml_vol='1000',acml_tr_pbmn='100000')
+
+
+@pytest.mark.parametrize('conflict',[False,True])
+def test_KIS_duplicate_candles_identical_replay_or_fixed_conflict(monkeypatch,conflict):
+    from src.agents.technical.infrastructure import kis_client as kis
+    from datetime import date
+    seen=[]
+    def chart(*args,**kwargs):seen.append(True);return {'output2':[kis_bar(),kis_bar(close='101' if conflict else '100')]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid')
+    def run():return kis._fetch_ohlcv_range('000720','D',date(2024,1,1),date(2024,1,5),None,settings=settings,_token='fake-token')
+    if conflict:
+        with pytest.raises(kis.KisFieldError,match='^KIS_MARKET_CONFLICTING_BAR$'):run()
+    else:
+        rows=run();assert len(rows)==1 and rows[0].close==100
+    assert seen==[True]
+
+
+@pytest.mark.parametrize('status,marker,recovered',[(500,True,True),(500,False,False),(429,False,True)])
+def test_KIS_retry_conditions_remain_bounded_and_nonretry_500_fails(monkeypatch,status,marker,recovered):
+    from src.agents.technical.infrastructure import kis_client as kis
+    calls=[];backoff=[]
+    request=httpx.Request('GET','https://kis.invalid/market')
+    class Client:
+        def get(self,*args,**kwargs):
+            calls.append(True)
+            return httpx.Response(status if len(calls)==1 else 200,request=request,
+                json={'rt_cd':'0','output2':[kis_bar()]} if len(calls)>1 else {'msg_cd':kis.RATE_LIMIT_MSG_CODE if marker else 'unavailable'})
+    monkeypatch.setattr(kis,'_sleep_backoff',lambda attempt:backoff.append(attempt))
+    settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid')
+    def run():return kis._call_chart(settings,'fake-token','000720','D','20240101','20240105',Client(),safe_errors=True)
+    if recovered:assert run()['rt_cd']=='0' and len(calls)==2 and backoff==[0]
+    else:
+        with pytest.raises(kis.KisApiError,match='^KIS_MARKET_HTTP_FAILED$'):run()
+        assert len(calls)==1 and not backoff
+
+
+@pytest.mark.parametrize('signal,text',[
+    ('positive','긍정 신호지만 약세로 단정하지 않습니다.'),
+    ('negative','부정 신호이며 강세 전환을 확정할 수 없습니다.'),
+])
+def test_exact_complete_label_cautions_do_not_assert_opposite_signal(signal,text):
+    from src.agents.technical.domain.interpretation.trajectory_eval import check_label
+    from src.agents.technical.domain.interpretation.keyword_rules import SIGNAL_RULES
+    from src.agents.technical.domain.models.enums import Signal
+    assert check_label(text,SIGNAL_RULES[Signal(signal)])==[]
+    assert check_label(text+' '+('약세입니다.' if signal=='positive' else '강세입니다.'),SIGNAL_RULES[Signal(signal)])
+
+
+def test_closed_caution_does_not_mask_other_clauses_advice_numbers_or_fuzzy_negation():
+    from src.agents.technical.domain.interpretation.trajectory_eval import check_label,contains_forbidden_terms
+    from src.agents.technical.domain.interpretation.keyword_rules import REGIME_RULES,SIGNAL_RULES
+    from src.agents.technical.domain.models.enums import Regime,Signal
+    assert not check_label('횡보이며 상승 추세를 확정하지 않습니다.',REGIME_RULES[Regime.SIDEWAYS])
+    for text in ('긍정이지만 약세일 수도 있습니다.','긍정이며 약세로 단정하지 않습니다. 약세입니다.',
+                 '긍정이지만 약세로 단정하지 않습니다라고 말합니다.','긍정이며 약세로 단정하지 않습니다만 약세입니다.'):
+        assert check_label(text,SIGNAL_RULES[Signal.POSITIVE])
+    assert contains_forbidden_terms('약세로 단정하지 않습니다. 매수하지 마세요.')==['매수']
+
+
+def test_code_regime_name_overbought_does_not_contradict_forbidden_vocabulary():
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    from src.agents.technical.domain.models.enums import Regime,Consensus,AlignmentFlag
+    assert not ev.evaluate_text('과매수 국면의 약한 부정 신호이며 상위 방향과 정합합니다.',
+        final_regime=Regime.OVERHEATED,consensus=Consensus.WEAK_NEGATIVE,alignment_flag=AlignmentFlag.ALIGNED)
+
+
+def test_KIS_body_read_failure_is_distinct_from_confirmed_rate_marker_and_bounded(monkeypatch,caplog):
+    from src.agents.technical.infrastructure import kis_client as kis
+    calls=[];backoff=[];request=httpx.Request('GET','https://kis.invalid/market')
+    class Client:
+        def get(self,*args,**kwargs):
+            calls.append(True)
+            if len(calls)==1:raise httpx.ReadError('private-response-body-sentinel',request=request)
+            return httpx.Response(200,request=request,json={'rt_cd':'0','output2':[kis_bar()]})
+    monkeypatch.setattr(kis,'_sleep_backoff',lambda n:backoff.append(n))
+    data=kis._call_chart(config.KISSettings('fake-key','fake-secret','https://kis.invalid'),'fake-token','000720','D','20240101','20240105',Client(),safe_errors=True)
+    assert len(calls)==2 and backoff==[0] and data['rt_cd']=='0'
+    assert 'private-response-body-sentinel' not in str([r.__dict__ for r in caplog.records])
+
+
+def test_KIS_overlapping_pages_may_not_replace_a_conflicting_candle(monkeypatch):
+    from src.agents.technical.infrastructure import kis_client as kis
+    from datetime import date
+    calls=[]
+    def chart(*args,**kwargs):
+        calls.append(True)
+        return {'output2':[kis_bar(close='100' if len(calls)==1 else '101')]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    with pytest.raises(kis.KisFieldError,match='^KIS_MARKET_CONFLICTING_BAR$'):
+        kis._fetch_ohlcv_range('000720','D',date(2023,1,1),date(2024,1,5),None,
+            settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert len(calls)==2
+
+
+@pytest.mark.parametrize('text',['과매수 하세요','과매도 해 주세요','과매수 조금만 하세요','과매도 하십시오'])
+def test_spaced_state_noun_cannot_hide_action_directive(text):
+    from src.agents.technical.domain.interpretation.trajectory_eval import contains_forbidden_terms
+    assert contains_forbidden_terms(text)
+
+
+def test_noop_trace_still_logs_closed_diagnostics_in_the_rendered_message(caplog):
+    import logging
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    from src.agents.technical.application.orchestration import pipeline_steps as steps
+    from src.agents.technical.infrastructure.observability.trace_logger import TraceLogger
+    result=ev.EvalResult(False,(ev.TargetFailure('interpretation.text','numeric_claim_unsupported'),
+        ev.TargetFailure('private-candidate-sentinel','private-reason-sentinel','private-info-sentinel')))
+    with caplog.at_level(logging.WARNING,logger=steps.logger.name):
+        steps._emit_validation(TraceLogger(None,trace_id='fixed'),steps._Attempt(False,{},result),1)
+    messages=[x.getMessage() for x in caplog.records]
+    assert any('numeric_claim_unsupported' in m and 'interpretation.text' in m for m in messages)
+    assert 'private-candidate-sentinel' not in str(messages) and 'private-reason-sentinel' not in str(messages) and 'private-info-sentinel' not in str(messages)
+
+
+@pytest.mark.parametrize('text',['과매수를 하세요','과매도 하시죠','과매수 해보세요','과매수 적극 실행','과매도 부탁합니다'])
+def test_only_closed_technical_state_contexts_are_exempt(text):
+    from src.agents.technical.domain.interpretation.trajectory_eval import contains_forbidden_terms
+    assert contains_forbidden_terms(text)
+
+
+@pytest.mark.parametrize('field',['key_drivers','warning_points'])
+def test_numeric_list_diagnostic_targets_normalize_exact_indices_only(field):
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    result=ev.EvalResult(False,(ev.TargetFailure(f'interpretation.{field}[0]','numeric_claim_unsupported'),
+        ev.TargetFailure(f'interpretation.{field}[23]','numeric_claim_unsupported')))
+    assert ev.diagnostic_codes(result)==[dict(target='interpretation.'+field,reason='numeric_claim_unsupported')]
+    for suffix in ('[-1]','[00]','[1.0]','[True]','[0]private','[private]'):
+        assert ev.diagnostic_codes(ev.EvalResult(False,(ev.TargetFailure('interpretation.'+field+suffix,'numeric_claim_unsupported'),)))[0]['target']=='output'

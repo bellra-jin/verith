@@ -29,6 +29,15 @@ class LabelRule:
     require_representative: bool = True
 
 
+# Closed complete caution clauses, not a general negation parser. Other
+# occurrences of the same conflict word and all forbidden/numeric checks remain.
+NON_ASSERTIVE_LABEL_CAUTIONS: tuple[str, ...] = (
+    "약세로 단정하지 않습니다.",
+    "강세 전환을 확정할 수 없습니다.",
+    "상승 추세를 확정하지 않습니다.",
+)
+
+
 # ── regime (final_regime) — test_plan §5.4. unavailable은 template fallback 경로라 사전 없음.
 REGIME_RULES: dict[Regime, LabelRule] = {
     Regime.SIDEWAYS: LabelRule(

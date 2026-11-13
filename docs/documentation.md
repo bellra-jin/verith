@@ -2,7 +2,7 @@
 
 ## Supervisor Flow/Technical 내부 조합 기반
 
-[조합 계약](contracts/supervisor-composition-v1.md)·[영속 기반](work/supervisor-composition-foundation.md)·[내부 실행 조립](work/supervisor-composition-execution.md)을 따른다. v2는 원질문과 명시 자식 입력을 구분하고 원 세션의 fresh ACK로 두 접수/인계 뒤 기존 runtime을 직렬 연결한다. v1 읽기와 기존 단독 POST/회계/unknown hold는 보존한다. 공개 복수 선택 planner/API는 미연결이며 실제 공급자 호출·운영 활성화를 포함하지 않는다.
+[조합 계약](contracts/supervisor-composition-v1.md)·[영속 기반](work/supervisor-composition-foundation.md)·[내부 실행 조립](work/supervisor-composition-execution.md)을 따른다. v2는 원질문과 명시 자식 입력을 구분하고 원 세션의 fresh ACK로 두 접수/인계 뒤 기존 runtime을 직렬 연결한다. v1 읽기와 기존 단독 POST/회계/unknown hold는 보존한다. [공개 선택·확인·본인 조회 API](work/supervisor-composition-api.md)는 별도 default-off 경계로 연결한다. 실제 공급자 호출·운영 활성화는 포함하지 않는다.
 
 ## CF-021 내부 Technical typed boundary
 

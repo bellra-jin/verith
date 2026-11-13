@@ -1923,3 +1923,111 @@ async def _verify_composition_runtime(proof,cfg,policy,ai,technical_client,runne
     else:check(False,'composition v2 consumed history must block downgrade')
     check(await scalar('SELECT version_num FROM alembic_version')=='c61001a7e0001' and await accounting()==before,'composition v2 populated downgrade preserves all holds')
     mark('composition_runtime_projection_populated_downgrade_retains_v1_v2_identity_and_hold')
+    await _verify_composition_public_api(proof,cfg,tech_client,flow_client,token,mark,accounting,runner_calls,flow_calls,runner_mode,flow_mode)
+
+async def _verify_composition_public_api(proof,cfg,tech_client,flow_client,token,mark,accounting,runner_calls,flow_calls,runner_mode,flow_mode):
+    """Production middleware/router/DI/auth/SQL with the existing two fake AI routes."""
+    import asyncio,copy,os
+    from contextlib import ExitStack
+    from unittest.mock import patch
+    import httpx
+    from db.session import get_session
+    from db.models.auth.models import AuthUser
+    from src.api.main import app
+    from src.shared.config import settings
+    from src.modules.auth.api import router as auth
+    from src.modules.auth.application.session_service import issue_session,csrf_token,revoke_session
+    from src.modules.supervisor.api import composition_router as api
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    from scripts.cf002_interactive_login import owned_session
+    from scripts.cf003_admission_check import check
+    from scripts.cf022_supervisor_core_check import load_core
+    planner=load_core()
+    async def multiplex(scope,receive,send):
+        if scope['path']=='/internal/supervisor/core/plan':await planner(scope,receive,send)
+        else:await flow_client._transport.app(scope,receive,send)
+    routed=AIClient('http://flow.synthetic.invalid',125,httpx.ASGITransport(app=multiplex),service_token=token)
+    def clients(*args,**kwargs):return tech_client if kwargs.get('execution_token') else routed
+    async def user(owner=None):
+        async with owned_session(proof) as s:
+            if owner is None:owner=AuthUser(id=uuid4());s.add(owner);await s.flush()
+            cookie,p=await issue_session(s,owner);await s.commit();return cookie,p
+    a=await user()
+    async with owned_session(proof) as s:owner=await s.get(AuthUser,a[1].user_id)
+    a2=await user(owner);b=await user()
+    async def sessions():
+        async with owned_session(proof) as s:yield s
+    async def call(method,path,body=None,who=None,headers=None):
+        cookie,p=who or a
+        h={'origin':'http://localhost:3200','cookie':auth.SESSION_COOKIE+'='+cookie,'x-csrf-token':csrf_token(p)}|(headers or {})
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://localhost:8200') as c:return await c.request(method,path,json=body,headers=h)
+    def data(r,status=200):
+        if r.status_code!=status:
+            from scripts.cf002_interactive_login import safe_print
+            code=r.json().get('error',{}).get('code')
+            allowed={'SERVICE_UNAVAILABLE','FEATURE_UNAVAILABLE','AUTH_REQUIRED','INPUT_INVALID','DEADLINE_EXCEEDED','RESULT_CONTRACT_INVALID'}
+            safe_print(dict(phase='composition_public_HTTP',status=r.status_code,code=code if code in allowed else 'other'))
+        check(r.status_code==status,'composition public HTTP success')
+        v=r.json();check(v['schema_version']=='supervisor.composition-api.v1' and v['error'] is None and r.headers.get('cache-control')=='private, no-store','composition public private envelope');return v['data']
+    def error(r,status,code):
+        check(r.status_code==status and r.json()['error']['code']==code and r.json()['data'] is None,'composition public fixed failure')
+    base=api.PATH
+    def draft(views):return dict(original_query='000720 '+('수급과 차트' if len(views)==2 else '수급' if views==['flow'] else '차트'),answers=[],revision=0)
+    def confirm(plan,d):return dict(client_key=str(uuid4()),draft=d,expected_plan_hash=plan['plan_hash'],consent=plan['required_consent'])
+    original=dict(app.dependency_overrides);app.dependency_overrides[get_session]=sessions
+    try:
+      with ExitStack() as stack:
+        stack.enter_context(patch.dict(os.environ,{'FLOW_ANALYSIS_ENABLED':'true','FLOW_SERVICE_TOKEN':token}))
+        values=dict(AI_SERVICE_URL=cfg.data()['ai_origin'],FLOW_SERVICE_TOKEN=token,FLOW_ANALYSIS_ENABLED=True,
+            FLOW_USAGE_LIMITS_ENABLED='true',FLOW_SUPPORTED_TICKERS='000720',FLOW_USER_DAILY_REQUEST_LIMIT='100',
+            FLOW_SERVICE_DAILY_REQUEST_LIMIT='100',FLOW_SERVICE_DAILY_BUDGET_USD='10',SUPERVISOR_COMPOSITION_ENABLED='true',
+            TECHNICAL_EXECUTION_ENABLED='true',TECHNICAL_EXECUTION_CONFIG=cfg.text,
+            TECHNICAL_EXECUTION_AI_SERVICE_TOKEN='a'*32,TECHNICAL_EXECUTION_AUTHORITY_TOKEN='b'*32)
+        for key,value in values.items():stack.enter_context(patch.object(settings,key,value))
+        stack.enter_context(patch.object(api,'AIClient',clients))
+        before=await accounting();calls=(len(runner_calls),len(flow_calls))
+        error(await call('POST',base+'/prepare',draft(['flow']),headers={'cookie':''}),401,'AUTH_REQUIRED')
+        error(await call('POST',base+'/prepare',draft(['flow']),headers={'x-csrf-token':'bad'}),401,'AUTH_REQUIRED')
+        error(await call('POST',base+'/prepare?extra=1',draft(['flow'])),422,'INPUT_INVALID')
+        error(await call('POST',base+'/requests',dict(frame={},policy={},settings={})),422,'INPUT_INVALID')
+        limited=data(await call('POST',base+'/prepare',dict(original_query='000720 어제 수급과 차트',answers=[],revision=0)))
+        check(limited['status']=='needs_clarification' and limited['plan_hash'] is None,'composition no implicit condition waiver')
+        with patch.object(settings,'SUPERVISOR_COMPOSITION_ENABLED',False):
+            error(await call('POST',base+'/prepare',draft(['flow'])),403,'FEATURE_UNAVAILABLE')
+        check(await accounting()==before and calls==(len(runner_calls),len(flow_calls)),'composition rejected/prepare zero admission and engines')
+        mark('composition_public_auth_CSRF_exact_routes_closed_DTO_conditions_and_off_gate')
+        for views in (['flow'],['technical'],['flow','technical']):
+            d=draft(views);plan=data(await call('POST',base+'/prepare',d));body=confirm(plan,d)
+            check(plan['selected_views']==views and plan['child_inputs'] and 'technical_configuration' not in plan,'composition server plan exact scope')
+            check(plan['maximum_reserved_nano']==sum(plan['reservation_caps_nano'].values()),'composition independent reservation caps displayed and bound')
+            if 'technical' in views:check(plan['technical_configuration_sha256']==cfg.fingerprint,'composition native configuration fingerprint bound')
+            bad=copy.deepcopy(body);bad['expected_plan_hash']='f'*64
+            error(await call('POST',base+'/requests',bad),409,'PLAN_STALE')
+            if len(views)==2:
+                bad=copy.deepcopy(body);bad['consent']['allow_partial_results']=False
+                error(await call('POST',base+'/requests',bad),409,'PLAN_STALE')
+            before_calls=(len(runner_calls),len(flow_calls))
+            result=data(await call('POST',base+'/requests',body));path=base+'/requests/'+result['composition_id']
+            check(result['coverage']=='fulfilled' and [v['view'] for v in result['views']]==views and all(v['state']=='stored' and v['result'] is not None for v in result['views']),'composition API actual runtime owner payload store')
+            check((len(runner_calls),len(flow_calls))==(before_calls[0]+int('technical' in views),before_calls[1]+int('flow' in views)),'composition public once selected engines')
+            held=await accounting();calls=(len(runner_calls),len(flow_calls))
+            with patch.object(settings,'SUPERVISOR_COMPOSITION_ENABLED',False),patch.object(settings,'TECHNICAL_EXECUTION_CONFIG',''),patch.object(api,'AIClient',side_effect=AssertionError('No AI construction on GET/replay')):
+                check(data(await call('GET',path,who=a2))==result,'composition actual A2 owner complete payload settings off')
+                check(data(await call('POST',base+'/requests',body,who=a2))==result,'composition A2 replay observes never obtains original right')
+                error(await call('GET',path,who=b),404,'RESOURCE_NOT_FOUND')
+                bad=copy.deepcopy(body);bad['expected_plan_hash']='e'*64
+                error(await call('POST',base+'/requests',bad),409,'IDEMPOTENCY_CONFLICT')
+            check(await accounting()==held and calls==(len(runner_calls),len(flow_calls)),'composition public owner/replay costs unchanged')
+        mark('composition_public_Flow_Technical_both_real_SQL_native_runtime_store_owner_A2_replay_no_cost')
+        # Partial success uses native engine failures, never direct receive fixtures.
+        d=draft(['flow','technical']);body=confirm(data(await call('POST',base+'/prepare',d)),d)
+        flow_mode[0]='fail'
+        try:partial=data(await call('POST',base+'/requests',body))
+        finally:flow_mode[0]='normal'
+        check(partial['coverage']=='partial' and {v['view']:v['state'] for v in partial['views']}=={'flow':'unknown','technical':'stored'},'composition public native partial stored preserved')
+        mark('composition_public_partial_native_failure_keeps_success_and_unknown_hold')
+        async with owned_session(proof) as s:await revoke_session(s,a2[1]);await s.commit()
+        error(await call('GET',base+'/requests/'+partial['composition_id'],who=a2),401,'AUTH_REQUIRED')
+        mark('composition_public_SQL_session_revocation_blocks_result')
+    finally:
+        app.dependency_overrides.clear();app.dependency_overrides.update(original)

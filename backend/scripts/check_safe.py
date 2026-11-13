@@ -402,6 +402,9 @@ CF022_SOURCES = CF022_SOURCES | frozenset({
     'backend/src/modules/supervisor/domain/composition.py',
     'backend/src/modules/supervisor/application/composition_service.py',
     'backend/src/modules/supervisor/application/composition_runtime.py',
+    'backend/src/modules/supervisor/domain/composition_api.py',
+    'backend/src/modules/supervisor/application/composition_api_service.py',
+    'backend/src/modules/supervisor/api/composition_router.py',
     'backend/src/modules/supervisor/infrastructure/composition_repository.py',
     'backend/db/models/supervisor/composition.py',
     'backend/db/migrations/versions/20261113_c60001_supervisor_composition.py',
@@ -459,7 +462,7 @@ CF035_SOURCES = frozenset(['backend/db/models/technical/report_snapshot.py', 'ba
 NEW.update(CF035_INPUTS)
 NEW.update(CF035_SOURCES)
 
-CF036_INPUTS = {'backend/src/modules/technical/api/owned_report_router.py': 'f78d43811d296a26211ad08a12a3cfc3d79b6e660dbb6f41b109eea1473eb343', 'backend/src/modules/technical/api/owned_report_schemas.py': '2a803cee4d21a9fb4c4abb2f708867a9346143f604a8a9f5faf743db376c65fe', 'backend/src/modules/technical/application/owned_report_service.py': 'a9a23012d1a9ef7b084580f62c9a19d11a6055460b723a840ce1bf25145ef202', 'backend/src/modules/technical/infrastructure/report_repository.py': 'd2312a4319795d0b1caeca94ef2d078f6607648dbd29ebb32d61c47f6e153e91', 'backend/src/shared/http/access_boundary.py': '6f10e26bb56c0a1fee2982ccd7bbed756a254bdab67029f747d86366f5d7d527', 'backend/src/api/main.py': '08d1b6709178145262d1ab9adfdd916fce5137ac02190a511159afd50e58cf4d', 'frontend/tests/fixtures/cf036-technical-owned-read.json': '897571692f0ed1838c4583e990dc48ab2359bd34684b06bc2c2eb5d0afa11fff'}
+CF036_INPUTS = {'backend/src/modules/technical/api/owned_report_router.py': 'f78d43811d296a26211ad08a12a3cfc3d79b6e660dbb6f41b109eea1473eb343', 'backend/src/modules/technical/api/owned_report_schemas.py': '2a803cee4d21a9fb4c4abb2f708867a9346143f604a8a9f5faf743db376c65fe', 'backend/src/modules/technical/application/owned_report_service.py': 'a9a23012d1a9ef7b084580f62c9a19d11a6055460b723a840ce1bf25145ef202', 'backend/src/modules/technical/infrastructure/report_repository.py': 'd2312a4319795d0b1caeca94ef2d078f6607648dbd29ebb32d61c47f6e153e91', 'backend/src/shared/http/access_boundary.py': '87fc7e5c7d941b967bfbaa5c11263531fb965b540419a8f034d68260635b4aa3', 'backend/src/api/main.py': '08d1b6709178145262d1ab9adfdd916fce5137ac02190a511159afd50e58cf4d', 'frontend/tests/fixtures/cf036-technical-owned-read.json': '897571692f0ed1838c4583e990dc48ab2359bd34684b06bc2c2eb5d0afa11fff'}
 CF036_TESTS = ("tests/unit/test_cf036_technical_owned_read.py",)
 CF036_SOURCES = frozenset({"backend/src/modules/technical/api/owned_report_router.py", "backend/src/modules/technical/api/owned_report_schemas.py", "backend/tests/unit/test_cf036_technical_owned_read.py", "backend/scripts/cf036_technical_owned_read_check.py", "frontend/tests/fixtures/cf036-technical-owned-read.json"})
 NEW.update(CF036_SOURCES)

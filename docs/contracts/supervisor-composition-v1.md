@@ -96,6 +96,10 @@ DB wall clock 후퇴도 이 기한을 늘릴 수 없다. 받은 정상 body의 �
 보존한다. 외곽 취소에 새 SQL 재시도나 실행권 복원을 붙이지 않으며, native의 기존 rollback과 caller 소유 session 종료를 유지한다.
 부모가 닫힌 뒤 미완료 native 상태는 보수적 unknown으로 투영하며 원 native 상태도 별도로 남긴다.
 
-공개 복수 선택 planner/prepare/confirm API는 아직 미연결이다. 위 projection은 미래 공개 준비 응답에서
+PR #84 내부 runtime 단계에는 공개 API가 없었다. 후속 공개 API는 아래 별도 계약을 따른다. 위 projection은 공개 준비 응답에서
 실행 범위와 함께 보여 주고 확인받아야 한다. 이 내부 조립 검증은 실제 공급자·전체 compiled graph·
 운영 활성화·실제 Google 로그인 수용을 뜻하지 않는다.
+
+## 별도 공개 API
+
+[공개 계약 및 검증](../work/supervisor-composition-api.md)의 `/api/supervisor/core/composition` 세 경로를 사용한다. 기존 단독 Plan/Consent를 조합 동의로 재사용하지 않는다. 서버가 검증한 조건 없는 단일 종목·명시 자식 입력·서버 정책 및 두 관점 부분 결과 동의를 별도 계획 해시에 결합한다. 기존 내부 v1 읽기와 v2 runtime 및 개별 비용 원장은 유지한다. 기본 off이며 실제 공급자 활성화 승인이 아니다.

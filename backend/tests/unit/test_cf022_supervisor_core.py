@@ -669,3 +669,117 @@ def test_composition_projection_revision_is_additive_and_populated_downgrade_clo
     commands.clear();monkeypatch.setattr(module.op,'get_bind',lambda:NS(execute=lambda q:NS(scalar=lambda:True)))
     with pytest.raises(RuntimeError,match='^Composition history retained$'):module.downgrade()
     assert len(commands)==1 and commands[0].startswith('LOCK TABLE')
+
+# Composition public planning remains separate from native Flow/Technical consent.
+def composition_api_fixture(monkeypatch):
+    from src.modules.supervisor.application import composition_api_service as A
+    from src.modules.supervisor.application.service import SupervisorService
+    C,root,session,clock,rows=composition_service_fixture(monkeypatch)
+    monkeypatch.setattr(A,'validate_principal',AsyncMock())
+    client=AIClient('http://synthetic.invalid',8,httpx.ASGITransport(app=APP),service_token=TOKEN)
+    planner=SupervisorService(session,principal=root.principal,client=client,resolver_factory=root.resolver_factory)
+    api=A.CompositionAPIService(session,principal=root.principal,planner=planner,
+        flow_policy=lambda:composition_snapshot(projected=True).data()['flow_policy'],
+        technical_configuration=lambda:technical_configuration(),enabled=True)
+    return A,api,root,session,clock,rows
+
+
+@pytest.mark.parametrize('query,views',[('삼성전자 수급',['flow']),('삼성전자 차트',['technical']),('삼성전자 수급과 차트',['flow','technical'])])
+async def test_composition_public_server_plan_native_inputs_hash_and_partial_consent(monkeypatch,query,views):
+    from src.modules.supervisor.domain import composition_api as C
+    A,api,root,session,clock,rows=composition_api_fixture(monkeypatch)
+    d=B.Draft.model_validate(draft(query).model_dump(mode='json'))
+    plan=await api.prepare(d,uuid4(),deadline=clock.mono+15)
+    assert plan['status']=='ready' and plan['selected_views']==views and not rows
+    assert plan['required_consent']==dict(allow_views=views,allow_partial_results=len(views)==2,waived_conditions=[])
+    assert 'technical_configuration' not in plan and 'flow_policy' not in plan
+    assert plan['maximum_reserved_nano']==sum(plan['reservation_caps_nano'].values())
+    if 'technical' in views:assert plan['technical_configuration_sha256']==technical_configuration().fingerprint
+    if 'technical' in views:assert plan['child_inputs']['technical']['original_query']=='005930 차트'
+    if 'flow' in views:assert plan['child_inputs']['flow']['question']==query
+    body=C.Confirm(client_key=str(uuid4()),draft=d,expected_plan_hash=plan['plan_hash'],consent=C.Consent(**plan['required_consent']))
+    snapshot=await api._snapshot(d,uuid4(),clock.mono+15);C.confirms(body,snapshot)
+    changed=body.model_copy(update={'expected_plan_hash':'f'*64})
+    with pytest.raises(ValueError):C.confirms(changed,snapshot)
+    raw=body.model_dump(mode='json');raw['frame']=plan['frame']
+    with pytest.raises(ValueError):C.Confirm.model_validate(raw)
+    raw=body.model_dump(mode='json');raw['consent']['allow_views']=list(reversed(views))+['news']
+    with pytest.raises(ValueError):C.Confirm.model_validate(raw)
+
+
+@pytest.mark.parametrize('query',['삼성전자 어제 수급과 차트','삼성전자와 SK하이닉스 수급과 차트','종목 차트','삼성전자 뉴스','현대건설 차트'])
+async def test_composition_conditions_ambiguity_unknown_name_cannot_be_projected_away(monkeypatch,query):
+    A,api,root,session,clock,rows=composition_api_fixture(monkeypatch)
+    result=await api.prepare(B.Draft.model_validate(draft(query).model_dump(mode='json')),uuid4(),deadline=clock.mono+15)
+    assert result['status']=='needs_clarification' and result['plan_hash'] is None and not rows
+
+
+async def test_composition_replay_ignores_disabled_config_and_never_reconstructs_execution(monkeypatch):
+    from src.modules.supervisor.domain import composition_api as C
+    A,api,root,session,clock,rows=composition_api_fixture(monkeypatch)
+    snapshot=composition_snapshot('삼성전자 수급',projected=True);key=str(uuid4())
+    first=await root.admit(key,snapshot,request_started_at=clock.now)
+    body=C.Confirm(client_key=key,draft=B.Draft.model_validate(snapshot.data()['draft']),expected_plan_hash=C.plan(snapshot)['plan_hash'],consent=C.Consent(**snapshot.data()['consent']))
+    api.enabled=False;api.planner.exchange=AsyncMock(side_effect=AssertionError('No replay AI'))
+    api.flow_policy=lambda:(_ for _ in ()).throw(AssertionError('No replay policy'))
+    api.technical_configuration=api.flow_policy;api.flow_client=api.flow_policy;api.technical_client=api.flow_policy
+    monkeypatch.setattr(A.CompositionRuntime,'execute_once',AsyncMock(side_effect=AssertionError('No replay runtime')))
+    result=await api.confirm(body,uuid4(),started_at=clock.now,deadline=clock.mono+15)
+    assert result['composition_id']==str(first.id) and result['views'][0]['result'] is None
+    assert rows[first.id].claimed_at is None and len(rows)==1
+    changed=body.model_copy(update={'expected_plan_hash':'f'*64})
+    with pytest.raises(A.CoreError) as error:await api.confirm(changed,uuid4(),started_at=clock.now,deadline=clock.mono+15)
+    assert error.value.code=='IDEMPOTENCY_CONFLICT'
+
+
+@pytest.mark.parametrize('path,method,body,headers',[
+    ('/api/supervisor/core/composition/requests/anything','GET',None,[]),
+    ('/api/supervisor/core/composition/prepare/','POST',{},[]),
+    ('/api/supervisor/core/composition/prepare','DELETE',None,[]),
+    ('/api/supervisor/core/composition/prepare','POST',{},[(b'content-encoding',b'gzip')]),
+    ('/api/supervisor/core/composition/prepare','POST',{},[(b'content-type',b'application/json')]),
+    ('/api/supervisor/core/composition/prepare','POST',{'original_query':'x'*17000},[]),
+])
+async def test_composition_exact_boundary_rejects_before_handler(monkeypatch,path,method,body,headers):
+    from src.modules.supervisor.api.composition_router import boundary
+    from src.modules.auth.api import router as auth
+    monkeypatch.setattr(auth,'configured',lambda:True)
+    downstream=AsyncMock();messages=[];payload=json.dumps(body or {}).encode()
+    scope=dict(type='http',method=method,path=path,raw_path=path.encode(),query_string=b'',headers=[(b'content-type',b'application/json')]+headers)
+    async def send(message):messages.append(message)
+    await boundary(downstream,scope,AsyncMock(return_value=dict(type='http.request',body=payload,more_body=False)),send)
+    assert downstream.await_count==0 and messages[0]['status']==422
+    assert scope['state']['composition_admission_deadline']<=scope['state']['composition_deadline']
+
+
+def test_composition_access_prefix_is_additive_and_old_public_boundary_is_identical():
+    from src.shared.http.access_boundary import AccessBoundary
+    tree=ast.parse(Path(sys.modules[AccessBoundary.__module__].__file__).read_text())
+    klass=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='AccessBoundary')
+    fn=next(n for n in klass.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='__call__')
+    nodes=[n for n in fn.body if isinstance(n,ast.If) and ast.unparse(n.test)=="path == '/api/supervisor/core/composition' or path.startswith('/api/supervisor/core/composition/')"]
+    assert len(nodes)==1 and hashlib.sha256(ast.dump(nodes[0],include_attributes=False).encode()).hexdigest()=='41f7ecf194a03f148a1450562b88389224d6f8981da0d999e84f457a3b3c9498'
+
+
+@pytest.mark.parametrize('size,status',[(240000,200),(2200000,502)])
+async def test_composition_large_owned_payload_uses_only_its_endpoint_limit(size,status):
+    from fastapi import FastAPI
+    from src.modules.supervisor.api import composition_router as R
+    from src.modules.supervisor.api.router import router as core_router
+    app=FastAPI();app.include_router(core_router)
+    payload=dict(composition_id=str(uuid4()),coverage='fulfilled',views=[dict(view='technical',state='stored',result={'charts':[{'bounded_fixture':'x'*size}]})])
+    app.dependency_overrides[R.service]=lambda:NS(get=AsyncMock(return_value=payload))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://backend') as client:
+        result=await client.get(R.PATH+'/requests/'+payload['composition_id'])
+    assert result.status_code==status and result.headers['cache-control']=='private, no-store'
+    if status==200:assert result.json()['data']==payload and len(result.content)>65536
+    else:assert result.json()['error']['code']=='RESULT_CONTRACT_INVALID' and result.json()['data'] is None
+
+
+def test_composition_technical_public_DTO_excludes_internal_authority_and_usage():
+    from src.modules.supervisor.domain.composition_api import technical_result,TechnicalResult
+    raw=dict(ticker='005930',as_of='2026-11-13T00:00:00Z',data_status='normal',regime={},signal=None,
+        technical_signals=[],risk=None,charts=[],interpretation={},verification={},
+        request_snapshot={'private':'not public'},execution_control={'private':'not public'},provider_usage={'private':'not public'},trace_id='internal')
+    output=technical_result(raw)
+    assert set(output)==set(TechnicalResult.model_fields) and 'private' not in json.dumps(output)

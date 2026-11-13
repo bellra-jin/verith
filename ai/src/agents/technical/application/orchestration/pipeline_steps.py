@@ -413,7 +413,7 @@ def _emit_validation(trace: TraceLogger, attempt: _Attempt, attempt_idx: int) ->
         output_summary={
             "attempt": attempt_idx,
             "validation_result": "passed" if ev.passed else "failed",
-            "label_matched": not ev.interpretation_failed,
+            "label_matched": ev.passed,
             "interpretation_failed": ev.interpretation_failed,
             "details_structure_failed": ev.details_structure_failed,
             "failed_indicators": sorted(ev.failed_indicators),  # 지표명만(원문 없음)
@@ -489,7 +489,7 @@ def _granular_fallback(
         failed_indicators=ev.failed_indicators)
     verification = VerificationResult(
         calc_passed=True, regime_passed=True,
-        label_matched=not ev.interpretation_failed,
+        label_matched=ev.passed,
         outcome=VerificationOutcome.TEMPLATE_FALLBACK, regen_count=regen_count,
     )
     return _Interpretation(interpretation, details, verification)

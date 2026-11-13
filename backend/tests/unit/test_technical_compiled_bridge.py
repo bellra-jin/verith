@@ -26,8 +26,17 @@ FORBIDDEN = ('openai','langchain_openai','redis','src.api','src.main',
              'src.agents.fundamental','src.agents.industry','src.agents.news',
              'src.shared.config','sqlalchemy','asyncpg')
 ATTEMPTS = []
+# Only the fixed SDK wire regression below may import the already snapshotted
+# SDK package, on its own thread, while OS file/network/process guards remain.
+_SDK_TEST_SCOPE = threading.local()
 class ImportSentinel(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
+        sdk_root=getattr(_SDK_TEST_SCOPE,'root',None)
+        if sdk_root is not None and (fullname=='openai' or fullname.startswith('openai.')):
+            spec=importlib.machinery.PathFinder.find_spec(fullname,path)
+            if spec is None or spec.origin is None or not Path(spec.origin).resolve().is_relative_to(sdk_root):
+                raise AssertionError('Pinned SDK source origin rejected')
+            return spec
         if any(fullname == name or fullname.startswith(name+'.') for name in FORBIDDEN):
             ATTEMPTS.append(fullname)
             raise AssertionError('External capability import prohibited')
@@ -62,7 +71,7 @@ for suffix in ('domain.observation_window','domain.verification.consecutive',
 os.environ.update(INTRADAY_FETCH_ENABLED='false',TECHNICAL_TRACE_ENABLED='false',
                   LANGCHAIN_TRACING_V2='false',LANGSMITH_TRACING='false')
 from src.agents.technical import config
-snapshot=config.initialize_runtime()
+snapshot=config.initialize_runtime(settings=config.RuntimeSettings(False,False,str(Path(os.environ['TMPDIR'])/'unused-technical-trace.jsonl')))
 assert snapshot.intraday_fetch_enabled is False and snapshot.trace_enabled is False
 namespace('tests',ROOT/'backend/tests')
 namespace('tests.technical',ROOT/'ai/tests/technical')
@@ -193,7 +202,7 @@ def cf051_selected():
 
 ADAPTER_FIXTURES=cf051_selected()
 
-def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_remaining=None):
+def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_remaining=None,fetcher_stop=None,data_fetcher=None):
     req=request();ids=[str(uuid4()) for _ in range(6)];req['request_id'],req['trace_id']=ids[:2]
     req['data']['context'].update(dict(zip(('analysis_id','admission_request_id','attempt_id','report_id'),ids[2:])))
     now=datetime.now(UTC);req['data']['requested_as_of']=now.isoformat()
@@ -245,7 +254,7 @@ def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_rema
         body=await request.json();observations.append(body)
         return JSONResponse({'schema_version':P.SCHEMA,'recorded':True,'analysis_id':body['analysis_id'],'evidence_sha256':body['evidence_sha256']})
     authority=ExecutionAuthorityClient(origin=cfg.data()['authority_origin'],token='b'*32,transport=httpx.ASGITransport(app=app))
-    options=ExecutionOptions(cfg,'a'*32,'b'*32,credential,fetcher,None,None)
+    options=ExecutionOptions(cfg,'a'*32,'b'*32,credential,data_fetcher or fetcher,None,None,fetcher_stop=fetcher_stop)
     instance=TechnicalProviderRuntime(options,agent_module=actual_agent,steps_module=actual_steps,llm_module=llm,authority=authority)
     return SimpleNamespace(instance=instance,value=value,events=events,observations=observations,starts=starts,budgets=budgets,credentials=credentials,helper=helper,cfg=cfg,start_anchors=start_anchors)
 
@@ -267,7 +276,7 @@ async def test_CF053_actual_graph_one_start_one_budget_all_nodes_and_independent
 
 @pytest.mark.parametrize('actual_task',[False,True])
 async def test_CF053_cancel_closes_pending_budget_now_but_retains_physical_slot_and_bundle(actual_task):
-    paused=threading.Event();release=threading.Event();h=execution_fixture(pause=(paused,release))
+    paused=threading.Event();release=threading.Event();stopped=threading.Event();h=execution_fixture(pause=(paused,release),fetcher_stop=stopped)
     waiter=asyncio.create_task(h.instance.execute(h.value,'f'*64))
     try:
         for _ in range(1000):
@@ -279,7 +288,7 @@ async def test_CF053_cancel_closes_pending_budget_now_but_retains_physical_slot_
         for _ in range(100):
             if h.budgets[0].closed_reason:break
             await asyncio.sleep(.001)
-        assert h.budgets[0].closed_reason is not None
+        assert h.budgets[0].closed_reason is not None and stopped.is_set()
         assert runtime._ACTIVE_TASK is task and 'client' not in h.helper.closed
         with pytest.raises(runtime.BoundaryBusy):await runtime.controlled_slot(lambda:None,remaining=1,close_pending=lambda:None)
     finally:
@@ -378,3 +387,240 @@ async def test_CF053_start_DB_remaining_only_narrows_original_monotonic_deadline
     assert h.budgets[0]._monotonic_deadline<=h.start_anchors[0]+20
     assert h.value['control']['deadline_at']==(P.stamp(h.value['control']['started_at'])+timedelta(seconds=60)).isoformat()
     assert len(h.events)==8 and len(h.observations)==1
+
+
+@pytest.mark.parametrize('field',['one_line_summary','trend_interpretation','signal_interpretation',
+    'risk_interpretation','timeframe_alignment','what_to_watch_next','invalidation_or_caution',
+    'key_drivers','warning_points'])
+async def test_explanation_failed_summary_section_never_survives_final_fallback(field):
+    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    bad[field]=['금지된 매수 문장'] if field in {'key_drivers','warning_points'} else '금지된 매수 문장'
+    llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK]+[json.dumps(bad,ensure_ascii=False)]*2)
+    req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req)
+    contract.validate_response(result,req);out=result['data']['result']
+    assert '금지된 매수 문장' not in json.dumps(out,ensure_ascii=False)
+    assert out['interpretation']['source']=='template_fallback'
+    assert out['verification']['outcome']=='template_fallback' and out['verification']['label_matched'] is False
+    assert out['verification']['regen_count']==1 and len(llm.prompts)==4
+    assert all(item['detail_source']=='llm_regenerated' for item in out['technical_signals'])
+    confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
+    assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+
+
+@pytest.mark.parametrize('field',['detail_reason','detail_caution','detail_watchpoint'])
+@pytest.mark.parametrize('bad_kind',['forbidden','conflict'])
+async def test_explanation_bad_additive_detail_is_replaced_and_verification_reflects_failure(field,bad_kind):
+    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    first=bad['details'][0];code=first['indicator']
+    first[field]='금지된 매수 문장' if bad_kind=='forbidden' else ('부정 약세' if '긍정' in first['detail'] else '강한 긍정')
+    raw=json.dumps(bad,ensure_ascii=False);llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK,raw,raw]);req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req);out=result['data']['result']
+    selected=next(item for item in out['technical_signals'] if item['indicator']==code)
+    assert selected['detail_source']=='template_fallback' and selected[field]!=first[field]
+    assert out['interpretation']['source']=='llm_regenerated'
+    assert out['verification']['label_matched'] is False and out['verification']['outcome']=='template_fallback'
+    confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
+    assert len(llm.prompts)==4 and runtime._ACTIVE_TASK is None
+
+
+@pytest.mark.parametrize('field',['indicator','detail','detail_reason','detail_caution','detail_watchpoint'])
+@pytest.mark.parametrize('value',[123,True,{'unsafe':'not a string'},['not a string']])
+def test_explanation_detail_fields_are_never_coerced_from_other_types(field,value):
+    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY));bad['details'][0][field]=value
+    with pytest.raises(st.interp.LlmOutputParseError):st.interp.parse_llm_output(json.dumps(bad))
+
+
+@pytest.mark.parametrize('direction',['positive','negative'])
+def test_explanation_fallback_does_not_describe_positive_signals_as_a_downturn_in_every_regime(direction):
+    from src.agents.technical.domain.models.contracts import RegimeResult,SignalSummary
+    from src.agents.technical.domain.models.enums import Regime,Trend,AlignmentFlag,Consensus,ConfidenceLevel,Signal,IndicatorType
+    from src.agents.technical.domain.synthesis.signal_score import IndicatorSignalResult
+    signal=SignalSummary(consensus=Consensus.WEAK_POSITIVE,signal_score=.3,confidence=.42,confidence_level=ConfidenceLevel.MEDIUM,confidence_basis='synthetic')
+    chosen=Signal(direction)
+    signals=[IndicatorSignalResult(IndicatorType.MOVING_AVERAGE,chosen,100.0,['5MA 100.0'],.3)]
+    for final in Regime:
+        if final==Regime.UNAVAILABLE:continue
+        regime=RegimeResult(final_regime=final,daily_regime=final,weekly_trend=Trend.UP,monthly_trend=Trend.UP,alignment_flag=AlignmentFlag.NEUTRAL,regime_context='synthetic')
+        text=st.interp.fallback_interpretation(regime=regime,signal=signal,signals=signals,risks=[]).text
+        assert '하락 압력을 다소 완화' not in text and '방향 전환 확정으로 보기엔 이른' not in text
+        assert '추세 복원 신호가 아직 충분하지' not in text
+        assert st.interp.SIGNAL_LABELS[chosen]+' 신호' in text and st.interp.REGIME_LABELS[final] in text
+
+
+@pytest.mark.parametrize('regenerate',[False,True])
+@pytest.mark.parametrize('optional',['text',None,''])
+async def test_explanation_safe_additive_fields_and_successful_regeneration_keep_LLM(regenerate,optional):
+    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    good['one_line_summary']='확정된 기술적 상태를 참고합니다.'
+    for entry in good['details']:
+        entry.update(detail_reason='확정된 지표 수치를 기준으로 설명합니다.',
+            detail_caution='한 지표로 방향을 단정하지 않습니다.',detail_watchpoint='거래량과 지표 변화를 관찰합니다.')
+        if optional!='text':entry.update(detail_reason=optional,detail_caution=optional,detail_watchpoint=optional)
+    raw=json.dumps(good,ensure_ascii=False);responses=[st.NORM_OK,st.FOCUS_OK]
+    if regenerate:
+        bad=dict(good,one_line_summary='금지된 매수 문장');responses.append(json.dumps(bad,ensure_ascii=False))
+    responses.append(raw);llm=st.ScriptedLlm(responses);req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req);out=result['data']['result']
+    assert out['interpretation']['source']==('llm_regenerated' if regenerate else 'llm')
+    assert out['interpretation']['one_line_summary']==good['one_line_summary']
+    assert all(item['detail_source']==out['interpretation']['source'] for item in out['technical_signals'])
+    assert out['verification']['outcome']=='passed' and out['verification']['label_matched'] is True
+    assert all(type(item[field]) is str and item[field] for item in out['technical_signals'] for field in ('detail_reason','detail_caution','detail_watchpoint'))
+    assert out['verification']['regen_count']==int(regenerate) and len(llm.prompts)==3+int(regenerate)
+    assert runtime._ACTIVE_TASK is None
+
+
+@pytest.mark.parametrize('case',['call_error','parse_error','both_failed'])
+async def test_explanation_existing_full_fallback_and_combined_failure_keep_original_limits(case):
+    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY));sentinel='cf055-synthetic-exception-never-serialized'
+    if case=='call_error':responses=[RuntimeError(sentinel)]
+    elif case=='parse_error':responses=['{','{']
+    else:
+        good['one_line_summary']='금지된 매수 문장';good['details'][0]['detail_reason']='금지된 매수 문장'
+        raw=json.dumps(good,ensure_ascii=False);responses=[raw,raw]
+    llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK]+responses);req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req);out=result['data']['result']
+    assert sentinel not in json.dumps(out,ensure_ascii=False) and '금지된 매수 문장' not in json.dumps(out,ensure_ascii=False)
+    assert out['interpretation']['source']=='template_fallback'
+    assert out['verification']['label_matched'] is False and out['verification']['outcome']=='template_fallback'
+    assert out['verification']['regen_count']==(0 if case=='call_error' else 1)
+    assert len(llm.prompts)==(3 if case=='call_error' else 4)
+    if case=='both_failed':
+        bad_code=good['details'][0]['indicator']
+        assert all(x['detail_source']==('template_fallback' if x['indicator']==bad_code else 'llm_regenerated') for x in out['technical_signals'])
+    else:assert all(x['detail_source']=='template_fallback' for x in out['technical_signals'])
+    confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
+    assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+
+
+async def test_runtime_first_cancel_closes_same_KIS_event_before_physical_fetch_finishes():
+    import httpx
+    from types import SimpleNamespace
+    env,_,_=ADAPTER_FIXTURES.explicit_kis_slices()
+    settings=ADAPTER_FIXTURES.COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid:9443')
+    stopped=threading.Event();paused=threading.Event();release=threading.Event();blocked=threading.Event();sent=[]
+    hook,observed=env['kis_request_gate'](settings=settings,ticker=st.TICKER,deadline=SimpleNamespace(remaining_seconds=lambda:30),
+        stopped=stopped,token_limit=3,market_limit=30)
+    def fetcher(ticker,*,end_date=None):
+        with httpx.Client(transport=httpx.MockTransport(lambda r:(sent.append(r),httpx.Response(200,json={}))[1]),
+                          trust_env=False,follow_redirects=False,event_hooks={'request':[hook]}) as client:
+            client.post(settings.base_url+env['TOKEN_PATH'])
+            paused.set();assert release.wait(3)
+            try:client.post(settings.base_url+env['TOKEN_PATH'])
+            except ValueError:blocked.set();raise
+        raise AssertionError('Cancelled KIS request must not continue')
+    h=execution_fixture(fetcher_stop=stopped,data_fetcher=fetcher)
+    waiter=asyncio.create_task(h.instance.execute(h.value,'f'*64))
+    try:
+        for _ in range(1000):
+            if paused.is_set():break
+            await asyncio.sleep(.001)
+        assert paused.is_set() and runtime._ACTIVE_TASK is not None
+        # Normalize/focus precede market collection in the real graph. Preserve
+        # those already-observed calls; only forbid additional calls on cancel.
+        prior_calls=len(h.events)
+        assert prior_calls==4
+        task=runtime._ACTIVE_TASK;task.cancel()
+        for _ in range(100):
+            if stopped.is_set():break
+            await asyncio.sleep(.001)
+        assert stopped.is_set() and runtime._ACTIVE_TASK is task and not release.is_set()
+        assert h.budgets[0].closed_reason is not None
+    finally:
+        release.set()
+        try:await waiter
+        except (asyncio.CancelledError,P.ExecutionInvalid):pass
+        for _ in range(1000):
+            if runtime._ACTIVE_TASK is None:break
+            await asyncio.sleep(.001)
+    assert runtime._ACTIVE_TASK is None and blocked.is_set()
+    assert observed()=={'token':1,'market':0} and len(sent)==1 and len(h.events)==prior_calls
+
+
+@pytest.mark.parametrize('case',['provider_cookie','forbidden_header'])
+async def test_pinned_real_SDK_cookie_wire_and_wrapped_denial_under_existing_OS_guard(case):
+    """Real installed/pinned SDK serialization; only inner HTTP is synthetic.
+
+    No socket, env credential, DB, or SDK retry capability is granted. The
+    source/dependency snapshots and existing OS canaries still apply.
+    """
+    def exercise():
+        import importlib
+        from scripts.check_safe import GRAPH_DISTRIBUTIONS
+        assert not any(n=='openai' or n.startswith('openai.') for n in sys.modules)
+        before=set(sys.modules);attempts=list(ATTEMPTS)
+        spec=importlib.machinery.PathFinder.find_spec('openai')
+        assert spec is not None and spec.origin is not None
+        sdk_root=Path(spec.origin).resolve().parent
+        assert sdk_root.name=='openai' and not sdk_root.is_relative_to(ROOT)
+        _SDK_TEST_SCOPE.root=sdk_root
+        adapter=None;mock=None
+        try:
+            sdk=importlib.import_module('openai')
+            assert sdk.__version__==GRAPH_DISTRIBUTIONS['openai']=='2.44.0'
+            assert Path(sdk.__file__).resolve().parent==sdk_root
+            # SDK platform.platform() can invoke native processor discovery.
+            # Supply only that SDK module's header metadata as a fixed input;
+            # never patch stdlib platform or permit its probe/process/file I/O.
+            base=importlib.import_module('openai._base_client')
+            base.platform=SimpleNamespace(system=lambda:'Darwin',platform=lambda:'Darwin-keyless-fixed',
+                machine=lambda:'arm64',python_implementation=lambda:'CPython',
+                python_version=lambda:'3.12.13')
+            helper=ADAPTER_FIXTURES.strict_adapter(counter=False,calls=1)
+            helper.a.update(openai=sdk,httpx=httpx,time=time,os=os,logging=__import__('logging'))
+            provenance=hashlib.sha256((sdk_root/'resources/responses/input_tokens.py').read_bytes()).hexdigest()
+            adapter=helper.a['official_count_openai_client'](request_budget=helper.budget,
+                api_key='keyless-fixed-SDK-regression',request_wire_cap=4096,count_wire_cap=1024,
+                generation_wire_cap=4096,count_version='openai.2.44.0.keyless',
+                count_provenance_sha256=provenance,timeout=30)
+            bundle=helper.budget._official_bundle;sent=[]
+            def respond(request):
+                assert 'Cookie' not in request.headers
+                sent.append(request.url.path)
+                if request.url.path.endswith('/input_tokens'):
+                    if case=='forbidden_header':bundle.sdk._custom_headers['Cookie']=ADAPTER_FIXTURES.PRIVATE
+                    return httpx.Response(200,headers={'Set-Cookie':'verith_synthetic=not-secret; Secure; Path=/'},
+                        json={'object':'response.input_tokens','input_tokens':12})
+                return httpx.Response(200,json={'id':'resp_keyless','object':'response','created_at':1,
+                    'model':'synthetic-model','service_tier':'default','status':'completed',
+                    'output':[{'type':'message','id':'msg_keyless','role':'assistant','status':'completed',
+                        'content':[{'type':'output_text','text':'keyless result','annotations':[]}]}],
+                    'usage':{'input_tokens':12,'output_tokens':3,'total_tokens':15}})
+            mock=httpx.MockTransport(respond)
+            # Keep the captured inner object identity and every original outer
+            # check; replace only its final I/O method with MockTransport.
+            bundle.inner.handle_request=mock.handle_request
+            if case=='provider_cookie':
+                assert adapter.complete('synthetic fixed SDK prompt')=='keyless result'
+                row,=helper.budget.snapshot()
+                assert row.count_validated and row.entered and row.text_accepted and row.usage==(12,3,15)
+                assert sent==['/v1/responses/input_tokens','/v1/responses']
+            else:
+                with pytest.raises(helper.a['LlmCallError']) as error:adapter.complete('synthetic fixed SDK prompt')
+                assert str(error.value)=='TECHNICAL_LLM_HTTP_INVALID'
+                assert ADAPTER_FIXTURES.PRIVATE not in str(error.value) and error.value.__suppress_context__
+                row,=helper.budget.snapshot()
+                assert row.count_validated and not row.entered and row.reason=='HTTP_INVALID' and row.held_nano==2000
+                with pytest.raises(helper.a['LlmCallError']):adapter.complete('again')
+                assert sent==['/v1/responses/input_tokens']
+            assert not list(bundle.client.cookies.jar) and bundle.sdk.max_retries==0
+            assert ATTEMPTS==attempts
+        finally:
+            if adapter is not None:adapter.close()
+            if mock is not None:mock.close()
+            _SDK_TEST_SCOPE.root=None
+            for name in set(sys.modules)-before:
+                if name=='openai' or name.startswith('openai.'):sys.modules.pop(name,None)
+        assert not any(n=='openai' or n.startswith('openai.') for n in sys.modules)
+    await asyncio.to_thread(exercise)
+    assert not ATTEMPTS and runtime._ACTIVE_TASK is None

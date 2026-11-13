@@ -375,7 +375,10 @@ def _interpret(
                 # never echo the rejected candidate or its arbitrary info.
                 payload = dict(payload, validation_feedback=(
                     trajectory_eval.diagnostic_codes(last.result) if last is not None and last.result is not None
-                    else [{"target": "output", "reason": "parse_failed"}]))
+                    else [{"target": "output", "reason": "parse_failed"}]),
+                    validation_repair_guidance=(interp.repair_guidance(last.result, signals=signals)
+                        if last is not None and last.result is not None else
+                        [{"target":"output", "reason":"parse_failed", "instruction":"허용된 전체 출력 JSON만 작성하고 입력 전용 필드나 코드 확정값 필드를 반환하지 않습니다."}]))
                 trace.emit("retry", node="interpret_report",
                            output_summary={"attempt": i, "reason": "verification_failed"})
             attempt = _attempt(client, name, payload,

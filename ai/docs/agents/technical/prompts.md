@@ -139,13 +139,26 @@ Prompt 10은 이미 확정된 값을 **입력으로 받아 문장만 반환**한
 
 > `daily_regime`·`weekly_trend`·`monthly_trend`·`alignment_flag`를 입력에 명시하는 이유: LLM은 라벨을 만들지 않지만, 코드가 확정한 멀티프레임 맥락을 문장으로 풀려면 이 값들이 입력에 있어야 한다. 특히 검증 ③은 `alignment_flag=counter_trend`인데 해석이 역행 맥락을 누락하면 실패시키므로, LLM이 `regime_context`만 보고 추론하게 두지 않고 `alignment_flag`를 직접 준다.
 
-**출력:** (문장만. 확정 필드를 되돌려주지 않는다.)
+**출력:** 최초·재생성 모두 같은 구조화 필드를 사용한다. 아래는 위 축약 입력의 설명 형태이며,
+실제 요청에는 `build_payload`가 현재 확정값에서 만든 `validated_output_example`을 함께 준다.
+이 예시는 기존 parser와 validator를 통과할 때만 제공하며, 통과 불가이면 null이다. 예시는 입력 전용이며
+출력 필드를 늘리지 않는다. 실제 모델이 이를 따른다는 보장은 아니다.
+
 ```json
 {
-  "interpretation_text": "현재 차트는 상위 추세가 상승인 가운데 일봉 기준 단기 과열 신호가 관찰됩니다. 다만 거래량 확인이 약하고 일부 신호가 엇갈려 신호 강도는 제한적으로 해석됩니다.",
+  "interpretation_text": "전체 판단: 단기 과열과 약한 긍정 신호가 관찰됩니다. 정합/역행 판정 대상 아님으로 구분합니다. 주의할 점: 거래량 확인의 한계가 있습니다. 다음 관찰 기준: 국면의 유지와 거래량 동반을 관찰합니다. 기술적 지표 기반 참고 정보입니다.",
+  "one_line_summary": "단기 과열 · 약한 긍정",
+  "trend_interpretation": "현재 국면은 단기 과열로 분류됩니다.",
+  "signal_interpretation": "종합 신호는 약한 긍정입니다. confidence는 현재 지표의 규칙 기반 근거 점수이며 상승 확률·예측 정확도가 아닙니다.",
+  "risk_interpretation": "거래량 확인이 약하므로 개별 신호의 지속을 단정하기 어렵습니다.",
+  "timeframe_alignment": "주봉과 월봉은 오름 방향이며 정합/역행 판정 대상 아님으로 구분됩니다.",
+  "key_drivers": ["이동평균 긍정"],
+  "warning_points": ["거래량 확인 약함"],
+  "what_to_watch_next": "국면의 유지와 거래량 동반을 관찰합니다.",
+  "invalidation_or_caution": "데이터나 상위 추세 조건이 바뀌면 현재 해석은 유효하지 않을 수 있습니다.",
   "details": [
-    { "indicator": "moving_average", "detail": "20일선이 60일선을 상향 돌파해 이동평균선 기준으로는 긍정 신호가 관찰됩니다." },
-    { "indicator": "rsi", "detail": "RSI는 58.2로 과매수·과매도 어느 쪽도 아닌 중립 구간입니다." }
+    {"indicator": "moving_average", "detail": "이동평균은 긍정 신호입니다.", "detail_reason": "현재 확정된 배열과 가격 위치 조건을 설명합니다.", "detail_caution": "후행 지표이므로 단독으로 방향을 단정하지 않습니다.", "detail_watchpoint": "배열의 지속 여부와 거래량 동반을 관찰합니다."},
+    {"indicator": "rsi", "detail": "RSI는 중립 신호입니다.", "detail_reason": null, "detail_caution": "이 지표만으로 전체 방향을 단정하지 않습니다.", "detail_watchpoint": "모멘텀의 변화와 다른 지표의 관계를 관찰합니다."}
   ]
 }
 ```
@@ -215,10 +228,12 @@ Prompt 10 출력 → 검증 ③ 코드 검사 → 실패
 새로운 라벨·수치·매수/매도 표현을 만들지 마세요.
 ```
 
-**재생성 출력 형식은 본 Prompt 10과 동일:**
-```json
-{ "interpretation_text": "...", "details": [ { "indicator": "...", "detail": "..." } ] }
-```
+**재생성 출력 형식은 본 Prompt 10의 위 전체 JSON과 동일하다.** 구조화 섹션을 생략한 별도
+축약 형식을 지시하지 않는다. `validation_feedback`은 제한된 target/reason 코드이고,
+`validation_repair_guidance`는 그 코드와 확정 signal에서 만든 수정 지침이다. 숫자 제한·금지 표현·
+해당 라벨을 실패 유형별로 안내하며, 실패 후보 원문이나 임의 info를 입력에 되돌리지 않는다.
+코드가 만든 `whole_field_replacement`는 해당 필드 전체로 쓰거나 `may_omit=true`인 선택 필드만
+생략할 수 있다. 검증이나 호출 수를 늘리지 않는다.
 
 ---
 
@@ -256,3 +271,21 @@ Prompt 10 출력 → 검증 ③ 코드 검사 → 실패
 이 입력 역할 표를 출력 JSON에 되돌리지 않는다. 기존 출력 shape·라벨·금지/충돌 검사와 재생성1회/
 전체최대4호출을 유지한다. 정의와 숫자 역할 지시는 실제 모델 준수나 자유 문장 전체의 의미 검증
 완료를 뜻하지 않는다. 제한에 맞지 않는 문장은 기존 지표별/종합 블록 fallback으로 내린다.
+
+
+## 설명 계약의 범위와 예시
+
+`verify_expressions.must_avoid_scope=interpretation_text`는 전체 국면·종합 신호의 반대 표현을
+종합 본문에 한정한다. 개별 카드에는 `detail_must_avoid_by_indicator`의 해당 signal 규칙을 적용한다.
+예를 들어 강한 부정의 종합 본문에 ‘개별 긍정 기여:’라는 항목명을 강제하지 않으며, 긍정 캔들 신호는
+그 카드에서 설명한다. 금지 지시와 수치 검사는 모든 설명 필드에 계속 적용한다.
+
+정성 설명은 임의의 장문 확장이 목표가 아니다. optional detail_reason/caution/watchpoint는
+생략·null·빈 문자열일 때 기존 코드 문구로 채운다. numeric reference는 허용 watchpoint **필드 전체**로
+사용하며 설명을 덧붙이지 않는다. `detail_output_examples`는 현재 signal의 기존 계산 규칙을 설명하는
+입력 전용 예시다. `pattern`의 확정 신호는 현재 캔들의 양봉·음봉·도지이며 종합 계산에 포함된다.
+차트 annotation의 장기 패턴 후보와 구분한다. 수식·가중치·판정·공개 schema는 바꾸지 않는다.
+
+이 정합화는 유실된 실제 후보 문장의 원인을 확정하거나 자유 한국어 전체의 의미를 검증한 것이 아니다.
+숫자 없는 정상 정성 설명은 유지하지만, 제한을 지키기 어려운 선택 필드는 짧아지거나 코드 문구가
+표시될 수 있다. 최초·재생성은 동일한 출력 계약을 사용하며 재생성 1회/전체 최대 4호출을 유지한다.

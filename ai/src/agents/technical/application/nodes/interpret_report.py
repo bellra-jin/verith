@@ -149,6 +149,11 @@ def _verify_expressions(
         "detail_must_include_any_by_indicator": detail_by_indicator,  # 지표별 detail 에 signal 표현 포함
         "must_mention_risk_any": risk_mention_any,         # risk 있으면 이 중 1개 이상 언급
         "must_avoid": sorted(avoid),                       # 반대·모순 표현 금지
+        "must_avoid_scope": "interpretation_text",
+        "detail_must_avoid_by_indicator": {
+            s.indicator.value: list(SIGNAL_RULES[s.signal].conflict_any)
+            for s in signals if s.signal in SIGNAL_RULES
+        },
         "do_not_use_english_enum": True,                   # strong_negative/downtrend 등 영문 enum 서술 금지
     }
 
@@ -217,6 +222,9 @@ def build_payload(
         payload["focus_summary"] = focus_summary
     if data_status:
         payload["data_status"] = data_status
+    payload["detail_output_examples"] = _detail_output_examples(signals)
+    payload["validated_output_example"] = _validated_output_example(
+        regime=regime, signal=signal, signals=signals, risks=risks)
     return payload
 
 
@@ -595,8 +603,8 @@ _FALLBACK_DETAIL_HINTS: dict[str, tuple[str, str]] = {
         "**지지·저항 반응**과 **거래량 동반 돌파·이탈** 여부를 확인하세요.",
     ),
     "pattern": (
-        "패턴은 관찰용 후보이며 완성된 신호가 아닙니다. 방향 판정(신호 점수)에는 반영되지 않습니다.",
-        "**패턴 완성·확정 여부**와 **거래량 확인**을 이어서 관찰하세요.",
+        "현재 캔들 하나의 방향만으로 전체 추세를 확정하지 않습니다. 차트의 장기 패턴 후보와 구분합니다.",
+        "**현재 캔들 방향의 지속 여부**와 **거래량 확인**을 이어서 관찰하세요.",
     ),
 }
 
@@ -614,7 +622,7 @@ _FALLBACK_DETAIL_REASON: dict[str, str] = {
     "rsi": "RSI 값이 과매수·과매도 기준선 대비 어디에 있는지가 모멘텀 상태를 나타냅니다.",
     "volume": "거래량이 가격 움직임을 확인해 주는 수준인지가 신호 강도를 좌우합니다.",
     "support_resistance": "현재가가 지지·저항 구간 중 어디에 가까운지가 가격 반응 여부를 좌우합니다.",
-    "pattern": "최근 캔들 구조가 단기 방향의 힘을 나타내며, 패턴 후보는 관찰용입니다.",
+    "pattern": "현재 캔들의 몸통 방향을 요약한 확정 신호이며, 차트 annotation의 패턴 후보와 구분합니다.",
 }
 
 
@@ -653,3 +661,97 @@ def fallback_detail(indicator: IndicatorType, signal: Signal, metrics: Sequence[
         indicator.value, text, GenerationSource.TEMPLATE_FALLBACK,
         detail_reason=reason, detail_caution=caution, detail_watchpoint=watchpoint,
     )
+
+
+def _detail_output_examples(signals: Sequence[IndicatorSignalResult]) -> list[dict[str, str]]:
+    """Code-owned qualitative examples, not replacements for generated output."""
+    # Explain only facts entailed by the existing signal rules. Neutral does not
+    # imply missing data (in particular, a neutral candle is a doji).
+    reasons = {
+        IndicatorType.MOVING_AVERAGE: {
+            Signal.POSITIVE: "현재가와 단기 이동평균이 중기 이동평균 위에 있는 구조입니다.",
+            Signal.NEGATIVE: "현재가와 단기 이동평균이 중기 이동평균 아래에 있는 구조입니다.",
+            Signal.NEUTRAL: "현재가와 이동평균 배열이 같은 방향 조건을 함께 충족하지 않습니다.",
+        },
+        IndicatorType.RSI: {
+            Signal.POSITIVE: "RSI가 중앙 기준 위에 있으며 극단 구간에는 해당하지 않습니다.",
+            Signal.NEGATIVE: "RSI가 중앙 기준 아래에 있으며 극단 구간에는 해당하지 않습니다.",
+            Signal.NEUTRAL: "RSI의 중앙 또는 극단 구간은 단독 방향 신호로 해석하지 않습니다.",
+        },
+        IndicatorType.VOLUME: {
+            Signal.POSITIVE: "가격의 오름과 함께 기준 이상의 거래량이 관찰됩니다.",
+            Signal.NEGATIVE: "가격의 내림과 함께 기준 이상의 거래량이 관찰됩니다.",
+            Signal.NEUTRAL: "가격과 거래량의 결합에서 방향을 확인하는 조건이 충족되지 않습니다.",
+        },
+        IndicatorType.SUPPORT_RESISTANCE: {
+            Signal.POSITIVE: "현재가가 지지 구간에 가까우며 양쪽 구간에 동시에 근접하지는 않습니다.",
+            Signal.NEGATIVE: "현재가가 저항 구간에 가까우며 양쪽 구간에 동시에 근접하지는 않습니다.",
+            Signal.NEUTRAL: "지지 또는 저항 한쪽에만 근접한 방향 조건에 해당하지 않습니다.",
+        },
+        IndicatorType.PATTERN: {
+            Signal.POSITIVE: "현재 캔들이 양봉으로 분류된 결과이며 장기 패턴 후보의 확정은 아닙니다.",
+            Signal.NEGATIVE: "현재 캔들이 음봉으로 분류된 결과이며 장기 패턴 후보의 확정은 아닙니다.",
+            Signal.NEUTRAL: "현재 캔들이 도지로 분류되어 몸통 방향을 단정하지 않습니다.",
+        },
+    }
+    return [dict(indicator=s.indicator.value,
+                 detail=f"{INDICATOR_LABELS[s.indicator]}는 현재 {SIGNAL_LABELS[s.signal]} 신호입니다.",
+                 detail_reason=reasons[s.indicator][s.signal],
+                 detail_caution="이 지표만으로 전체 방향을 단정하지 않습니다.",
+                 detail_watchpoint=_FALLBACK_DETAIL_HINTS[s.indicator.value][1]) for s in signals]
+
+
+def _validated_output_example(*, regime, signal, signals, risks) -> dict | None:
+    """Advertise a complete example only if the unchanged parser/validator accepts it."""
+    expressions = _verify_expressions(regime, signal, signals, risks)
+    labels = [terms[0] for terms in expressions['interpretation_must_include_any'].values() if terms]
+    labels = ['과매도 상태' if term == '과매도' else term for term in labels]
+    avoid = expressions['must_avoid']
+    risk_term = next((term for term in expressions['must_mention_risk_any']
+                      if not any(conflict in term for conflict in avoid)), None)
+    if risks and risk_term is None:
+        return None
+    text = ("전체 판단: " + " · ".join(labels) + ". "
+            + f"근거 점수는 {CONFIDENCE_LABELS[signal.confidence_level]}입니다. {CONFIDENCE_MEANING}\n"
+            + (f"주의할 점: {risk_term} 관련 한계를 확인합니다.\n" if risk_term else "주의할 점: 특이 위험 요인은 확인되지 않았습니다.\n")
+            + "다음 관찰 기준: 국면의 유지 여부와 거래량 동반을 관찰합니다.\n"
+            + "이 결과는 투자 판단을 대신하지 않으며, 기술적 지표 기반 참고 정보입니다.")
+    regime_label = labels[0] if labels else REGIME_LABELS[regime.final_regime]
+    consensus_label = expressions['interpretation_must_include_any']['consensus'][0]
+    candidate = dict(interpretation_text=text,
+        one_line_summary=f"{regime_label} · {consensus_label}",
+        trend_interpretation=f"현재 국면은 {regime_label}로 분류됩니다.",
+        signal_interpretation=f"종합 신호는 {consensus_label}입니다. {CONFIDENCE_MEANING}",
+        risk_interpretation=_risk_text(risks), timeframe_alignment=_timeframe_text(regime),
+        key_drivers=_key_drivers(regime, signal, signals), warning_points=[RISK_LABELS[r.flag] for r in risks],
+        what_to_watch_next=_what_to_watch(regime, risks), invalidation_or_caution=_invalidation(),
+        details=_detail_output_examples(signals))
+    parsed = parse_llm_output(json.dumps(candidate, ensure_ascii=False))
+    result = verify(parsed, regime=regime, signal=signal, signals=signals, risks=risks)
+    return candidate if result.passed else None
+
+
+def repair_guidance(result: trajectory_eval.EvalResult, *, signals: Sequence[IndicatorSignalResult]) -> list[dict]:
+    """Only sanitized codes and code facts; never rejected text/info or a new LLM call."""
+    examples = {entry['indicator']:entry for entry in _detail_output_examples(signals)}
+    targets = {f"technical_signals[{s.indicator.value}].{field}":(s,field)
+               for s in signals for field in ("detail", "detail_reason", "detail_caution", "detail_watchpoint")}
+    guidance = []
+    for code in trajectory_eval.diagnostic_codes(result):
+        item = dict(code, instruction="동일한 확정값으로 허용된 출력 JSON만 다시 작성합니다.")
+        if code['target'] in targets:
+            row, field = targets[code['target']]
+            item.update(confirmed_signal_label=SIGNAL_LABELS[row.signal],
+                        must_include_signal_label=field == 'detail',
+                        avoid_in_this_indicator=list(SIGNAL_RULES[row.signal].conflict_any),
+                        may_omit=field != 'detail',
+                        whole_field_replacement=examples[row.indicator.value][field],
+                        instruction="이 지표의 확정 signal만 설명합니다. 대체 예시는 필드 전체 그대로 쓰거나 선택 필드는 생략합니다. 다른 문장을 덧붙이지 않습니다.")
+        elif code['reason'] == 'numeric_claim_unsupported':
+            item['instruction'] = "측정값·수량·기간 숫자는 문장에서 제거하고 코드의 value/metrics에 둡니다. numeric_prose_policy의 해당 필드 identifier만 이름으로 쓸 수 있고 reference는 허용 필드 전체 일치일 때만 씁니다."
+        elif code['reason'] == 'label_conflict':
+            item['instruction'] = "interpretation_text의 필수 표현과 그 범위의 must_avoid를 지킵니다. 다른 방향의 개별 지표 설명을 전체 국면 단정으로 옮기지 않습니다."
+        elif code['reason'] == 'forbidden_term':
+            item['instruction'] = "매매 지시·금지 표현을 문장에서 제거합니다. validated_output_example이 있으면 같은 필드의 예시를 참고하며 원인이나 값을 추정하지 않습니다."
+        guidance.append(item)
+    return guidance

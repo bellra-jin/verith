@@ -554,7 +554,9 @@ def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_rema
         if request.url.path.endswith('input_tokens'):body={'object':'response.input_tokens','input_tokens':12}
         else:
             generation_inputs.append(json.loads(request.content)['input'])
-            body={'status':'completed','model':p['model'],'service_tier':'default','output_text':scripts.pop(0),'usage':{'input_tokens':12,'output_tokens':3,'total_tokens':15}}
+            script=scripts.pop(0)
+            output=script(generation_inputs[-1]) if callable(script) else script
+            body={'status':'completed','model':p['model'],'service_tier':'default','output_text':output,'usage':{'input_tokens':12,'output_tokens':3,'total_tokens':15}}
         raw=json.dumps(body,ensure_ascii=False).encode()
         return httpx.Response(200,headers={'Content-Type':'application/json','Content-Length':str(len(raw))},stream=Parts([raw]))
     helper=ADAPTER_FIXTURES.official_adapter(defer=True,inner=inner)
@@ -1013,10 +1015,11 @@ async def test_provider_runtime_preserves_bounded_validation_codes_via_existing_
         assert {'target':'technical_signals[rsi].detail_caution','reason':'numeric_claim_unsupported'} in codes
     summaries=[event['output_summary'] for event in events]
     assert '999' not in json.dumps(summaries) and '88' not in json.dumps(summaries)
-    assert 'validation_feedback' not in json.dumps(h.generation_inputs[-2])
-    assert 'validation_feedback' in json.dumps(h.generation_inputs[-1])
-    assert 'numeric_claim_unsupported' in json.dumps(h.generation_inputs[-1])
-    assert '현재 가격은 999원입니다.' not in json.dumps(h.generation_inputs[-1],ensure_ascii=False)
+    payloads=[json.loads(prompt.rsplit('```json\n',1)[1].split('\n```',1)[0]) for prompt in h.generation_inputs[-2:]]
+    assert 'validation_feedback' not in payloads[0]
+    assert payloads[1]['validation_feedback']==events[0]['output_summary']['failures']
+    assert 'numeric_claim_unsupported' in json.dumps(payloads[1]['validation_feedback'])
+    assert '현재 가격은 999원입니다.' not in json.dumps(payloads[1],ensure_ascii=False)
     assert len(h.budgets)==1 and len(h.events)==8 and len(h.starts)==len(h.observations)==1
     assert runtime._ACTIVE_TASK is None
 
@@ -1473,3 +1476,135 @@ def test_two_observed_normalized_weekly_responses_replay_exact_request_chain(mon
     expected=sorted([dict(date=r['date'],**{k:float(r[k]) for k in columns[1:5]},volume=int(r['volume']),trading_value=int(r['trading_value'])) for r in all_rows],key=lambda r:r['date'])
     assert len(result)==87 and [r.model_dump(mode='json') for r in result]==expected
     assert result[1].date=='2025-03-24' and calls==expected_windows
+
+
+# Explanation input contracts: unchanged validators and actual compiled graph.
+@pytest.mark.parametrize('consensus', ['strong_negative','strong_positive','neutral','weak_negative','weak_positive'])
+@pytest.mark.parametrize('regime_name', ['downtrend','sideways','overheated','oversold_rebound_watch','uptrend_intact','bullish_reversal_watch'])
+def test_complete_prompt_example_passes_real_parser_and_verifier(consensus,regime_name):
+    from src.agents.technical.domain.models.enums import Regime,Consensus
+    c=numeric_context();regime=c.regime.model_copy(update={'daily_regime':Regime(regime_name),'final_regime':Regime(regime_name)})
+    signal=c.signal.model_copy(update={'consensus':Consensus(consensus)})
+    before=copy.deepcopy((regime.model_dump(),signal.model_dump(),c.rows,c.risks))
+    payload=c.node.build_payload(regime=regime,signal=signal,signals=c.rows,risks=c.risks)
+    example=payload['validated_output_example']
+    assert example is not None
+    assert set(example)==c.node._ALLOWED_TOP_KEYS
+    parsed=c.node.parse_llm_output(json.dumps(example,ensure_ascii=False))
+    assert c.node.verify(parsed,regime=regime,signal=signal,signals=c.rows,risks=c.risks).passed
+    assert before==(regime.model_dump(),signal.model_dump(),c.rows,c.risks)
+    assert payload['technical_signals']==[dict(indicator=s.indicator.value,signal=s.signal.value,value=s.value,metrics=s.metrics) for s in c.rows]
+
+
+@pytest.mark.parametrize('signal_name',['positive','neutral','negative'])
+def test_detail_examples_use_own_signal_and_calculation_meaning_not_global_labels(signal_name):
+    from dataclasses import replace
+    from src.agents.technical.domain.models.enums import Signal,Consensus
+    c=numeric_context();rows=[replace(s,signal=Signal(signal_name)) for s in c.rows]
+    signal=c.signal.model_copy(update={'consensus':Consensus.STRONG_NEGATIVE})
+    payload=c.node.build_payload(regime=c.regime,signal=signal,signals=rows,risks=c.risks)
+    expressions=payload['verify_expressions']
+    assert expressions['must_avoid_scope']=='interpretation_text' and '긍정' in expressions['must_avoid']
+    expected=c.node.SIGNAL_RULES[Signal(signal_name)]
+    assert expressions['detail_must_avoid_by_indicator']=={s.indicator.value:list(expected.conflict_any) for s in rows}
+    example=payload['validated_output_example'];assert example is not None
+    assert c.node.verify(example,regime=c.regime,signal=signal,signals=rows,risks=c.risks).passed
+    pattern=next(x for x in example['details'] if x['indicator']=='pattern')
+    assert {'positive':'양봉','negative':'음봉','neutral':'도지'}[signal_name] in pattern['detail_reason']
+    assert '근거 부족' not in pattern['detail_reason']
+    for entry in example['details']:
+        assert entry['detail_reason']!=entry['detail'] and '분류됩니다' not in entry['detail_reason']
+    if signal_name=='positive':assert '긍정' in pattern['detail'] and '긍정' not in example['interpretation_text']
+
+
+def test_prompt_templates_share_complete_shape_scope_and_optional_reference_contract():
+    c=numeric_context();payload=c.node.build_payload(regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks)
+    texts=[c.node.load_prompt(n) for n in (c.node.INTERPRET_PROMPT,c.node.REGENERATE_PROMPT)]
+    assert texts[0].split('\n',2)[2]==texts[1].split('\n',2)[2]
+    for text in texts:
+        layout=json.loads(text.split('```json\n',1)[1].split('\n```',1)[0])
+        assert set(layout)==c.node._ALLOWED_TOP_KEYS
+        assert set(layout['details'][0])==c.node._ALLOWED_DETAIL_KEYS
+        assert 'must_avoid_scope=interpretation_text' in text and 'detail_must_avoid_by_indicator' in text
+        assert '항목은 필수가 아닙니다' in text and '**필드 전체 그대로**' in text
+        assert '생략·null·빈 문자열' in text and '양봉·음봉·도지' in text
+        assert '가능하면 2~3문장' not in text and '가장 흔한' not in text and 'annotation-only' not in text
+        assert '정확히 복사한 숫자도' in text and '{payload_json}' not in c.node.render_prompt(text,payload)
+
+
+def test_repair_guidance_is_bounded_code_only_and_replacements_keep_strict_validation():
+    from src.agents.technical.domain.interpretation import trajectory_eval as ev
+    c=numeric_context();bad=copy.deepcopy(c.good)
+    bad['interpretation_text']+=' 현재가 999원입니다.'
+    for entry in bad['details']:
+        if entry['indicator'] in ('moving_average','rsi'):entry['detail_watchpoint']='현재 50입니다.'
+        if entry['indicator']=='rsi':entry['detail_reason']='매수 하세요.'
+        if entry['indicator']=='pattern':entry['detail_reason']='강한 긍정과 강한 부정입니다.'
+    failed=c.node.verify(bad,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks)
+    guidance=c.node.repair_guidance(failed,signals=c.rows)
+    assert 1<=len(guidance)<=12 and '999' not in json.dumps(guidance) and '매수 하세요' not in json.dumps(guidance)
+    assert any(x['reason']=='numeric_claim_unsupported' and x['target']=='interpretation.text' for x in guidance)
+    repaired=copy.deepcopy(c.good)
+    entries={x['indicator']:x for x in repaired['details']}
+    for item in guidance:
+        if 'whole_field_replacement' not in item:continue
+        target=item['target'];indicator=target.split('[',1)[1].split(']',1)[0];field=target.rsplit('.',1)[1]
+        entries[indicator][field]=item['whole_field_replacement']
+        assert item['may_omit'] is (field!='detail')
+        assert item['must_include_signal_label'] is (field=='detail')
+    assert c.node.verify(repaired,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks).passed
+    for indicator in ('moving_average','rsi'):
+        damaged=copy.deepcopy(repaired);entry=next(x for x in damaged['details'] if x['indicator']==indicator)
+        entry['detail_watchpoint']+=' 현재값 50입니다.'
+        result=c.node.verify(damaged,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks)
+        assert not result.passed and indicator in result.failed_indicators
+    sentinel='UNTRUSTED_PRIVATE_DIAGNOSTIC'
+    unknown=ev.EvalResult(False,tuple(ev.TargetFailure(sentinel,sentinel,sentinel) for _ in range(200)))
+    safe=c.node.repair_guidance(unknown,signals=c.rows)
+    assert len(safe)<=12 and sentinel not in json.dumps(safe)
+    assert all(x['target']=='output' and x['reason']=='unclassified' for x in safe)
+
+
+@pytest.mark.parametrize('optional',[None,'','absent'])
+def test_repair_optional_fields_keep_null_empty_omission_backfill(optional):
+    c=numeric_context();reply=copy.deepcopy(c.good)
+    for entry in reply['details']:
+        for field in ('detail_reason','detail_caution','detail_watchpoint'):
+            if optional=='absent':entry.pop(field,None)
+            else:entry[field]=optional
+    parsed=c.node.parse_llm_output(json.dumps(reply))
+    assert c.node.verify(parsed,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks).passed
+    from src.agents.technical.domain.models.enums import GenerationSource
+    details=c.node.details_from_llm(parsed,signals=c.rows,source=GenerationSource.LLM)
+    for detail,row in zip(details,c.rows):
+        defaults=c.node.fallback_detail(row.indicator,row.signal,row.metrics)
+        assert all(getattr(detail,k)==getattr(defaults,k) for k in ('detail_reason','detail_caution','detail_watchpoint'))
+
+
+async def test_actual_compiled_graph_uses_targeted_regeneration_contract_without_extra_calls():
+    from src.agents.technical.infrastructure.observability.trace_logger import InMemoryTraceSink
+    c=numeric_context();bad=copy.deepcopy(c.good);bad['interpretation_text']+=' 現在値999円'
+    for entry in bad['details']:
+        if entry['indicator'] in ('moving_average','rsi'):entry['detail_watchpoint']='現在値 50'
+        if entry['indicator']=='rsi':entry['detail_reason']='매수하세요.'
+        if entry['indicator']=='pattern':entry['detail_caution']='강한 긍정과 강한 부정입니다.'
+    supplied=[]
+    def regenerate(prompt):
+        assert isinstance(prompt,str)
+        payload=json.loads(prompt.rsplit('```json\n',1)[1].split('\n```',1)[0]);supplied.append(payload)
+        assert payload['validation_feedback'] and payload['validation_repair_guidance']
+        assert '999円' not in json.dumps(payload,ensure_ascii=False)
+        return json.dumps(payload['validated_output_example'],ensure_ascii=False)
+    sink=InMemoryTraceSink();h=execution_fixture(trace_sink=sink,interpret_scripts=[json.dumps(bad),regenerate])
+    result=await h.instance.execute(h.value,'f'*64);out=result['data']['result']
+    assert out['verification']['outcome']=='passed' and out['verification']['regen_count']==1
+    assert out['interpretation']['source']=='llm_regenerated'
+    assert all(x['detail_source']=='llm_regenerated' for x in out['technical_signals'])
+    assert out['signal']==c.signal.model_dump(mode='json')
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[
+        (s.indicator.value,s.signal.value,s.value,s.metrics,s.weight) for s in c.rows]
+    assert len(supplied)==1 and len(h.events)==8 and len(h.budgets)==1
+    assert len(h.starts)==len(h.observations)==1
+    events=[x for x in sink.events if x['event_type']=='validation' and x['node']=='interpret_report']
+    assert len(events)==2 and events[0]['status']=='failed' and events[1]['status']=='success'
+    assert runtime._ACTIVE_TASK is None and not ATTEMPTS

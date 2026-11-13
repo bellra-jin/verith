@@ -40,7 +40,7 @@ usage가 관측됐으므로 전송 실패로 해석하지 않는다. 거절 후�
 
 ## 검증 결과
 
-기존 보호 `technical-graph-unit`: **192 passed, guard0**. 실제 compiled graph와 요청별
+기존 보호 `technical-graph-unit`: **193 passed, guard0**. 실제 compiled graph와 요청별
 provider runtime의 가짜 SDK/HTTP에서 validation 피드백·부분 대체·기존4호출 상한을 확인했다.
 `technical-graph-self`: **9 passed**, 직접 영향 `technical-runtime-unit`: **273 passed, guard0**.
 처음 OS canary는 worker 시작 전에 기본 sandbox에서 차단돼 로그를 보존했고 같은 guard를 유지한

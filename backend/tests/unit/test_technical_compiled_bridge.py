@@ -954,7 +954,7 @@ async def test_pinned_real_SDK_cookie_wire_and_wrapped_denial_under_existing_OS_
     assert not ATTEMPTS and runtime._ACTIVE_TASK is None
 
 
-@pytest.mark.parametrize('text',['과매수 상태입니다.','과매도 구간을 관찰합니다.','RSI는 **과매수**·**과매도** 기준을 확인합니다.','과매수는 기술적 상태입니다.'])
+@pytest.mark.parametrize('text',['과매수 상태입니다.','과매도 상태를 관찰합니다.','과매도 구간을 관찰합니다.','RSI는 **과매수**·**과매도** 기준을 확인합니다.','과매수는 기술적 상태입니다.'])
 def test_technical_state_nouns_are_not_trade_instructions(text):
     from src.agents.technical.domain.interpretation import trajectory_eval as ev
     assert ev.contains_forbidden_terms(text)==[]

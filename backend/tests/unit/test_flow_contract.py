@@ -1328,11 +1328,13 @@ async def test_fundamental_adapter_contract_with_memory_transport(status_code):
     from src.shared.infrastructure.clients.ai_client import AIClient, AITimeoutError, AIUnavailableError, AIValidationError
 
     seen = []
+    token = "synthetic-fundamental-contract-token-32bytes"
     payload = {"request_id": "synthetic", "ticker": "005930"}
     def respond(request):
+        assert request.headers["X-Fundamental-Service-Token"] == token
         seen.append((request.method, request.url.path, json.loads(request.content)))
         return httpx.Response(status_code, json={"synthetic": True})
-    client = AIClient("http://memory.invalid", 1, transport=httpx.MockTransport(respond))
+    client = AIClient("http://memory.invalid", 1, service_token=token, transport=httpx.MockTransport(respond))
     if status_code == 200:
         assert await client.analyze_fundamental(payload) == {"synthetic": True}
     else:

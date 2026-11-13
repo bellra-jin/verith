@@ -194,7 +194,9 @@ async def technical_service(request:Request,session=Depends(get_session,scope='f
         if not enabled(settings.TECHNICAL_EXECUTION_ENABLED):raise CoreError('FEATURE_UNAVAILABLE',403)
         if P.service_token(settings.TECHNICAL_EXECUTION_AI_SERVICE_TOKEN)==P.service_token(settings.TECHNICAL_EXECUTION_AUTHORITY_TOKEN):raise CoreError('FEATURE_UNAVAILABLE',403)
         return P.Configuration(settings.TECHNICAL_EXECUTION_CONFIG)
-    return TechnicalSupervisorService(session,principal=principal,client=AIClient(settings.AI_SERVICE_URL,125,execution_token=settings.TECHNICAL_EXECUTION_AI_SERVICE_TOKEN),configuration=config)
+    return TechnicalSupervisorService(session,principal=principal,client=AIClient(settings.AI_SERVICE_URL,125,
+        execution_token=settings.TECHNICAL_EXECUTION_AI_SERVICE_TOKEN,
+        technical_tls_context=getattr(request.app.state,'technical_execution_tls_context',None)),configuration=config)
 
 def technical_envelope(request,data):
     value=envelope(request,data);value['schema_version']='supervisor.technical.v1';return value

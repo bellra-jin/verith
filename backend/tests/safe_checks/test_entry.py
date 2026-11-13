@@ -88,7 +88,17 @@ class EntryBoundary(unittest.TestCase):
             self.assertFalse(controller.source_allowed(name + ".adjacent"))
         root = Path(__file__).resolve().parents[2]
         source = (root / "scripts/cf002_interactive_login.py").read_text()
-        self.assertIn('target not in {"head", "c6001a7e0001"}', source)
+        import ast
+        tree=ast.parse(source)
+        migrate=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='migrate_owned')
+        gate=migrate.body[0]
+        self.assertIsInstance(gate,ast.If)
+        self.assertIsInstance(gate.test.ops[0],ast.NotIn)
+        self.assertEqual(gate.test.left.id,'target')
+        self.assertEqual(ast.literal_eval(gate.test.comparators[0]),{'head','c6001a7e0001','c15001a7e0001'})
+        self.assertIsInstance(gate.body[0],ast.Raise)
+        self.assertEqual(gate.body[0].exc.func.id,'ValueError')
+        self.assertEqual(ast.unparse(migrate.body[1]),'await proof.preflight()')
         self.assertIn('migrate_owned(second_proof, target="c6001a7e0001")', source)
         self.assertLess(source.index("result = asyncio.run(asyncio.wait_for(verify_fake_execution(proof)"), source.index("project = prepare_projects"))
 
@@ -204,7 +214,14 @@ class EntryBoundary(unittest.TestCase):
             self.assertFalse(source_allowed(name))
         for name in FLOW_INPUTS:
             self.assertTrue(source_allowed(name))
-        for name in ("ai/src/agents/flow/config.py", "ai/src/agents/flow/__init__.py",
+        # CF014 now reviews this exact constants-only source. Adjacent sources
+        # and private files remain denied; this is not a config import permit.
+        from scripts.check_safe import CF014_INPUTS
+        import hashlib
+        config = "ai/src/agents/flow/config.py"
+        self.assertTrue(source_allowed(config))
+        self.assertEqual(hashlib.sha256(regular_bytes(Path(__file__).resolve().parents[3], config)).hexdigest(), CF014_INPUTS[config])
+        for name in ("ai/src/agents/flow/config.extra.py", "ai/src/agents/flow/__init__.py",
                      "ai/src/agents/flow/export/other.py", "ai/src/agents/flow/graph.py"):
             self.assertFalse(source_allowed(name))
         from scripts.safe_checks_bootstrap import valid_flow_origins
@@ -1258,7 +1275,8 @@ class CF040Boundary(unittest.TestCase):
         self.assertEqual(set(c.CF040_INPUTS),{
             'ai/src/agents/technical/config.py','ai/src/api/dependencies.py',
             'ai/src/agents/technical/domain/intraday_limits.py','ai/src/shared/runtime/deadline.py',
-            'ai/src/agents/technical/infrastructure/openai_llm_client.py'})
+            'ai/src/agents/technical/infrastructure/openai_llm_client.py',
+            'ai/src/agents/technical/infrastructure/kis_client.py'})
         self.assertEqual(c.CF021_INPUTS['ai/src/agents/technical/config.py'],c.CF040_INPUTS['ai/src/agents/technical/config.py'])
         for name,digest in (c.CF040_COMPAT | c.CF040_INPUTS).items():
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)

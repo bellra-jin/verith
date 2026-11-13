@@ -1102,3 +1102,87 @@ async def test_CF053_late_ready_cleanup_has_admission0(monkeypatch):
     with pytest.raises(C.AITimeoutError):await runtime.admit_provider_once('cleanup-late-key',intent,cfg)
     assert seen==[True] and store.row is None and store.period.request_count==0
     session.commit.assert_not_awaited()
+
+
+def client_tls_context():
+    import ssl
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes,serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key=ec.generate_private_key(ec.SECP256R1())
+    name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'owned synthetic CA')])
+    now=datetime.now(UTC)
+    cert=(x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(x509.random_serial_number()).not_valid_before(now-timedelta(minutes=1)).not_valid_after(now+timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True,path_length=None),critical=True).sign(key,hashes.SHA256()))
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(cadata=cert.public_bytes(serialization.Encoding.PEM).decode('ascii'))
+    return context
+
+
+
+async def test_Technical_TLS_snapshot_uses_owned_CA_after_caller_context_mutation(monkeypatch):
+    import ssl,httpx
+    from src.shared.infrastructure.clients import ai_client as C
+    from fastapi import FastAPI
+    from starlette.responses import JSONResponse
+    session,p,policy,intent,store=setup(monkeypatch);cfg=provider_configuration(policy)
+    context=client_tls_context();app=FastAPI();seen=[];verified=[]
+    @app.post('/internal/technical/execution/ready')
+    async def ready():
+        seen.append(True)
+        return JSONResponse({'schema_version':P.SCHEMA,'configuration':cfg.data(),'spec_sha256':P.SPEC_SHA256,'ready':True})
+    original=httpx.AsyncClient
+    class CheckingClient:
+        def __init__(self,**kwargs):
+            owned=kwargs['verify'];assert owned is not context
+            assert owned.verify_mode==ssl.CERT_REQUIRED and owned.check_hostname is True
+            assert kwargs['trust_env'] is False and kwargs['follow_redirects'] is False
+            verified.append(owned);self.inner=original(**kwargs)
+        async def __aenter__(self):
+            value=await self.inner.__aenter__()
+            context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
+            assert verified[-1].verify_mode==ssl.CERT_REQUIRED and verified[-1].check_hostname is True
+            return value
+        async def __aexit__(self,*args):return await self.inner.__aexit__(*args)
+    client=C.AIClient('https://ai.invalid',60,httpx.ASGITransport(app=app),execution_token='a'*32,technical_tls_context=context)
+    monkeypatch.setattr(C.httpx,'AsyncClient',CheckingClient)
+    captured=await client.technical_execution_ready(cfg)
+    assert len(verified)==len(seen)==1 and captured.owned_tls is verified[0]
+    with pytest.raises(C.AIUnavailableError):await client.technical_execution_ready(cfg)
+    assert len(seen)==1 and store.row is None
+
+
+@pytest.mark.parametrize('kind',['empty','weak'])
+def test_Technical_TLS_invalid_context_never_opens_HTTP(kind):
+    import ssl,httpx
+    from src.shared.infrastructure.clients import ai_client as C
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if kind=='weak':context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
+    with pytest.raises(C.AIUnavailableError,match='^Technical execution unavailable$'):
+        C.AIClient('https://ai.invalid',60,execution_token='a'*32,technical_tls_context=context)
+
+
+async def test_Supervisor_technical_service_passes_only_server_owned_TLS_context(monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from starlette.requests import Request
+    from src.modules.supervisor.api import router as core
+    session,p,policy,intent,store=setup(monkeypatch);cfg=provider_configuration(policy)
+    app=FastAPI();context=client_tls_context();app.state.technical_execution_tls_context=context;auth=[]
+    async def principal(request,db,*,mutation):
+        assert db is session;auth.append(mutation);return p
+    monkeypatch.setattr(core,'request_principal',principal)
+    for name,value in dict(AI_SERVICE_URL=cfg.data()['ai_origin'],TECHNICAL_EXECUTION_ENABLED=True,
+        TECHNICAL_EXECUTION_CONFIG=cfg.text,TECHNICAL_EXECUTION_AI_SERVICE_TOKEN='a'*32,
+        TECHNICAL_EXECUTION_AUTHORITY_TOKEN='b'*32).items():monkeypatch.setattr(core.settings,name,value)
+    request=Request({'type':'http','method':'POST','app':app,'state':{'core_planning_deadline':asyncio.get_running_loop().time()+15}})
+    service=await core.technical_service(request,session)
+    snapshot=service.client._technical_execution_configuration(cfg)
+    assert snapshot.tls_context is context and snapshot.owned_tls is not context and auth==[True]
+    assert store.row is None and store.period.request_count==0
+    del app.state.technical_execution_tls_context
+    service=await core.technical_service(request,session)
+    assert service.client._technical_execution_configuration(cfg).tls_context is None
+    assert auth==[True,True]

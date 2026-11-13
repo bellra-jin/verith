@@ -26,8 +26,17 @@ FORBIDDEN = ('openai','langchain_openai','redis','src.api','src.main',
              'src.agents.fundamental','src.agents.industry','src.agents.news',
              'src.shared.config','sqlalchemy','asyncpg')
 ATTEMPTS = []
+# Only the fixed SDK wire regression below may import the already snapshotted
+# SDK package, on its own thread, while OS file/network/process guards remain.
+_SDK_TEST_SCOPE = threading.local()
 class ImportSentinel(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
+        sdk_root=getattr(_SDK_TEST_SCOPE,'root',None)
+        if sdk_root is not None and (fullname=='openai' or fullname.startswith('openai.')):
+            spec=importlib.machinery.PathFinder.find_spec(fullname,path)
+            if spec is None or spec.origin is None or not Path(spec.origin).resolve().is_relative_to(sdk_root):
+                raise AssertionError('Pinned SDK source origin rejected')
+            return spec
         if any(fullname == name or fullname.startswith(name+'.') for name in FORBIDDEN):
             ATTEMPTS.append(fullname)
             raise AssertionError('External capability import prohibited')
@@ -62,7 +71,7 @@ for suffix in ('domain.observation_window','domain.verification.consecutive',
 os.environ.update(INTRADAY_FETCH_ENABLED='false',TECHNICAL_TRACE_ENABLED='false',
                   LANGCHAIN_TRACING_V2='false',LANGSMITH_TRACING='false')
 from src.agents.technical import config
-snapshot=config.initialize_runtime()
+snapshot=config.initialize_runtime(settings=config.RuntimeSettings(False,False,str(Path(os.environ['TMPDIR'])/'unused-technical-trace.jsonl')))
 assert snapshot.intraday_fetch_enabled is False and snapshot.trace_enabled is False
 namespace('tests',ROOT/'backend/tests')
 namespace('tests.technical',ROOT/'ai/tests/technical')
@@ -164,7 +173,7 @@ def cf051_selected():
 
 ADAPTER_FIXTURES=cf051_selected()
 
-def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_remaining=None):
+def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_remaining=None,fetcher_stop=None,data_fetcher=None):
     req=request();ids=[str(uuid4()) for _ in range(6)];req['request_id'],req['trace_id']=ids[:2]
     req['data']['context'].update(dict(zip(('analysis_id','admission_request_id','attempt_id','report_id'),ids[2:])))
     now=datetime.now(UTC);req['data']['requested_as_of']=now.isoformat()
@@ -216,7 +225,7 @@ def execution_fixture(case='normal',pause=None,calls=4,on_start=None,server_rema
         body=await request.json();observations.append(body)
         return JSONResponse({'schema_version':P.SCHEMA,'recorded':True,'analysis_id':body['analysis_id'],'evidence_sha256':body['evidence_sha256']})
     authority=ExecutionAuthorityClient(origin=cfg.data()['authority_origin'],token='b'*32,transport=httpx.ASGITransport(app=app))
-    options=ExecutionOptions(cfg,'a'*32,'b'*32,credential,fetcher,None,None)
+    options=ExecutionOptions(cfg,'a'*32,'b'*32,credential,data_fetcher or fetcher,None,None,fetcher_stop=fetcher_stop)
     instance=TechnicalProviderRuntime(options,agent_module=actual_agent,steps_module=actual_steps,llm_module=llm,authority=authority)
     return SimpleNamespace(instance=instance,value=value,events=events,observations=observations,starts=starts,budgets=budgets,credentials=credentials,helper=helper,cfg=cfg,start_anchors=start_anchors)
 
@@ -238,7 +247,7 @@ async def test_CF053_actual_graph_one_start_one_budget_all_nodes_and_independent
 
 @pytest.mark.parametrize('actual_task',[False,True])
 async def test_CF053_cancel_closes_pending_budget_now_but_retains_physical_slot_and_bundle(actual_task):
-    paused=threading.Event();release=threading.Event();h=execution_fixture(pause=(paused,release))
+    paused=threading.Event();release=threading.Event();stopped=threading.Event();h=execution_fixture(pause=(paused,release),fetcher_stop=stopped)
     waiter=asyncio.create_task(h.instance.execute(h.value,'f'*64))
     try:
         for _ in range(1000):
@@ -250,7 +259,7 @@ async def test_CF053_cancel_closes_pending_budget_now_but_retains_physical_slot_
         for _ in range(100):
             if h.budgets[0].closed_reason:break
             await asyncio.sleep(.001)
-        assert h.budgets[0].closed_reason is not None
+        assert h.budgets[0].closed_reason is not None and stopped.is_set()
         assert runtime._ACTIVE_TASK is task and 'client' not in h.helper.closed
         with pytest.raises(runtime.BoundaryBusy):await runtime.controlled_slot(lambda:None,remaining=1,close_pending=lambda:None)
     finally:
@@ -463,3 +472,126 @@ async def test_explanation_existing_full_fallback_and_combined_failure_keep_orig
     confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
     assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
     assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+
+
+async def test_runtime_first_cancel_closes_same_KIS_event_before_physical_fetch_finishes():
+    import httpx
+    from types import SimpleNamespace
+    env,_,_=ADAPTER_FIXTURES.explicit_kis_slices()
+    settings=ADAPTER_FIXTURES.COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid:9443')
+    stopped=threading.Event();paused=threading.Event();release=threading.Event();blocked=threading.Event();sent=[]
+    hook,observed=env['kis_request_gate'](settings=settings,ticker=st.TICKER,deadline=SimpleNamespace(remaining_seconds=lambda:30),
+        stopped=stopped,token_limit=3,market_limit=30)
+    def fetcher(ticker,*,end_date=None):
+        with httpx.Client(transport=httpx.MockTransport(lambda r:(sent.append(r),httpx.Response(200,json={}))[1]),
+                          trust_env=False,follow_redirects=False,event_hooks={'request':[hook]}) as client:
+            client.post(settings.base_url+env['TOKEN_PATH'])
+            paused.set();assert release.wait(3)
+            try:client.post(settings.base_url+env['TOKEN_PATH'])
+            except ValueError:blocked.set();raise
+        raise AssertionError('Cancelled KIS request must not continue')
+    h=execution_fixture(fetcher_stop=stopped,data_fetcher=fetcher)
+    waiter=asyncio.create_task(h.instance.execute(h.value,'f'*64))
+    try:
+        for _ in range(1000):
+            if paused.is_set():break
+            await asyncio.sleep(.001)
+        assert paused.is_set() and runtime._ACTIVE_TASK is not None
+        # Normalize/focus precede market collection in the real graph. Preserve
+        # those already-observed calls; only forbid additional calls on cancel.
+        prior_calls=len(h.events)
+        assert prior_calls==4
+        task=runtime._ACTIVE_TASK;task.cancel()
+        for _ in range(100):
+            if stopped.is_set():break
+            await asyncio.sleep(.001)
+        assert stopped.is_set() and runtime._ACTIVE_TASK is task and not release.is_set()
+        assert h.budgets[0].closed_reason is not None
+    finally:
+        release.set()
+        try:await waiter
+        except (asyncio.CancelledError,P.ExecutionInvalid):pass
+        for _ in range(1000):
+            if runtime._ACTIVE_TASK is None:break
+            await asyncio.sleep(.001)
+    assert runtime._ACTIVE_TASK is None and blocked.is_set()
+    assert observed()=={'token':1,'market':0} and len(sent)==1 and len(h.events)==prior_calls
+
+
+@pytest.mark.parametrize('case',['provider_cookie','forbidden_header'])
+async def test_pinned_real_SDK_cookie_wire_and_wrapped_denial_under_existing_OS_guard(case):
+    """Real installed/pinned SDK serialization; only inner HTTP is synthetic.
+
+    No socket, env credential, DB, or SDK retry capability is granted. The
+    source/dependency snapshots and existing OS canaries still apply.
+    """
+    def exercise():
+        import importlib
+        from scripts.check_safe import GRAPH_DISTRIBUTIONS
+        assert not any(n=='openai' or n.startswith('openai.') for n in sys.modules)
+        before=set(sys.modules);attempts=list(ATTEMPTS)
+        spec=importlib.machinery.PathFinder.find_spec('openai')
+        assert spec is not None and spec.origin is not None
+        sdk_root=Path(spec.origin).resolve().parent
+        assert sdk_root.name=='openai' and not sdk_root.is_relative_to(ROOT)
+        _SDK_TEST_SCOPE.root=sdk_root
+        adapter=None;mock=None
+        try:
+            sdk=importlib.import_module('openai')
+            assert sdk.__version__==GRAPH_DISTRIBUTIONS['openai']=='2.44.0'
+            assert Path(sdk.__file__).resolve().parent==sdk_root
+            # SDK platform.platform() can invoke native processor discovery.
+            # Supply only that SDK module's header metadata as a fixed input;
+            # never patch stdlib platform or permit its probe/process/file I/O.
+            base=importlib.import_module('openai._base_client')
+            base.platform=SimpleNamespace(system=lambda:'Darwin',platform=lambda:'Darwin-keyless-fixed',
+                machine=lambda:'arm64',python_implementation=lambda:'CPython',
+                python_version=lambda:'3.12.13')
+            helper=ADAPTER_FIXTURES.strict_adapter(counter=False,calls=1)
+            helper.a.update(openai=sdk,httpx=httpx,time=time,os=os,logging=__import__('logging'))
+            provenance=hashlib.sha256((sdk_root/'resources/responses/input_tokens.py').read_bytes()).hexdigest()
+            adapter=helper.a['official_count_openai_client'](request_budget=helper.budget,
+                api_key='keyless-fixed-SDK-regression',request_wire_cap=4096,count_wire_cap=1024,
+                generation_wire_cap=4096,count_version='openai.2.44.0.keyless',
+                count_provenance_sha256=provenance,timeout=30)
+            bundle=helper.budget._official_bundle;sent=[]
+            def respond(request):
+                assert 'Cookie' not in request.headers
+                sent.append(request.url.path)
+                if request.url.path.endswith('/input_tokens'):
+                    if case=='forbidden_header':bundle.sdk._custom_headers['Cookie']=ADAPTER_FIXTURES.PRIVATE
+                    return httpx.Response(200,headers={'Set-Cookie':'verith_synthetic=not-secret; Secure; Path=/'},
+                        json={'object':'response.input_tokens','input_tokens':12})
+                return httpx.Response(200,json={'id':'resp_keyless','object':'response','created_at':1,
+                    'model':'synthetic-model','service_tier':'default','status':'completed',
+                    'output':[{'type':'message','id':'msg_keyless','role':'assistant','status':'completed',
+                        'content':[{'type':'output_text','text':'keyless result','annotations':[]}]}],
+                    'usage':{'input_tokens':12,'output_tokens':3,'total_tokens':15}})
+            mock=httpx.MockTransport(respond)
+            # Keep the captured inner object identity and every original outer
+            # check; replace only its final I/O method with MockTransport.
+            bundle.inner.handle_request=mock.handle_request
+            if case=='provider_cookie':
+                assert adapter.complete('synthetic fixed SDK prompt')=='keyless result'
+                row,=helper.budget.snapshot()
+                assert row.count_validated and row.entered and row.text_accepted and row.usage==(12,3,15)
+                assert sent==['/v1/responses/input_tokens','/v1/responses']
+            else:
+                with pytest.raises(helper.a['LlmCallError']) as error:adapter.complete('synthetic fixed SDK prompt')
+                assert str(error.value)=='TECHNICAL_LLM_HTTP_INVALID'
+                assert ADAPTER_FIXTURES.PRIVATE not in str(error.value) and error.value.__suppress_context__
+                row,=helper.budget.snapshot()
+                assert row.count_validated and not row.entered and row.reason=='HTTP_INVALID' and row.held_nano==2000
+                with pytest.raises(helper.a['LlmCallError']):adapter.complete('again')
+                assert sent==['/v1/responses/input_tokens']
+            assert not list(bundle.client.cookies.jar) and bundle.sdk.max_retries==0
+            assert ATTEMPTS==attempts
+        finally:
+            if adapter is not None:adapter.close()
+            if mock is not None:mock.close()
+            _SDK_TEST_SCOPE.root=None
+            for name in set(sys.modules)-before:
+                if name=='openai' or name.startswith('openai.'):sys.modules.pop(name,None)
+        assert not any(n=='openai' or n.startswith('openai.') for n in sys.modules)
+    await asyncio.to_thread(exercise)
+    assert not ATTEMPTS and runtime._ACTIVE_TASK is None

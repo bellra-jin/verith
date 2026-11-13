@@ -136,6 +136,9 @@ class AccessBoundary:
                     message={**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
                 await send(message)
             await self.app(scope,fundamental_receive,fundamental_send);return
+        if path == '/api/supervisor/core/composition' or path.startswith('/api/supervisor/core/composition/'):
+            from src.modules.supervisor.api.composition_router import boundary
+            await boundary(self.app,scope,receive,send);return
         if path.startswith('/api/supervisor/core'):
             import asyncio,math,re
             started=asyncio.get_running_loop().time()

@@ -223,10 +223,28 @@ def project_cf054_exact_additions(api):
     for name in names:del api['components']['schemas'][name]
 
 
+def project_composition_exact_additions(api):
+    from fastapi import FastAPI
+    from src.modules.supervisor.api.router import router
+    from src.modules.supervisor.domain.composition_api import Confirm, Consent
+    isolated=FastAPI();isolated.include_router(router);expected=isolated.openapi()
+    paths={'/api/supervisor/core/composition/prepare':{'post'},'/api/supervisor/core/composition/requests':{'post'},'/api/supervisor/core/composition/requests/{composition_id}':{'get'}}
+    for path,methods in paths.items():
+        assert set(api['paths'][path])==methods and api['paths'][path]==expected['paths'][path]
+        del api['paths'][path]
+    assert set(Confirm.model_json_schema()['properties'])=={'client_key','draft','expected_plan_hash','consent'}
+    assert set(Consent.model_json_schema()['properties'])=={'allow_views','allow_partial_results','waived_conditions'}
+    for name in ('Confirm','Consent'):
+        assert api['components']['schemas'][name]==expected['components']['schemas'][name]
+        assert api['components']['schemas'][name]['additionalProperties'] is False
+        del api['components']['schemas'][name]
+
+
 def project_cf022_exact_additions(api):
     from fastapi import FastAPI
     from src.modules.supervisor.api.router import router
     isolated=FastAPI();isolated.include_router(router);expected=isolated.openapi()
+    project_composition_exact_additions(expected)
     project_cf054_exact_additions(expected)
     project_cf023_exact_additions(expected)
     paths={'/api/supervisor/core/prepare','/api/supervisor/core/requests','/api/supervisor/core/requests/{supervisor_id}'}
@@ -272,6 +290,7 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_composition_exact_additions(api)
     project_cf054_exact_additions(api)
     project_cf036_exact_additions(api)
     project_cf023_exact_additions(api)

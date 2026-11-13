@@ -110,6 +110,8 @@ class CoreRoute(APIRoute):
                 return fail(request.scope, 'SERVICE_UNAVAILABLE', 503)
         return safe
 router = APIRouter(prefix=PATH, route_class=CoreRoute, tags=['supervisor-core'])
+from src.modules.supervisor.api.composition_router import router as composition_router
+router.include_router(composition_router)
 
 async def service(request: Request, session=Depends(get_session, scope='function')):
     if request.method == 'POST' and request.url.path == PATH + '/preparations':

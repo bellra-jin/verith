@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     TECHNICAL_EXECUTION_AI_SERVICE_TOKEN: str = Field(default="", repr=False)
     TECHNICAL_EXECUTION_AUTHORITY_TOKEN: str = Field(default="", repr=False)
     SUPERVISOR_MEANING_ENABLED: Any = False  # Raw: invalid paid config cannot break free planning.
+    SUPERVISOR_COMPOSITION_ENABLED: Any = False  # New admission only; owner observation remains available.
     SUPERVISOR_MEANING_SERVICE_TOKEN: str = Field(default="", repr=False)
     SUPERVISOR_MEANING_ACCOUNT_BINDINGS: str = ""
     SUPERVISOR_MEANING_COUNTER_AGREEMENT: str = ""

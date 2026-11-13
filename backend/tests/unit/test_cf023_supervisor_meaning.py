@@ -896,6 +896,10 @@ def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
         additions.append(matches[0])
     # Pin the separately reviewed auth-before-body / fixed-five-second CF053 branch too.
     assert hashlib.sha256(ast.dump(additions[1], include_attributes=False).encode()).hexdigest() == '7c86cf29015f2a5e8bc672bacec2bb402c33496e8b6d53edc12618ad5238a190'
+    composition = [n for n in fn.body if isinstance(n, ast.If) and ast.unparse(n.test) == "path == '/api/supervisor/core/composition' or path.startswith('/api/supervisor/core/composition/')"]
+    assert len(composition) == 1
+    assert hashlib.sha256(ast.dump(composition[0], include_attributes=False).encode()).hexdigest() == '41f7ecf194a03f148a1450562b88389224d6f8981da0d999e84f457a3b3c9498'
+    additions.extend(composition)
     fn.body = [n for n in fn.body if n not in additions and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
     assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'
 

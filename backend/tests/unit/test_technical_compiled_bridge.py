@@ -176,6 +176,162 @@ async def test_narrow_range_support_and_resistance_remain_neutral_in_compiled_re
         assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
 
 
+def warmup_bars(n,case='flat'):
+    from src.agents.technical.domain.models.ohlcv import OHLCV
+    bars=[]
+    for i,bar in enumerate(st.DAILY[:n]):
+        close=100 if case in ('flat','overheated') else 200-i
+        if case=='overheated' and i==n-1:close=120
+        opened=close+.25 if case=='downtrend' else close-.25 if case=='oversold' else close
+        bars.append(OHLCV(date=bar.date,open=opened,high=max(opened,close)+.25,
+                          low=min(opened,close),close=close,volume=bar.volume,trading_value=bar.trading_value))
+    return bars
+
+
+@pytest.mark.parametrize('n,expected',[(60,'unavailable'),(64,'unavailable'),(65,'sideways')])
+def test_actual_long_MA_slope_warmup_does_not_claim_sideways(n,expected):
+    from src.agents.technical.domain.regime import rules
+    bars=warmup_bars(n)
+    mas=rules.calculate_moving_averages(bars)
+    slope=rules._slope(mas[config.MA_LONG_WINDOW],config.SLOPE_LOOKBACK_DAYS)
+    assert (slope is None)==(n<65)
+    if n==65:assert slope==0
+    assert config.MIN_DAILY_BARS==60
+    assert rules.classify_daily_regime(bars).value==expected
+
+
+@pytest.mark.parametrize('n',[60,64])
+@pytest.mark.parametrize('case,expected',[
+    ('overheated','overheated'),('oversold','oversold_rebound_watch'),('downtrend','downtrend')])
+def test_actual_extreme_and_downtrend_survive_missing_long_slope(n,case,expected):
+    from src.agents.technical.domain.regime import rules
+    bars=warmup_bars(n,case)
+    assert rules._slope(rules.calculate_moving_averages(bars)[config.MA_LONG_WINDOW],config.SLOPE_LOOKBACK_DAYS) is None
+    assert rules.classify_daily_regime(bars).value==expected
+
+
+@pytest.mark.parametrize('weekly',['up','down','unavailable'])
+@pytest.mark.parametrize('monthly',['up','down','unavailable'])
+def test_unavailable_context_is_history_shortage_not_directionless_sideways(weekly,monthly):
+    from src.agents.technical.domain.regime.multiframe import _alignment_and_context
+    from src.agents.technical.domain.models.enums import Regime,Trend
+    flag,context=_alignment_and_context(Regime.UNAVAILABLE,Trend(weekly),Trend(monthly))
+    assert flag.value=='neutral' and '데이터/지표 이력이 부족' in context and '방향성이 없는 중립 국면' not in context
+    assert _alignment_and_context(Regime.SIDEWAYS,Trend(weekly),Trend(monthly))[1]=='방향성이 없는 중립 국면이라 상위 추세와의 정합/역행을 판정하지 않습니다.'
+
+
+@pytest.mark.parametrize('n,expected',[(60,'regime_unavailable'),(64,'regime_unavailable'),(65,'normal')])
+async def test_warmup_actual_graph_preserves_existing_unavailable_completion_contract(n,expected):
+    daily=warmup_bars(n);llm=st.ScriptedLlm(list(graph_fixtures._HAPPY))
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kwargs:dict(D=daily,W=st.WEEKLY,M=st.MONTHLY),
+        cache=None,trace_sink=None,enabled=True)
+    req=request()
+    try:
+        result=await runtime.BoundaryRuntime(bridge).run(req)
+        contract.validate_response(result,req)
+        actual=result['data']['result']
+        assert actual['data_status']==expected and len(actual['charts'])==3
+        assert actual['request_id']==req['request_id'] and actual['trace_id']==req['trace_id']
+        assert actual['as_of']==req['data']['requested_as_of']
+        if n<65:
+            assert actual['regime']['daily_regime']==actual['regime']['final_regime']=='unavailable'
+            assert actual['signal'] is None and actual['risk'] is None and actual['technical_signals']==[]
+            assert '데이터/지표 이력이 부족' in actual['regime']['regime_context']
+            assert len(llm.prompts)==2
+        else:
+            assert actual['regime']['final_regime']=='sideways'
+            assert actual['signal'] is not None and actual['technical_signals'] and actual['risk'] is not None
+            assert len(llm.prompts)==4
+        assert not ATTEMPTS
+    finally:
+        await asyncio.sleep(0)
+        assert runtime._ACTIVE_TASK is None
+        assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
+
+
+@pytest.mark.parametrize('directions,counts',[
+    (['positive'],(1,0,0)),(['negative'],(0,0,1)),
+    (['positive','neutral','negative'],(1,1,1)),([],(0,0,0))])
+def test_confidence_basis_preserves_evidence_counts_without_probability_claim(directions,counts):
+    from src.agents.technical.domain.synthesis.confidence import compute_confidence,CONFIDENCE_MEANING
+    from src.agents.technical.domain.synthesis.signal_score import IndicatorSignalResult,SignalScoreResult,aggregate_signal_score
+    from src.agents.technical.domain.models.enums import Signal,IndicatorType,Regime,AlignmentFlag
+    rows=[IndicatorSignalResult(indicator,Signal(direction),None,[],config.INDICATOR_WEIGHTS[indicator.value])
+          for indicator,direction in zip((IndicatorType.MOVING_AVERAGE,IndicatorType.RSI,IndicatorType.PATTERN),directions)]
+    score,consensus=aggregate_signal_score(rows)
+    result=compute_confidence(SignalScoreResult(rows,score,consensus),volume_ratio=1,
+                              final_regime=Regime.SIDEWAYS,alignment_flag=AlignmentFlag.NEUTRAL)
+    pos,neu,neg=counts
+    assert f'지표 {sum(counts)}개 중 긍정 {pos}·중립 {neu}·부정 {neg}' in result.confidence_basis
+    assert CONFIDENCE_MEANING in result.confidence_basis and '개수 자체의 충분함을 보장하지 않습니다' in result.confidence_basis
+    if len(directions)==1:
+        assert result.confidence==pytest.approx(.8) and result.confidence_level.value=='high'
+        assert (result.agreement,result.volume_confirm,result.trend_clarity,result.conflict_absence)==(1,1,0,1)
+
+
+def test_deterministic_confidence_summary_and_both_prompt_variants_preserve_one_indicator_high():
+    from src.agents.technical.application.nodes import interpret_report as interp
+    from src.agents.technical.domain.synthesis.confidence import compute_confidence,CONFIDENCE_MEANING
+    from src.agents.technical.domain.synthesis.signal_score import IndicatorSignalResult,SignalScoreResult
+    from src.agents.technical.domain.models.enums import Signal,IndicatorType,Regime,AlignmentFlag,Trend,Consensus
+    from src.agents.technical.domain.models.contracts import SignalSummary,RegimeResult
+    row=IndicatorSignalResult(IndicatorType.MOVING_AVERAGE,Signal.POSITIVE,100,[],config.INDICATOR_WEIGHTS['moving_average'])
+    conf=compute_confidence(SignalScoreResult([row],1,Consensus.STRONG_POSITIVE),volume_ratio=1,
+                            final_regime=Regime.SIDEWAYS,alignment_flag=AlignmentFlag.NEUTRAL)
+    signal=SignalSummary(consensus=Consensus.STRONG_POSITIVE,signal_score=1,
+        confidence=conf.confidence,confidence_level=conf.confidence_level,confidence_basis=conf.confidence_basis)
+    regime=RegimeResult(daily_regime=Regime.SIDEWAYS,final_regime=Regime.SIDEWAYS,
+        weekly_trend=Trend.SIDEWAYS,monthly_trend=Trend.SIDEWAYS,alignment_flag=AlignmentFlag.NEUTRAL,regime_context='횡보')
+    before=signal.model_dump(mode='json')
+    fallback=interp.fallback_interpretation(regime=regime,signal=signal,risks=[],signals=[row])
+    assert all(CONFIDENCE_MEANING in text for text in (fallback.text,fallback.signal_interpretation))
+    assert '근거 점수 높음' in fallback.one_line_summary and len(fallback.one_line_summary)<=40
+    payload=interp.build_payload(regime=regime,signal=signal,signals=[row],risks=[])
+    assert payload['confidence']==pytest.approx(.8) and payload['confidence_level']=='high'
+    assert payload['confidence_basis']==conf.confidence_basis
+    for name in (interp.INTERPRET_PROMPT,interp.REGENERATE_PROMPT):
+        rendered=interp.render_prompt(interp.load_prompt(name),payload)
+        assert '현재 지표의 규칙 기반 근거 점수' in rendered and '상승 확률·예측 정확도가 아닙니다' in rendered
+        assert '개별 부정 기여:' in rendered and '개별 긍정 기여:' in rendered
+        assert '약세 근거:' not in rendered and '완충 신호:' not in rendered
+        assert '검증(③) 대상이 아니지만' not in rendered and '{payload_json}' not in rendered
+    assert signal.model_dump(mode='json')==before
+
+
+async def test_confidence_meaning_actual_graph_keeps_calculated_numbers_and_regeneration_cap():
+    from src.agents.technical.application.nodes.signal_aggregate import run_signal_aggregate
+    from src.agents.technical.application.nodes.regime_classify import run_regime_classify
+    from src.agents.technical.domain.indicators.volume import calculate_volume_ratio
+    from src.agents.technical.domain.synthesis.confidence import compute_confidence,CONFIDENCE_MEANING
+    aggregate=run_signal_aggregate(st.DAILY)
+    regime=run_regime_classify(st.DAILY,st.WEEKLY,st.MONTHLY)
+    conf=compute_confidence(aggregate,volume_ratio=calculate_volume_ratio(st.DAILY)[-1],
+                            final_regime=regime.final_regime,alignment_flag=regime.alignment_flag)
+    llm=st.ScriptedLlm(list(graph_fixtures._HAPPY))
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kwargs:dict(D=st.DAILY,W=st.WEEKLY,M=st.MONTHLY),
+        cache=None,trace_sink=None,enabled=True)
+    req=request()
+    try:
+        result=await runtime.BoundaryRuntime(bridge).run(req)
+        contract.validate_response(result,req);actual=result['data']['result'];signal=actual['signal']
+        assert signal['confidence']==conf.confidence and signal['confidence_level']==conf.confidence_level.value
+        assert signal['confidence_basis']==conf.confidence_basis
+        assert signal['signal_score']==aggregate.signal_score and signal['consensus']==aggregate.consensus.value
+        assert [(r['indicator'],r['signal'],r['value'],r['metrics'],r['weight']) for r in actual['technical_signals']]==[
+            (r.indicator.value,r.signal.value,r.value,r.metrics,r.weight) for r in aggregate.technical_signals]
+        assert actual['regime']['final_regime']==regime.final_regime.value
+        assert all(CONFIDENCE_MEANING in actual['interpretation'][key] for key in ('text','signal_interpretation'))
+        assert '근거 점수' in actual['interpretation']['one_line_summary'] and len(actual['interpretation']['one_line_summary'])<=40
+        assert len(llm.prompts)==4 and not ATTEMPTS
+        for prompt in llm.prompts[2:]:
+            assert '현재 지표의 규칙 기반 근거 점수' in prompt and '상승 확률·예측 정확도가 아닙니다' in prompt
+    finally:
+        await asyncio.sleep(0);assert runtime._ACTIVE_TASK is None
+        assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
+
+
 # CF053: the actual graph/bridge/runtime plus selected CF051 definitions; SDK
 # constructors and OHLCV are synthetic. This is not a SQL or provider test.
 import json

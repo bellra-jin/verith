@@ -6,7 +6,7 @@
   - final_regime은 일봉 라벨 그대로. 조합 라벨("상승 중 단기 과열" 등)을 만들지 않는다.
   - 상위 추세 맥락은 라벨이 아니라 alignment_flag·regime_context로만 표현한다.
   - 기준 상위 추세는 월봉 우선, 월봉 unavailable이면 주봉 대체.
-  - 중립 국면(overheated / oversold_rebound_watch / sideways / unavailable)은 상위 추세와 무관하게 alignment=neutral.
+  - 중립 국면과 unavailable은 상위 추세와 무관하게 alignment=neutral. unavailable은 이력 부족으로 구분한다.
   - 상위 추세가 sideways/unavailable이면 neutral.
   - regime_context는 코드 생성 고정 템플릿 문장(LLM 아님, 투자 권유 표현 없음).
 
@@ -64,6 +64,11 @@ def _alignment_and_context(
     daily_regime: Regime, weekly_trend: Trend, monthly_trend: Trend
 ) -> tuple[AlignmentFlag, str]:
     """일봉 국면 성격 + 기준 상위 추세로 alignment_flag와 regime_context를 만든다."""
+    if daily_regime == Regime.UNAVAILABLE:
+        return (
+            AlignmentFlag.NEUTRAL,
+            "국면 판정에 필요한 데이터/지표 이력이 부족해 상위 추세와의 정합/역행을 판정하지 않습니다.",
+        )
     is_positive = daily_regime in _POSITIVE_REGIMES
     is_negative = daily_regime in _NEGATIVE_REGIMES
 

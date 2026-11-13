@@ -160,9 +160,9 @@ MTF-01·05·06이 중립 국면 케이스다 — 상위 추세가 무엇이든 `
 | --- | --- | --- |
 | REG-UNAV-01 | 일봉 < `MIN_DAILY_BARS`(예: 40개) | `data_status=regime_unavailable`, `final_regime=unavailable` |
 | REG-UNAV-02 | final_regime=unavailable | `signal=null`, `risk=null`, `technical_signals=[]`, 4·6~8 스킵하고 차트로 |
-| REG-UNAV-03 | 일봉 ≥ `MIN_DAILY_BARS`이나 60MA **기울기**만 계산 불가 | `unavailable` 아님 — 해당 조건만 False, 어디에도 안 걸리면 `sideways`로 착지 |
+| REG-UNAV-03 | 일봉 ≥ `MIN_DAILY_BARS`이나 60MA **기울기**만 계산 불가 | 앞선 충분한 우선순위 1~5 판정은 보존하고, 어디에도 안 걸리면 마지막 fallback에서 `unavailable`로 구분 |
 
-`contracts.md`·`regime_rules.md`(판단 불가 vs 조건 False)와 연결된다 — **필수 데이터 자체 부족(봉 수 < MIN_DAILY_BARS)**만 `unavailable`이고, 값은 있으나 보조 계산(기울기 등)만 부족하면 그 조건만 False 처리해 `sideways` 등으로 정상 착지한다. **억지 판정을 하지 않는 것**이 정직성의 핵심이다.
+`contracts.md`·`regime_rules.md`(판단 불가 vs 조건 False)와 연결된다 — **필수 데이터 자체 부족(봉 수 < MIN_DAILY_BARS)**은 `unavailable`이고, 60MA 기울기가 부족해도 앞선 충분한 우선순위 1~5 판정은 유지한다. 앞선 판정이 없고 기울기 이력도 없으면 횡보로 확정하지 않고 마지막 fallback에서 `unavailable`로 구분한다. **억지 판정을 하지 않는 것**이 정직성의 핵심이다.
 
 ---
 

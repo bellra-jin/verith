@@ -143,6 +143,11 @@ CONFIDENCE_MEDIUM = 0.4         # 0.4 ~ 0.7 → 보통, < 0.4 → 낮음
 
 각 요소를 0.0~1.0으로 계산해 `CONFIDENCE_WEIGHTS`로 가중합한다. 모든 요소는 "높을수록 confidence↑" 방향이다. **코드가 확정하며 LLM은 confidence를 만들지 않는다.**
 
+confidence는 **현재 지표의 규칙 기반 근거 점수**이며 상승 확률·예측 정확도가 아니다.
+지표 개수 자체의 충분함도 보장하지 않는다. 현재 산식에서는 한 방향 지표 1개·거래량 확인 1·횡보가
+agreement=1, volume_confirm=1, trend_clarity=0, conflict_absence=1로 **0.8/HIGH**가 될 수 있다.
+이를 확률이나 ‘충분한 근거가 많음’으로 바꾸어 설명하지 않고 적용 지표의 긍정·중립·부정 개수를 그대로 표시한다.
+
 - **agreement** = `|Σ(weight_i × signal_i)| / Σ(weight_i × |signal_i|)` — 모두 같은 방향이면 1.0, 상쇄될수록 낮아짐. **모든 지표가 neutral이면 0.0**(분모 0 → 0으로 정의).
 - **volume_confirm** = `clamp(volume_ratio, 0.0, 1.0)` — `volume_ratio ≥ 1` → 1.0, 계산 불가 → 0.0.
 - **trend_clarity** — 국면·상위 추세 정합성:

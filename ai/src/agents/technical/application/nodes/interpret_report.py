@@ -30,6 +30,7 @@ from ...domain.interpretation import trajectory_eval
 from ...domain.interpretation.keyword_rules import ALIGNMENT_RULES, CONFIDENCE_LABELS, CONFIDENCE_RULES, CONSENSUS_LABELS, CONSENSUS_RULES, INDICATOR_LABELS, REGIME_LABELS, REGIME_RULES, RISK_LABELS, RISK_MENTION_TERMS, SIGNAL_LABELS, SIGNAL_RULES
 from ...domain.models.contracts import InterpretationResult, RegimeResult, RiskItem, SignalSummary
 from ...domain.models.enums import AlignmentFlag, Consensus, DirectionalBias, GenerationSource, IndicatorType, RiskFlag, Signal, Trend
+from ...domain.synthesis.confidence import CONFIDENCE_MEANING
 from ...domain.synthesis.signal_score import IndicatorSignalResult
 
 PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -311,7 +312,7 @@ def bias_from_consensus(consensus: Consensus) -> DirectionalBias:
 def _one_line(regime: RegimeResult, signal: SignalSummary) -> str:
     return (
         f"{REGIME_LABELS[regime.final_regime]} · 종합신호 {CONSENSUS_LABELS[signal.consensus]}"
-        f"({CONFIDENCE_LABELS[signal.confidence_level]} 신뢰도)"
+        f"(근거 점수 {CONFIDENCE_LABELS[signal.confidence_level]})"
     )
 
 
@@ -326,6 +327,7 @@ def _signal_text(signal: SignalSummary) -> str:
     return (
         f"종합 신호는 {CONSENSUS_LABELS[signal.consensus]}이며 신뢰도는 "
         f"{CONFIDENCE_LABELS[signal.confidence_level]} 수준입니다."
+        f" {CONFIDENCE_MEANING}"
     )
 
 

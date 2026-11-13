@@ -1322,6 +1322,85 @@ class CF040Boundary(unittest.TestCase):
 import hashlib
 
 class TechnicalGraphBoundary(unittest.TestCase):
+    def test_confidence_math_unchanged_and_actual_basis_summary_preserve_score_meaning(self):
+        import ast
+        import __future__
+        from types import SimpleNamespace
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        tree=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/domain/synthesis/confidence.py'))
+        math_functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name!='_confidence_basis']
+        math_ast=ast.dump(ast.Module(body=math_functions,type_ignores=[]),include_attributes=False)
+        self.assertEqual(hashlib.sha256(math_ast.encode()).hexdigest(),'bd3b61764280de75d693e40380412f7f4c8f80ab8a0a0c16033455035200e4f0')
+        meaning=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign)
+                     and any(isinstance(t,ast.Name) and t.id=='CONFIDENCE_MEANING' for t in n.targets))
+        basis=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_confidence_basis')
+        report=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/application/nodes/interpret_report.py'))
+        functions=[basis]+[n for n in report.body if isinstance(n,ast.FunctionDef) and n.name in {'_one_line','_signal_text'}]
+        allowed=(ast.FunctionDef,ast.arguments,ast.arg,ast.Assign,ast.Name,ast.Load,ast.Store,ast.Call,
+                 ast.GeneratorExp,ast.comprehension,ast.Compare,ast.Eq,ast.Attribute,ast.Constant,
+                 ast.BinOp,ast.Add,ast.Return,ast.JoinedStr,ast.FormattedValue,ast.Subscript)
+        self.assertTrue(all(isinstance(n,allowed) for fn in functions for n in ast.walk(fn)))
+        self.assertTrue(all(isinstance(n.func,ast.Name) and n.func.id=='sum' and not n.keywords
+                            for fn in functions for n in ast.walk(fn) if isinstance(n,ast.Call)))
+        expected_attrs={('signal_result','technical_signals'),('r','signal'),('Signal','POSITIVE'),
+                        ('Signal','NEUTRAL'),('Signal','NEGATIVE'),('regime','final_regime'),
+                        ('signal','consensus'),('signal','confidence_level')}
+        self.assertTrue(all(isinstance(n.value,ast.Name) and (n.value.id,n.attr) in expected_attrs
+                            for fn in functions for n in ast.walk(fn) if isinstance(n,ast.Attribute)))
+        env={'__builtins__':{'sum':sum},'Signal':SimpleNamespace(POSITIVE='positive',NEUTRAL='neutral',NEGATIVE='negative'),
+             '_CONFIDENCE_LABEL':{'high':'높음'},'CONFIDENCE_LABELS':{'high':'높음'},
+             'CONFIDENCE_MEANING':meaning,'REGIME_LABELS':{'sideways':'횡보'},'CONSENSUS_LABELS':{'positive':'긍정'}}
+        code=compile(ast.Module(body=functions,type_ignores=[]),'<pinned-confidence-text>','exec',flags=__future__.annotations.compiler_flag,dont_inherit=True)
+        exec(code,env)
+        text=env['_confidence_basis'](SimpleNamespace(technical_signals=[SimpleNamespace(signal='positive')]),'high')
+        self.assertIn('지표 1개 중 긍정 1·중립 0·부정 0',text)
+        self.assertIn('현재 지표의 규칙 기반 근거 점수',text);self.assertIn('상승 확률·예측 정확도가 아닙니다',text)
+        signal=SimpleNamespace(consensus='positive',confidence_level='high')
+        short=env['_one_line'](SimpleNamespace(final_regime='sideways'),signal)
+        self.assertIn('근거 점수 높음',short);self.assertLessEqual(len(short),40)
+        self.assertIn(meaning,env['_signal_text'](signal))
+        for path in ('interpret_report.md','regenerate_report.md'):
+            prompt=c.regular_bytes(root,'ai/src/agents/technical/prompts/'+path).decode()
+            self.assertIn('현재 지표의 규칙 기반 근거 점수',prompt)
+            self.assertIn('상승 확률·예측 정확도가 아닙니다',prompt)
+            self.assertIn('개별 부정 기여:',prompt);self.assertIn('개별 긍정 기여:',prompt)
+            self.assertNotIn('검증(③) 대상이 아니지만',prompt)
+
+
+    def test_warmup_tail_preserves_prior_rules_and_distinguishes_unavailable_context(self):
+        import ast
+        from types import SimpleNamespace
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        rules=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/domain/regime/rules.py'))
+        fn=next(n for n in rules.body if isinstance(n,ast.FunctionDef) and n.name=='classify_daily_regime')
+        # Reviewed original priority 1~5 and every calculation remain byte-independent AST-equivalent.
+        prefix=ast.dump(ast.Module(body=fn.body[:-2],type_ignores=[]),include_attributes=False)
+        self.assertEqual(hashlib.sha256(prefix.encode()).hexdigest(),'15354cd82f7a508fa2c60cf4342987e05060d757c6b043acb5e91a5bc8a2e8a1')
+        tail=fn.body[-2:]
+        self.assertTrue(all(isinstance(n,(ast.If,ast.Compare,ast.Name,ast.Load,ast.Is,ast.Constant,ast.Return,ast.Attribute))
+                            for part in tail for n in ast.walk(part)))
+        self.assertTrue(all(isinstance(n.value,ast.Name) and n.value.id=='Regime' and n.attr in {'UNAVAILABLE','SIDEWAYS'}
+                            for part in tail for n in ast.walk(part) if isinstance(n,ast.Attribute)))
+        wrapper=ast.parse('def evaluate(slope60):\n pass').body[0];wrapper.body=tail
+        env={'__builtins__':{},'Regime':SimpleNamespace(UNAVAILABLE='unavailable',SIDEWAYS='sideways')}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<pinned-warmup-tail>','exec'),env)
+        for slope,expected in ((None,'unavailable'),(0,'sideways'),(-1,'sideways'),(1,'sideways')):
+            self.assertEqual(env['evaluate'](slope),expected)
+        context=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/domain/regime/multiframe.py'))
+        branch=next(n for n in context.body if isinstance(n,ast.FunctionDef) and n.name=='_alignment_and_context').body[1]
+        self.assertTrue(all(isinstance(n,(ast.If,ast.Compare,ast.Name,ast.Load,ast.Eq,ast.Constant,ast.Return,ast.Attribute,ast.Tuple)) for n in ast.walk(branch)))
+        self.assertTrue(all(isinstance(n.value,ast.Name) and (n.value.id,n.attr) in {('Regime','UNAVAILABLE'),('AlignmentFlag','NEUTRAL')}
+                            for n in ast.walk(branch) if isinstance(n,ast.Attribute)))
+        wrapper=ast.parse('def evaluate_context(daily_regime):\n pass').body[0];wrapper.body=[branch]
+        env['AlignmentFlag']=SimpleNamespace(NEUTRAL='neutral')
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<pinned-unavailable-context>','exec'),env)
+        flag,text=env['evaluate_context']('unavailable')
+        self.assertEqual(flag,'neutral');self.assertIn('데이터/지표 이력이 부족',text)
+        self.assertIsNone(env['evaluate_context']('sideways'))
+
+
     def test_support_resistance_simultaneous_proximity_has_no_direction_bias(self):
         import ast
         from enum import Enum

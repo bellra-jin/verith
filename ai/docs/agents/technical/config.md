@@ -248,13 +248,13 @@ KIS_FETCH_LOOKBACK_DAYS = {
 KIS_FETCH_CHUNK_DAYS = {
     "D": 100,    # ≈68거래일 < 100건
     "W": 600,    # ≈85주 < 100건
-    "M": 1900,   # ≈60개월 < 100건 (분할 없이 1청크)
+    "M": 1900,   # 요청 폭 ≈60개월 < 100건; D/M 기존 종료 계약 유지
 }
-KIS_MAX_CHUNKS = 10             # 무한 루프 방지 상한 (D≈5·W≈4청크면 충분)
+KIS_MAX_CHUNKS = 10             # period당 페이지 상한; 수신량에 따른 완료 보장은 아님
 ```
 
 *연결: `services/kis_client.py`(`fetch_ohlcv`·`fetch_ohlcv_range`), `charts/chart_builder.py`(표시 slice `CHART_PERIOD_DAYS`), `kis_mapping.md` §8.*
-*`KIS_MAX_CHUNKS`는 상한이자 완전성 가드다 — `fetch_ohlcv_range`가 이 상한을 다 쓰고도 요청 `start_date`까지 못 가면 잘린 결과를 반환하지 않고 예외(`KisRangeIncompleteError`)를 던진다(kis_mapping §8.1). 지나치게 넓은 명시 범위 요청에서 데이터가 조용히 잘리는 것을 막기 위함이다.*
+*`KIS_MAX_CHUNKS`는 상한이자 완전성 가드다 — `fetch_ohlcv_range`가 이 상한을 다 쓰고도 요청 `start_date`까지 못 가면 잘린 결과를 반환하지 않고 예외(`KisRangeIncompleteError`)를 던진다(kis_mapping §8.1). 지나치게 넓거나 응답량이 적은 범위에서 partial을 조용히 반환하지 않기 위함이다. W의 다음 cursor는 요청 창 안의 실제 최저 날짜에서 계산하며 D/M 종료 의미는 유지한다. 별도 일회 `market_limit=30`은 기존 retry를 포함한 송신 상한이며 이 안에 완료된다는 뜻이 아니다.*
 ***`KIS_FETCH_LOOKBACK_DAYS`(원천 데이터 확보 기간)와 `CHART_PERIOD_DAYS`(§10, 프론트 표시 slice)는 다른 축이다.*** fetch가 표시 창보다 넓어야 차트 왼쪽 끝 candle의 MA overlay까지 계산된다. D→W/M 리샘플은 하지 않는다 — D/W/M은 각각 KIS `FID_PERIOD_DIV_CODE`로 직접 조회한다.
 
 ## 9. 검증·재생성 (verification)

@@ -1433,7 +1433,7 @@ def explicit_kis_slices():
     for name in ('KisApiError','KisFieldError','KisRangeIncompleteError','OutOfScopeTickerError','InvalidPeriodError'):
         env[name]=ValueError
     for name in ('KIS_BACKOFF_SECONDS','KIS_FETCH_CHUNK_DAYS','KIS_FETCH_LOOKBACK_DAYS','KIS_MAX_CHUNKS',
-                 'KIS_MAX_RETRIES','KIS_TIMEOUT_SECONDS'):
+                 'KIS_MAX_RETRIES','KIS_TIMEOUT_SECONDS','KIS_PERIOD_WEEKLY'):
         env[name]=getattr(config,name)
     constants={'TOKEN_PATH','CHART_PATH','TR_ID','MARKET_DIV_CODE','ORG_ADJ_PRC','CUST_TYPE','RATE_LIMIT_MSG_CODE',
         'KIS_FIELD_DATE','KIS_FIELD_OPEN','KIS_FIELD_HIGH','KIS_FIELD_LOW','KIS_FIELD_CLOSE','KIS_FIELD_VOLUME',

@@ -1152,3 +1152,324 @@ def test_numeric_list_diagnostic_targets_normalize_exact_indices_only(field):
     assert ev.diagnostic_codes(result)==[dict(target='interpretation.'+field,reason='numeric_claim_unsupported')]
     for suffix in ('[-1]','[00]','[1.0]','[True]','[0]private','[private]'):
         assert ev.diagnostic_codes(ev.EvalResult(False,(ev.TargetFailure('interpretation.'+field+suffix,'numeric_claim_unsupported'),)))[0]['target']=='output'
+
+
+def weekly_source(start,end,*,missing=()):
+    from datetime import timedelta
+    rows=[];cursor=start
+    while cursor<=end:
+        if cursor.weekday()==0 and cursor.isoformat() not in missing:rows.append(kis_bar(cursor.strftime('%Y%m%d')))
+        cursor+=timedelta(days=1)
+    return rows
+
+
+@pytest.mark.parametrize('cap_first',[True,False])
+def test_weekly_chunk_pages_from_returned_oldest_not_requested_lower_bound(monkeypatch,cap_first):
+    from datetime import date,timedelta
+    from src.agents.technical.infrastructure import kis_client as kis
+    from src.agents.technical.application.nodes.chart_generate import run_chart_generate
+    start=date(2020,9,15);end=date(2026,11,13);source=weekly_source(start,end);calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        got=sorted([x for x in source if lo<=x['stck_bsop_date']<=hi],key=lambda x:x['stck_bsop_date'],reverse=True)
+        if not calls and cap_first:
+            # Synthetic valid short page: omit the oldest week in this window.
+            # This matches the observed date pattern, NOT proven KIS behavior.
+            assert got[-1]['stck_bsop_date']=='20250324';got=got[:-1]
+        calls.append((lo,hi,[x['stck_bsop_date'] for x in got]))
+        return {'output2':got[:100]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    rows=kis._fetch_ohlcv_range('000720','W',start,end,None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert [x.date for x in rows]==[date.fromisoformat(x['stck_bsop_date'][:4]+'-'+x['stck_bsop_date'][4:6]+'-'+x['stck_bsop_date'][6:]).isoformat() for x in source]
+    assert '2025-03-24' in [x.date for x in rows] and len(calls)<=config.KIS_MAX_CHUNKS
+    if cap_first:
+        assert calls[0][0]=='20250323' and min(calls[0][2])=='20250331'
+        assert calls[1][1]=='20250330' # no replay of the previously accepted week
+    for previous,current in zip(calls,calls[1:]):
+        assert previous[2] and current[1]==(date.fromisoformat(previous[2][-1][:4]+'-'+previous[2][-1][4:6]+'-'+previous[2][-1][6:])-timedelta(days=1)).strftime('%Y%m%d')
+    chart=next(x for x in run_chart_generate(st.DAILY,rows,st.MONTHLY) if x.period.value=='5y')
+    assert '2025-03-24' in [x['date'] for x in chart.model_dump(mode='json')['chart_data']['candles']]
+
+
+@pytest.mark.parametrize('behavior',['repeat','empty','capped'])
+def test_pagination_no_progress_and_cap_are_not_silent_completion(monkeypatch,behavior):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        calls.append((lo,hi))
+        available=weekly_source(date(2020,9,15),date(2026,11,13))
+        eligible=[r for r in available if lo<=r['stck_bsop_date']<=hi]
+        return {'output2':[] if behavior=='empty' else [kis_bar('20261109')] if behavior=='repeat' else eligible[-1:]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    def run():return kis._fetch_ohlcv_range('000720','W',date(2020,9,15),date(2026,11,13),None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    if behavior=='empty':assert run()==[] and len(calls)==1
+    elif behavior=='repeat':
+        with pytest.raises(kis.KisRangeIncompleteError,match='^KIS_RANGE_NO_PROGRESS$'):run()
+        assert len(calls)==2
+    else:
+        with pytest.raises(kis.KisRangeIncompleteError):run()
+        assert len(calls)==config.KIS_MAX_CHUNKS
+
+
+def test_unreturned_week_is_not_invented_and_holiday_week_labels_are_preserved(monkeypatch):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    source=[kis_bar(d) for d in ('20250304','20250310','20250317','20250331')];calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        calls.append((lo,hi));return {'output2':[x for x in reversed(source) if lo<=x['stck_bsop_date']<=hi]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    rows=kis._fetch_ohlcv_range('000720','W',date(2025,3,1),date(2025,3,31),None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert [r.date for r in rows]==['2025-03-04','2025-03-10','2025-03-17','2025-03-31']
+    assert len(calls)==2 # explicit empty tail, not a completeness guarantee
+
+
+@pytest.mark.parametrize('name',[
+    'test_multiple_chunks_walk_backward','test_dedup_and_ascending','test_range_filter_drops_out_of_range',
+    'test_empty_chunk_stops','test_stops_when_oldest_not_progressing','test_max_chunks_incomplete_raises',
+    'test_reaches_start_within_max_chunks_returns','test_reversed_range_fail_fast_before_network'])
+def test_existing_KIS_pagination_regressions_through_protected_source_copy(name,monkeypatch):
+    from tests.technical import test_kis_client_mapping as existing
+    assert Path(existing.__spec__.origin).resolve()==ROOT/'ai/tests/technical/test_kis_client_mapping.py'
+    getattr(existing,name)(monkeypatch)
+
+
+@pytest.mark.parametrize('failures',[0,2])
+def test_received_date_pagination_keeps_existing_owned_market_send_cap(monkeypatch,failures):
+    from datetime import date,timedelta
+    from src.agents.technical.infrastructure import kis_client as kis
+    end=date(2026,11,13);source={};cursor=end-timedelta(days=2300)
+    while cursor<=end:
+        raw=kis_bar(cursor.strftime('%Y%m%d'))
+        if cursor.weekday()<5:source.setdefault('D',[]).append(raw)
+        if cursor.weekday()==0:source.setdefault('W',[]).append(raw)
+        if cursor.day==1:source.setdefault('M',[]).append(raw)
+        cursor+=timedelta(days=1)
+    settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid');calls=[];attempts={}
+    hook,observed=kis.kis_request_gate(settings=settings,ticker='000720',deadline=SimpleNamespace(remaining_seconds=lambda:30),stopped=threading.Event(),token_limit=3,market_limit=30)
+    def respond(request):
+        calls.append(request)
+        if request.method=='POST':return httpx.Response(200,json={'access_token':'fake-token','expires_in':86400})
+        key=str(request.url);attempts[key]=attempts.get(key,0)+1
+        if attempts[key]<=failures:return httpx.Response(429,json={})
+        params=request.url.params;rows=[r for r in source[params['FID_PERIOD_DIV_CODE']] if params['FID_INPUT_DATE_1']<=r['stck_bsop_date']<=params['FID_INPUT_DATE_2']]
+        return httpx.Response(200,json={'rt_cd':'0','output2':list(reversed(rows))[:100]})
+    monkeypatch.setattr(kis,'_sleep_backoff',lambda attempt:None)
+    with httpx.Client(transport=httpx.MockTransport(respond),trust_env=False,follow_redirects=False,event_hooks={'request':[hook]}) as client:
+        if failures:
+            with pytest.raises(kis.KisApiError,match='^KIS invocation limit reached$'):
+                kis.fetch_multi_timeframe_ohlcv('000720',end_date=end,client=client,settings=settings)
+            assert observed()=={'token':1,'market':30}
+        else:
+            result=kis.fetch_multi_timeframe_ohlcv('000720',end_date=end,client=client,settings=settings)
+            for period,rows in result.items():
+                lower=(end-timedelta(days=config.KIS_FETCH_LOOKBACK_DAYS[period])).strftime('%Y%m%d')
+                assert [r.date for r in rows]==[date.fromisoformat(r['stck_bsop_date'][:4]+'-'+r['stck_bsop_date'][4:6]+'-'+r['stck_bsop_date'][6:]).isoformat() for r in source[period] if r['stck_bsop_date']>=lower]
+            assert observed()['token']==1 and observed()['market']<=30
+        assert len([x for x in calls if x.method=='GET'])==observed()['market']
+
+
+@pytest.mark.parametrize('partial_month',[False,True])
+def test_month_end_and_progressing_month_keep_original_terminal_request(monkeypatch,partial_month):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        calls.append((lo,hi));assert period=='M'
+        # A cutoff-sensitive producer could return May 28 if asked a second
+        # time. The monthly terminal contract must not make that request.
+        dates=['20260529','20260630']+(['20260703'] if partial_month else [])
+        return {'output2':[kis_bar(d) for d in reversed(dates)]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    rows=kis._fetch_ohlcv_range('000720','M',date(2026,5,1),date(2026,7,3),None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert calls==[('20260501','20260703')]
+    assert [r.date for r in rows]==['2026-05-29','2026-06-30']+(['2026-07-03'] if partial_month else [])
+
+
+def test_weekly_cutoff_cannot_accumulate_another_version_of_same_week(monkeypatch):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        calls.append((lo,hi));return {'output2':[kis_bar('20260703' if len(calls)==1 else '20260702')]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    with pytest.raises(kis.KisRangeIncompleteError,match='^KIS_WEEKLY_PERIOD_AMBIGUOUS$'):
+        kis._fetch_ohlcv_range('000720','W',date(2026,5,1),date(2026,7,3),None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert len(calls)==2
+
+
+@pytest.mark.parametrize('extra',['19990104','20210301','20270104'])
+def test_weekly_mixed_outside_rows_cannot_prove_progress_or_completion(monkeypatch,extra):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    start=date(2020,9,15);end=date(2026,11,13);source=weekly_source(start,end);calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        got=[r for r in reversed(source) if lo<=r['stck_bsop_date']<=hi][:100]
+        if not calls:got=got[:-1]+[kis_bar(extra)] # short valid prefix plus an unrelated row
+        calls.append((lo,hi))
+        return {'output2':got}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    rows=kis._fetch_ohlcv_range('000720','W',start,end,None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert [r.date.replace('-','') for r in rows]==[r['stck_bsop_date'] for r in source]
+    assert '2025-03-24' in [r.date for r in rows] and len(calls)<=config.KIS_MAX_CHUNKS
+
+
+@pytest.mark.parametrize('dates',[['19990104'],['20270104'],['19990104','20270104']])
+def test_weekly_nonempty_response_without_request_window_evidence_is_incomplete(monkeypatch,dates):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    calls=[]
+    def chart(*args,**kwargs):calls.append(True);return {'output2':[kis_bar(d) for d in dates]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    with pytest.raises(kis.KisRangeIncompleteError,match='^KIS_RANGE_NO_PROGRESS$'):
+        kis._fetch_ohlcv_range('000720','W',date(2020,9,15),date(2026,11,13),None,settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert calls==[True]
+
+
+def test_safe_market_sample_recovers_skipped_week_without_changing_values(monkeypatch):
+    # Three normalized public market candles from the approved current comparison.
+    # The projected fake pages do not replay the unrecorded historic responses or
+    # claim the updated long next-window request has been tested live.
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    samples = [{'close': 34200,
+  'date': '2025-03-17',
+  'high': 34450,
+  'low': 31650,
+  'open': 32700,
+  'trading_value': 87786722575,
+  'volume': 2617464},
+ {'close': 34700,
+  'date': '2025-03-24',
+  'high': 35500,
+  'low': 33200,
+  'open': 33700,
+  'trading_value': 99080542400,
+  'volume': 2865047},
+ {'close': 35700,
+  'date': '2025-03-31',
+  'high': 36500,
+  'low': 34250,
+  'open': 34550,
+  'trading_value': 134842725000,
+  'volume': 3768328}]
+    def raw(row):
+        return dict(stck_bsop_date=row['date'].replace('-',''),stck_oprc=str(row['open']),
+            stck_hgpr=str(row['high']),stck_lwpr=str(row['low']),stck_clpr=str(row['close']),
+            acml_vol=str(row['volume']),acml_tr_pbmn=str(row['trading_value']))
+    calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        calls.append((lo,hi))
+        available = samples[-1:] if len(calls)==1 else samples
+        return {'output2':[raw(row) for row in reversed(available) if lo<=row['date'].replace('-','')<=hi]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    rows=kis._fetch_ohlcv_range('000720','W',date(2020,9,15),date(2026,11,13),None,
+        settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert calls[0]==('20250323','20261113') and calls[1][1]=='20250330'
+    assert [row.model_dump(mode='json') for row in rows]==samples
+    assert next(row for row in rows if row.date=='2025-03-24').model_dump(mode='json')==samples[1]
+
+
+def test_two_observed_normalized_weekly_responses_replay_exact_request_chain(monkeypatch):
+    # Normalized market fields only: first 85 rows from the approved long
+    # comparison, then 2 rows from its short comparison. No auth/raw response.
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    sample_csv = """2025-03-31,34550,36500,34250,35700,3768328,134842725000
+2025-04-07,35000,38200,33950,38200,3959866,144335655225
+2025-04-14,37900,39850,37450,39350,3210699,125126188850
+2025-04-21,39350,40500,38050,39350,2865127,112241978875
+2025-04-28,39500,41950,39450,40800,3023283,124331611950
+2025-05-07,40350,43500,40200,41200,2597893,110058547000
+2025-05-12,42400,45000,42300,44600,3386191,148728391550
+2025-05-19,44500,54400,44350,54200,7280414,363348828605
+2025-05-26,56200,66900,55000,63800,15839067,979299909900
+2025-06-02,61900,71100,61800,68000,7226849,482108615900
+2025-06-09,67600,78800,65000,73600,12250807,892956439000
+2025-06-16,74200,81600,74000,75300,8887667,684299738050
+2025-06-23,72900,85100,72600,78800,13977549,1104127055050
+2025-06-30,80600,83900,70700,71300,8503005,648841620400
+2025-07-07,69100,74900,69000,72100,5649354,409913166600
+2025-07-14,71300,75200,68000,70900,6257390,446697816002
+2025-07-21,71600,71600,65000,66800,7728897,521119766850
+2025-07-28,65700,68500,63400,65600,8332676,551507535176
+2025-08-04,65000,71700,64000,68400,6131945,423123935150
+2025-08-11,68500,69400,62100,63800,5072345,328781760250
+2025-08-18,63200,64200,54350,62500,7975994,480724735700
+2025-08-25,64500,65500,61000,62100,4011401,251216582500
+2025-09-01,61200,61800,58900,59600,3570640,213577840650
+2025-09-08,60200,61300,57100,59400,3628298,215269345450
+2025-09-15,60200,62700,56200,57000,5795961,342969323050
+2025-09-22,57700,58200,54600,54800,3466814,194234570950
+2025-09-29,55300,57300,54100,55500,3105030,172329606624
+2025-10-10,55100,56900,54800,56200,862602,48526819650
+2025-10-13,55600,63000,54800,56000,7489612,442937304850
+2025-10-20,56400,68000,55700,66600,7196737,437853666050
+2025-10-27,73500,76400,67200,70300,15810451,1125545888650
+2025-11-03,69000,69200,60600,61900,9403480,610492808900
+2025-11-10,62100,65900,61600,62800,5205209,329420811750
+2025-11-17,62900,64400,58700,59300,4416219,270969613150
+2025-11-24,60600,68200,59200,67000,7587649,491229027600
+2025-12-01,67500,75900,63400,75100,14272362,1001914247450
+2025-12-08,75100,78500,71000,78000,13120532,985922419750
+2025-12-15,70700,74500,68000,69400,11653491,821521435450
+2025-12-22,70500,71800,67900,68700,4508764,317206484350
+2025-12-29,68100,71100,67900,69000,3639870,251092321100
+2026-01-05,70200,77900,70100,75800,5931319,442934293050
+2026-01-12,78000,105900,77900,104300,24897738,2306846201900
+2026-01-19,108500,122000,103000,109200,12194789,1336411489800
+2026-01-26,109000,110800,102400,102600,7617741,806969726420
+2026-02-02,99600,119000,98000,106600,8018863,870720194350
+2026-02-09,110600,121400,109500,114300,7651346,878226420495
+2026-02-19,116100,132100,115500,128300,3676108,458505103200
+2026-02-23,132000,176900,130100,164700,17819885,2799493273250
+2026-03-03,162900,166000,122700,156800,7976635,1154511623200
+2026-03-09,147400,169000,139800,164400,8029905,1248648216950
+2026-03-16,166400,174900,157500,164000,6102741,1022009763882
+2026-03-23,165600,165600,142600,149800,5826274,886638639700
+2026-03-30,140800,165400,139600,151100,5623722,849752812950
+2026-04-06,151100,198400,150100,179500,11099337,1981915557950
+2026-04-13,172000,186500,170200,177000,5532561,989463543050
+2026-04-20,171800,179500,166800,173000,8211582,1430920415594
+2026-04-27,173600,179300,160900,161800,4873561,824899744700
+2026-05-04,163100,175500,157600,164000,4788255,784380271900
+2026-05-11,162000,170900,150200,155000,6139897,993976692208
+2026-05-18,143800,154600,130000,150300,4852547,687066012950
+2026-05-26,157100,160700,135800,147000,3526789,513619336800
+2026-06-01,142500,144100,126600,131900,3335373,451731428100
+2026-06-08,116000,157500,115100,157500,4744958,599979995650
+2026-06-15,157600,157700,125000,128600,6594358,937407555300
+2026-06-22,126100,132100,100000,103300,4583287,530632464150
+2026-06-29,102400,122700,101200,115300,2950697,338097859000
+2026-07-06,116400,120200,96400,107200,3233794,340400566150
+2026-07-13,105600,109200,94200,99000,1837162,183909047000
+2026-07-20,94700,111150,88800,106200,2572156,256929926700
+2026-07-27,108100,108700,77700,94600,3337026,300166304950
+2026-08-03,94500,115800,89000,109900,2916532,305884946450
+2026-08-10,110400,121700,105800,115800,2276430,258245433300
+2026-08-18,116200,118700,103500,105600,2401284,269064818950
+2026-08-24,105700,135900,103300,128900,6020165,748506774650
+2026-08-31,126000,126000,110700,119700,3216885,380913360850
+2026-09-07,119400,142000,117600,134900,4758728,628595098150
+2026-09-14,133000,133100,123300,124800,2738837,346579071700
+2026-09-21,126700,136100,120200,121100,2612439,330430315200
+2026-09-28,121900,126800,113000,114400,2839013,335964976900
+2026-10-06,115100,116600,103950,107800,2070291,226746896600
+2026-10-12,104000,104500,89200,93800,3421919,332270414516
+2026-10-19,92100,96900,88200,92500,2316741,214161034300
+2026-10-26,90000,97100,81600,83600,3419095,305242559550
+2026-11-02,81000,91600,73100,78100,3051908,257321526035
+2026-11-09,76400,87400,74800,84000,2361598,192730782150
+2025-03-17,32700,34450,31650,34200,2617464,87786722575
+2025-03-24,33700,35500,33200,34700,2865047,99080542400"""
+    columns=('date','open','high','low','close','volume','trading_value')
+    all_rows=[dict(zip(columns,line.split(','))) for line in sample_csv.splitlines()]
+    pages=[all_rows[:85],all_rows[85:]];expected_windows=[('20250323','20261113'),('20250317','20250330')];calls=[]
+    def chart(settings,token,ticker,period,lo,hi,client,**kwargs):
+        i=len(calls);assert i<2 and (lo,hi)==expected_windows[i];calls.append((lo,hi))
+        return {'output2':[dict(stck_bsop_date=r['date'].replace('-',''),stck_oprc=r['open'],stck_hgpr=r['high'],stck_lwpr=r['low'],stck_clpr=r['close'],acml_vol=r['volume'],acml_tr_pbmn=r['trading_value']) for r in reversed(pages[i])]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    result=kis._fetch_ohlcv_range('000720','W',date(2025,3,17),date(2026,11,13),None,
+        settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    expected=sorted([dict(date=r['date'],**{k:float(r[k]) for k in columns[1:5]},volume=int(r['volume']),trading_value=int(r['trading_value'])) for r in all_rows],key=lambda r:r['date'])
+    assert len(result)==87 and [r.model_dump(mode='json') for r in result]==expected
+    assert result[1].date=='2025-03-24' and calls==expected_windows

@@ -498,8 +498,8 @@ def _fetch_ohlcv_range(
 ) -> list[OHLCV]:
     """[start, end]를 청크로 나눠 KIS를 여러 번 호출·병합한다(kis_mapping §8.1).
 
-    end에서 과거 방향으로 KIS_FETCH_CHUNK_DAYS[period]씩 이동하며, 정지 조건(목표 도달·빈 청크·
-    최고(最古) date 정체·KIS_MAX_CHUNKS) 중 하나면 멈춘다. 결과는 date dedup → 범위 필터 →
+    주봉의 다음 종료일은 실제 반환 최저 날짜의 전날이며 진전 불명은 불완전 오류다.
+    D/M의 기존 요청 폭/종료 의미는 보존한다. 결과는 date dedup → 범위 필터 →
     과거→최신 정렬. 청크 실패·EGW00201은 _call_chart의 기존 retry/backoff를 그대로 쓴다.
     """
     explicit = settings is not None
@@ -515,6 +515,7 @@ def _fetch_ohlcv_range(
     chunk_days = KIS_FETCH_CHUNK_DAYS[period]
 
     by_date: dict[str, OHLCV] = {}
+    weekly_dates: dict[str, str] = {}
     cursor_end = end
     oldest_seen: str | None = None
     for _ in range(KIS_MAX_CHUNKS):
@@ -525,21 +526,52 @@ def _fetch_ohlcv_range(
 
         if not bars:  # 자연 종료 ②: 빈 청크(더 과거 데이터 없음)
             break
+        if period == KIS_PERIOD_WEEKLY:
+            # Preserve conflicting-repeat rejection even for extra response
+            # rows, but only this request's window may establish progress or
+            # completion. An unrelated old/future row cannot jump the cursor.
+            for bar in bars:
+                previous = by_date.get(bar.date)
+                if previous is not None and previous != bar:
+                    raise KisFieldError("KIS_MARKET_CONFLICTING_BAR")
+            lower, upper = chunk_start.isoformat(), cursor_end.isoformat()
+            bars = [bar for bar in bars if lower <= bar.date <= upper]
+            if not bars:
+                raise KisRangeIncompleteError("KIS_RANGE_NO_PROGRESS")
+        chunk_oldest = min(bar.date for bar in bars)
+        oldest_date = date.fromisoformat(chunk_oldest)
         for bar in bars:
             previous = by_date.get(bar.date)
             if previous is not None and previous != bar:
                 # An overlapping page may repeat an identical candle, but a
                 # conflicting price/volume cannot silently replace its source.
                 raise KisFieldError("KIS_MARKET_CONFLICTING_BAR")
+            if period == KIS_PERIOD_WEEKLY:
+                # This validates aggregate identity, never rewrites its date.
+                # A changed cutoff must not add a partial version of an already
+                # accepted calendar week under another date.
+                week = date.fromisoformat(bar.date).strftime("%G-%V")
+                previous_date = weekly_dates.get(week)
+                if previous_date is not None and previous_date != bar.date:
+                    raise KisRangeIncompleteError("KIS_WEEKLY_PERIOD_AMBIGUOUS")
+                weekly_dates[week] = bar.date
             by_date[bar.date] = bar
 
-        chunk_oldest = min(bar.date for bar in bars)
-        if chunk_start <= start:  # 자연 종료 ①: 목표 start까지 확보
-            break
-        if oldest_seen is not None and chunk_oldest >= oldest_seen:  # 자연 종료 ③: 더 과거로 안 감(정체)
-            break
-        oldest_seen = chunk_oldest
-        cursor_end = chunk_start  # 다음 청크는 여기서 끝(경계 1일 겹침 → date dedup으로 흡수)
+        if period == KIS_PERIOD_WEEKLY:
+            oldest_seen = chunk_oldest
+            if oldest_date <= start:
+                break
+            # A short weekly page cannot prove its unreceived prefix empty.
+            cursor_end = oldest_date - timedelta(days=1)
+        else:
+            # Daily/monthly contracts stay unchanged, including the monthly
+            # terminal window: never turn a month-end label into a new cutoff.
+            if chunk_start <= start:
+                break
+            if oldest_seen is not None and chunk_oldest >= oldest_seen:
+                break
+            oldest_seen = chunk_oldest
+            cursor_end = chunk_start
     else:
         # KIS_MAX_CHUNKS를 모두 쓰고도 요청 start까지 못 감 → 잘린 partial을 조용히 반환하지 않는다.
         raise KisRangeIncompleteError(

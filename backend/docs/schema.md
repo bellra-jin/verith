@@ -424,3 +424,18 @@ as-of/deadline. A narrow run INSERT guard enforces an associated Supervisor hand
 reservation can commit. Technical binding DELETE/TRUNCATE and populated downgrade are refused;
 empty downgrade locks the two affected tables, restores old Flow constraints and removes only the
 additive revision. Run counters/full holds and the existing Technical deletion rules are unchanged.
+
+## Supervisor composition foundation (c60001)
+
+Revision `c60001a7e0001` follows c540 and adds only `supervisor_compositions`.
+The immutable owner/client-key confirmation fixes original session/scope/consent,
+independent native policies, private derived child identities and original 15s/140s windows.
+One-way claim/handoff/close timestamps and optional native run FKs record consumed
+opportunities; this table is not a common usage ledger. Child binding checks owner,
+key, original Technical session, stock, policy, input and shared analysis time. Redaction
+cannot add formerly NULL child links or replace identity. DELETE/TRUNCATE and populated
+downgrade are refused; FKs use RESTRICT. Existing native schema/holds remain unchanged.
+
+The internal service supports admission, one-time local handoff, validated native links
+and owner observation (including a new valid session). It adds no public multi-analysis
+route or native dispatcher. See [composition contract](../../docs/contracts/supervisor-composition-v1.md).

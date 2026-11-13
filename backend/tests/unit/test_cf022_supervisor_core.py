@@ -314,3 +314,229 @@ def test_cf054_public_wire_negative_cases_are_in_the_protected_core_collection(m
         from tests.unit.test_flow_contract import test_cf054_public_projection_rejects_unknown_or_changed_wire
         test_cf054_public_projection_rejects_unknown_or_changed_wire(monkeypatch,change)
     finally:sys.meta_path.insert(0,IMPORT_GUARD)
+
+
+# Fixed composition observation has no provider/SQL authority.
+@pytest.mark.parametrize('first,second,closed,expected',[
+ ('stored','stored',True,'fulfilled'),('stored','unknown',True,'partial'),
+ ('stored','failed',True,'partial'),('stored','result_ready',True,'partial'),
+ ('unknown','failed',True,'unknown'),('result_ready','failed',True,'pending'),
+ ('failed','not_started',True,'unfulfilled'),('failed','not_started',False,'pending'),
+ ('deleted','deleted',True,'deleted'),('stored','deleted',True,'partial')])
+def test_composition_coverage_preserves_each_child_state(first,second,closed,expected):
+    from src.modules.supervisor.domain.composition import ChildObservation,coverage
+    def observed(view,state):return ChildObservation(view,state,state!='not_started',state not in {'not_started','unknown'})
+    values=(observed('flow',first),observed('technical',second))
+    assert coverage(values,dispatch_closed=closed)==expected
+    assert (values[0].state,values[1].state)==(first,second)
+
+
+def test_composition_fixed_keys_are_view_scoped_and_observation_is_strict():
+    from uuid import UUID
+    from src.modules.supervisor.domain.composition import fixed_child_key,ChildObservation,coverage,CompositionInvalid
+    id=UUID('00000000-0000-0000-0000-000000000001')
+    assert fixed_child_key(id,'flow',b'x'*32)==fixed_child_key(id,'flow',b'x'*32)
+    assert fixed_child_key(id,'flow',b'x'*32)!=fixed_child_key(id,'technical',b'x'*32)
+    for args in [('flow','stored',False,True),('flow','stored',True,False),('flow','not_started',True,False),('flow',[],True,False),('news','failed',True,True),('flow','unknown',1,True)]:
+        with pytest.raises(CompositionInvalid):ChildObservation(*args)
+    child=ChildObservation('flow','unknown',True,False)
+    for values,closed in [([],True),((child,child),True),((child,),1)]:
+        with pytest.raises(CompositionInvalid):coverage(values,dispatch_closed=closed)
+    for value in ('news',None,[]):
+        with pytest.raises(CompositionInvalid):fixed_child_key(id,value,b'x'*32)
+
+
+def test_composition_child_keys_do_not_follow_public_parent_id_alone():
+    from uuid import UUID
+    from src.modules.supervisor.domain.composition import fixed_child_key,CompositionInvalid
+    id=UUID(int=123)
+    assert fixed_child_key(id,'flow',b'x'*32)!=fixed_child_key(id,'flow',b'y'*32)
+    for seed in (None,b'',b'x'*31,'x'*32):
+        with pytest.raises(CompositionInvalid):fixed_child_key(id,'flow',seed)
+
+
+def composition_snapshot(query='삼성전자 수급과 차트'):
+    from src.modules.supervisor.domain.composition import CompositionSnapshot,VERSION
+    value=draft(query);frame=S.deterministic(value).model_dump(mode='json');views=[v for v in ('flow','technical') if v in frame['requested_views']]
+    return CompositionSnapshot(B.canonical(dict(schema_version=VERSION,draft=value.model_dump(mode='json'),
+        frame=frame,stock=resolution().stock.model_dump(mode='json'),selected_views=views,
+        consent=dict(allow_views=views,allow_partial_results=len(views)==2,waived_conditions=[]),
+        flow_policy=dict(supported_tickers=['005930'],user_limit=10,service_limit=100,budget=10000000000) if 'flow' in views else None,
+        technical_configuration=technical_configuration().text if 'technical' in views else None)))
+
+
+@pytest.mark.parametrize('query',['삼성전자 수급','삼성전자 차트','삼성전자 수급과 차트'])
+def test_composition_snapshot_preserves_full_scope_and_policies(query):
+    from src.modules.supervisor.application.composition_service import CompositionService
+    saved=composition_snapshot(query);data=saved.data()
+    assert data['draft']['original_query']==data['frame']['original_query']==query
+    assert saved.text not in repr(saved)
+    if 'technical' in data['selected_views']:
+        assert CompositionService.technical_intent(saved).data()['original_query']==query
+    data['consent']['allow_views']=[]
+    assert saved.data()['consent']['allow_views']
+
+
+@pytest.mark.parametrize('change',['consent','condition','unknown','ticker','disabled','clock','flow_budget','bool_limit','noncanonical'])
+def test_composition_rejects_unresolved_or_unapproved_scope(change):
+    from src.modules.supervisor.domain.composition import CompositionSnapshot,CompositionInvalid
+    value=composition_snapshot().data()
+    if change=='consent':value['consent']['allow_partial_results']=False
+    if change=='condition':value['frame']=S.deterministic(draft('삼성전자 어제 수급과 차트')).model_dump(mode='json')
+    if change=='unknown':value['frame']['unresolved_slots']=['meaning']
+    if change=='ticker':value['stock']['stock_code']='000720'
+    if change in {'disabled','clock'}:
+        cfg=json.loads(value['technical_configuration']);cfg['policy']['enabled' if change=='disabled' else 'deadline_seconds']=False if change=='disabled' else 126
+        value['technical_configuration']=B.canonical(cfg)
+    if change=='flow_budget':value['flow_policy']['budget']=1
+    if change=='bool_limit':value['flow_policy']['user_limit']=True
+    text=B.canonical(value)
+    if change=='noncanonical':text+=' '
+    with pytest.raises(CompositionInvalid):CompositionSnapshot(text)
+
+
+def composition_service_fixture(monkeypatch):
+    from datetime import UTC,datetime,timedelta
+    from src.modules.supervisor.application import composition_service as C
+    now=datetime(2026,11,13,tzinfo=UTC);clock=NS(now=now,mono=100.0);rows={}
+    principal=C.Principal(uuid4(),uuid4(),now+timedelta(days=1),b'a'*32)
+    session=NS(new=set(),dirty=set(),deleted=set(),rollback=AsyncMock(),commit=AsyncMock())
+    monkeypatch.setattr(C,'validate_principal',AsyncMock())
+    monkeypatch.setattr(C.time,'monotonic',lambda:clock.mono)
+    async def read(s,owner,*,id=None,key=None,lock=False):
+        return next((r for r in rows.values() if r.owner_user_id==owner and (r.id==id if id else r.client_key_digest==key)),None)
+    async def admit(s,values):
+        row=NS(**dict(analysis_as_of=None,claimed_at=None,closed_at=None,flow_handoff_at=None,technical_handoff_at=None,flow_run_id=None,technical_run_id=None)|values);rows[row.id]=row;return row
+    async def change(s,row,values):
+        result=NS(**(vars(row)|values));rows[row.id]=result;return result
+    monkeypatch.setattr(C.repo,'read',read);monkeypatch.setattr(C.repo,'admit',admit);monkeypatch.setattr(C.repo,'change',change)
+    monkeypatch.setattr(C.repo,'clock',AsyncMock(side_effect=lambda s:clock.now))
+    monkeypatch.setattr(C.repo,'stock',AsyncMock(return_value=resolution().stock))
+    monkeypatch.setattr(C.repo,'native',AsyncMock(return_value=None))
+    service=C.CompositionService(session,principal=principal,resolver_factory=lambda s:NS(resolve=AsyncMock(return_value=resolution())))
+    return C,service,session,clock,rows
+
+
+async def test_composition_replay_no_authority_A2_observation_and_close_fence(monkeypatch):
+    from dataclasses import replace
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    saved=composition_snapshot('삼성전자 수급');key=str(uuid4())
+    first=await service.admit(key,saved,request_started_at=clock.now)
+    replay=await service.admit(key,saved,request_started_at=clock.now)
+    assert first.newly_admitted and not replay.newly_admitted and replay.token is None
+    with pytest.raises(C.CompositionError):await service.start(replay)
+    right=await service.start(first);assert right.newly_started
+    assert not (await service.start(first)).newly_started
+    await service.handoff(right,'flow')
+    a2=C.CompositionService(session,principal=replace(service.principal,session_id=uuid4()))
+    assert (await a2.get(first.id))['coverage']=='unknown'
+    with pytest.raises(C.CompositionError):a2.take_handoff(right,'flow')
+    # close must invalidate the ticket before its first await, including races.
+    reached=asyncio.Event();release=asyncio.Event();normal=service._begin
+    async def wait_begin(**kw):reached.set();await release.wait();await normal(**kw)
+    monkeypatch.setattr(service,'_begin',wait_begin)
+    task=asyncio.create_task(service.close(right));await reached.wait()
+    with pytest.raises(C.CompositionError):service.take_handoff(right,'flow')
+    release.set();await task
+    with pytest.raises(C.CompositionError):service.take_handoff(right,'flow')
+    assert rows[first.id].state=='closed'
+    assert C.repo.native.await_count==1  # GET only; no native POST/execution exists.
+
+
+@pytest.mark.parametrize('phase',['start','handoff'])
+async def test_composition_delayed_commit_ACK_never_returns_execution_ticket(monkeypatch,phase):
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    first=await service.admit(str(uuid4()),composition_snapshot('삼성전자 수급'),request_started_at=clock.now)
+    right=None
+    if phase=='handoff':right=await service.start(first)
+    async def late_commit():clock.mono+=16
+    session.commit.side_effect=late_commit
+    if phase=='start':assert not (await service.start(first)).newly_started
+    else:
+        with pytest.raises(C.CompositionError) as error:await service.handoff(right,'flow')
+        assert error.value.code=='EXPIRED'
+        with pytest.raises(C.CompositionError):service.take_handoff(right,'flow')
+    assert rows[first.id].state=='claimed'
+
+
+async def test_composition_unknown_commit_no_reissued_authority_and_expiry_closed(monkeypatch):
+    from datetime import timedelta
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    first=await service.admit(str(uuid4()),composition_snapshot('삼성전자 수급'),request_started_at=clock.now)
+    session.commit.side_effect=OSError(SENTINEL)
+    with pytest.raises(C.CompositionError) as error:await service.start(first)
+    assert error.value.code=='ACK_UNKNOWN' and SENTINEL not in str(error.value)
+    session.commit.side_effect=None
+    assert (await service.get(first.id))['state']=='claimed'
+    with pytest.raises(C.CompositionError):await service.start(first)
+    clock.now+=timedelta(seconds=141)
+    result=await service.get(first.id)
+    assert result['state']=='closed' and result['coverage']=='unfulfilled'
+    assert result['views'][0]['state']=='not_started' and rows[first.id].flow_handoff_at is None
+    assert 'claim_digest' not in json.dumps(result) and 'key_digest' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('status',['not_found','ambiguous','resolved'])
+async def test_composition_rechecks_positive_canonical_stock_before_admission(monkeypatch,status):
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    resolved=resolution().model_dump(mode='json');resolved['status']=status
+    wrong=NS(status=status,stock=NS(model_dump=lambda **kw:dict(stock_code='000720')))
+    service.resolver_factory=lambda s:NS(resolve=AsyncMock(return_value=wrong))
+    with pytest.raises(C.CompositionError):await service.admit(str(uuid4()),composition_snapshot(),request_started_at=clock.now)
+    assert not rows and session.commit.await_count==0
+
+
+async def test_composition_dirty_caller_rejected_without_rollback_or_mutation(monkeypatch):
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    pending=object();session.dirty.add(pending)
+    with pytest.raises(C.CompositionError):await service.admit(str(uuid4()),composition_snapshot(),request_started_at=clock.now)
+    assert session.dirty=={pending} and session.rollback.await_count==session.commit.await_count==0 and not rows
+
+
+@pytest.mark.parametrize('same_stock',[True,False])
+async def test_composition_negated_alias_canonical_proof_is_not_dropped(monkeypatch,same_stock):
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    looked=[]
+    async def resolve(text):
+        looked.append(text)
+        if text=='삼성전자' or same_stock:return resolution()
+        return NS(status='resolved',stock=NS(stock_code='066570'))
+    service.resolver_factory=lambda s:NS(resolve=resolve)
+    snapshot=composition_snapshot('엘지전자 말고 삼성전자 수급과 차트')
+    if same_stock:
+        with pytest.raises(C.CompositionError):await service.admit(str(uuid4()),snapshot,request_started_at=clock.now)
+        assert not rows
+    else:assert (await service.admit(str(uuid4()),snapshot,request_started_at=clock.now)).newly_admitted
+    assert looked==['삼성전자','엘지전자']
+
+
+def test_composition_migration_exact_model_checks_and_single_statement_DDL(monkeypatch):
+    import importlib.util
+    from db.models.supervisor.composition import CHECKS,SupervisorComposition
+    path=ROOT/'backend/db/migrations/versions/20261113_c60001_supervisor_composition.py'
+    spec=importlib.util.spec_from_file_location('composition_migration_fixture',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    assert (module.revision,module.down_revision)==('c60001a7e0001','c54001a7e0001') and module.CHECKS==CHECKS
+    commands=[];created=[]
+    monkeypatch.setattr(module.op,'execute',lambda sql:commands.append(sql))
+    monkeypatch.setattr(module.op,'create_table',lambda *args,**kw:created.append(args))
+    module.upgrade()
+    functions=[sql for sql in commands if sql.startswith('CREATE OR REPLACE FUNCTION')]
+    assert len(functions)==2 and all(sql.count('CREATE OR REPLACE FUNCTION')==1 for sql in functions)
+    assert created[0][0]=='supervisor_compositions'
+    assert {c.name for c in SupervisorComposition.__table__.constraints if c.name and c.name.startswith('composition_')}=={'composition_'+k for k in CHECKS}
+    assert all(c.ondelete=='RESTRICT' for c in SupervisorComposition.__table__.foreign_keys)
+
+
+async def test_composition_flow_result_link_does_not_restart_admission_window(monkeypatch):
+    from src.modules.flow.api.analysis_schemas import AnalysisView
+    C,service,session,clock,rows=composition_service_fixture(monkeypatch)
+    first=await service.admit(str(uuid4()),composition_snapshot('삼성전자 수급'),request_started_at=clock.now)
+    right=await service.start(first);await service.handoff(right,'flow');service.take_handoff(right,'flow')
+    clock.mono+=16  # Original admission window is closed; total window is not.
+    child=NS(id=uuid4(),admission_request_id=uuid4(),attempt_id=uuid4(),state='unknown',deadline_at=rows[first.id].deadline_at)
+    monkeypatch.setattr(service,'_native',AsyncMock(return_value=(child,None)))
+    receipt=AnalysisView(analysis_id=child.id,admission_request_id=child.admission_request_id,attempt_id=child.attempt_id,state='unknown',deadline_at=child.deadline_at)
+    await service.link(right,'flow',receipt)
+    assert rows[first.id].flow_run_id==child.id
+    with pytest.raises(C.CompositionError):await service.handoff(right,'flow')

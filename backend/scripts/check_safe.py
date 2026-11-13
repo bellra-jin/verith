@@ -397,6 +397,14 @@ CF054_INPUTS={'ai/src/supervisor/domain/technical_core_contracts.py': '010190d11
 CF054_INPUTS['ai/src/main.py']='48816ec096df577df65fe4485c1f0fede9d1486044092a8f2b36ca016c0e2fe1'
 CF022_INPUTS.update(CF054_INPUTS)
 CF022_SOURCES = CF022_SOURCES | frozenset(['backend/src/modules/supervisor/domain/technical_core_contracts.py', 'backend/src/modules/supervisor/domain/technical_projection.py', 'backend/src/modules/supervisor/application/technical_service.py', 'backend/db/migrations/versions/20261112_c54001a7e0001_supervisor_technical_handoff.py'])
+# Fixed composition observation only; no extra source tree or runtime authority.
+CF022_SOURCES = CF022_SOURCES | frozenset({
+    'backend/src/modules/supervisor/domain/composition.py',
+    'backend/src/modules/supervisor/application/composition_service.py',
+    'backend/src/modules/supervisor/infrastructure/composition_repository.py',
+    'backend/db/models/supervisor/composition.py',
+    'backend/db/migrations/versions/20261113_c60001_supervisor_composition.py',
+})
 NEW.update(CF022_INPUTS)
 NEW.update(CF022_SOURCES)
 NEW.add(CF022_FIXTURE)

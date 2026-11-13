@@ -10,8 +10,8 @@
 
 데이터 부족 정책:
   - 일봉 수 < MIN_DAILY_BARS → Regime.UNAVAILABLE.
-  - 개별 지표(예: 60MA 5일 기울기)가 계산 불가면 전체를 죽이지 않고 그 조건만 False 처리하며,
-    어디에도 안 걸리면 Regime.SIDEWAYS로 착지한다.
+  - 개별 지표가 계산 불가면 그 조건만 False 처리하고 우선순위 1~5를 계속 검사한다.
+  - 위 판정이 없고 장기MA 기울기 이력도 없으면 UNAVAILABLE; 이력이 있으면 SIDEWAYS.
 """
 
 from __future__ import annotations
@@ -124,5 +124,7 @@ def classify_daily_regime(ohlcv: Sequence[OHLCV]) -> Regime:
     if below_ma20 and inverse_order and _falling(slope20):
         return Regime.DOWNTREND
 
-    # 6. 기본값
+    # 6. 기울기 이력 부족을 횡보로 확정하지 않는다. 앞선 충분한 판정은 유지한다.
+    if slope60 is None:
+        return Regime.UNAVAILABLE
     return Regime.SIDEWAYS

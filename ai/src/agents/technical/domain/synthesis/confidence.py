@@ -17,6 +17,7 @@ _DIRECTIONAL_REGIMES = frozenset(
     {Regime.BULLISH_REVERSAL_WATCH, Regime.UPTREND_INTACT, Regime.DOWNTREND}
 )
 _CONFIDENCE_LABEL = {ConfidenceLevel.HIGH: "높음", ConfidenceLevel.MEDIUM: "보통", ConfidenceLevel.LOW: "낮음"}
+CONFIDENCE_MEANING = "현재 지표의 규칙 기반 근거 점수이며 상승 확률·예측 정확도가 아닙니다."
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,10 @@ def _confidence_basis(signal_result: SignalScoreResult, level: ConfidenceLevel) 
     neu = sum(1 for r in signal_result.technical_signals if r.signal == Signal.NEUTRAL)
     neg = sum(1 for r in signal_result.technical_signals if r.signal == Signal.NEGATIVE)
     total = pos + neu + neg
-    return f"지표 {total}개 중 긍정 {pos}·중립 {neu}·부정 {neg}로 신뢰도는 {_CONFIDENCE_LABEL[level]}입니다."
+    return (
+        f"지표 {total}개 중 긍정 {pos}·중립 {neu}·부정 {neg}로 신뢰도는 {_CONFIDENCE_LABEL[level]}입니다. "
+        f"{CONFIDENCE_MEANING} 지표 개수 자체의 충분함을 보장하지 않습니다."
+    )
 
 
 def classify_confidence_level(confidence: float) -> ConfidenceLevel:

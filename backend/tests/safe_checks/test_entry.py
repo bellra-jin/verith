@@ -730,7 +730,7 @@ class CF022Boundary(unittest.TestCase):
     def test_exact_inputs_and_collection(self):
         import hashlib
         from scripts import check_safe as c
-        self.assertEqual(len(c.CF022_INPUTS),28);self.assertEqual(c.CF022_TESTS,('tests/unit/test_cf022_supervisor_core.py',))
+        self.assertEqual(len(c.CF022_INPUTS),33);self.assertEqual(c.CF022_TESTS,('tests/unit/test_cf022_supervisor_core.py',))
         self.assertEqual({k:v for k,v in c.CF022_INPUTS.items() if k in c.CF020_INPUTS},c.CF020_INPUTS)
         root=Path(__file__).resolve().parents[3]
         for name,h in c.CF022_INPUTS.items():self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),h)
@@ -787,7 +787,7 @@ class CF023Boundary(unittest.TestCase):
         import hashlib
         root=Path(__file__).resolve().parents[3]
         self.assertEqual(set(c.CF045_INPUTS),{'ai/src/supervisor/application/meaning_gateway_factory.py','ai/src/supervisor/infrastructure/backend/meaning_budget_client.py','ai/src/main.py','ai/src/supervisor/api/flow_app.py'})
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         for path,digest in c.CF045_INPUTS.items():
             self.assertTrue(c.source_allowed(path));self.assertFalse(c.source_allowed(path+'.adjacent'))
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,path)).hexdigest(),digest)
@@ -810,7 +810,7 @@ class CF023Boundary(unittest.TestCase):
     def test_exact_inputs_and_collection(self):
         import hashlib
         from scripts import check_safe as c
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         self.assertEqual(c.CF023_TESTS,('tests/unit/test_cf023_supervisor_meaning.py',))
         self.assertEqual({k:v for k,v in c.CF023_INPUTS.items() if k in c.CF022_INPUTS},c.CF022_INPUTS)
         root=Path(__file__).resolve().parents[3]
@@ -940,7 +940,7 @@ class CF024Boundary(unittest.TestCase):
     def test_exact_existing_inputs_new_single_collection(self):
         import hashlib
         from scripts import check_safe as c
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         self.assertEqual(c.CF024_TESTS,('tests/unit/test_cf024_supervisor_live_verifier.py',))
         root=Path(__file__).resolve().parents[3]
         for name,h in c.CF023_INPUTS.items():self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),h)
@@ -980,7 +980,7 @@ class CF026Boundary(unittest.TestCase):
         from scripts import check_safe as c
         root=Path(__file__).resolve().parents[3]
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/cf026_supervisor_live_controller.py')).hexdigest(),'c6a93f1de94e462306dce02aaad15319fc342dcd24e1c21f813b78fd6481ce08')
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/application/meaning_policy.py'],'f31ba42680ed4f6223fd215321cb427679d710e1456cc95d6b9a862e78b282b5')
         self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/prompts/meaning.txt'],'cb9c7cb759cffc1dd626680b93e66b6dbb27cd6734f65e4394fe5bf41f147d35')
         self.assertFalse(c.source_allowed('backend/scripts/cf026_successor_extra.py'))

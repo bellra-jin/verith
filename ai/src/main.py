@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from src.shared.api.errors import AppError, app_error_handler, validation_exception_handler
 from src.agents.fundamental.api.routes import router as fundamental_router
 from src.agents.industry.api.routes import router as industry_router
-from src.supervisor.api.routes import make_router as make_supervisor_router
+from src.supervisor.api.routes import make_router as make_supervisor_router, make_technical_core_router
 from src.agents.technical.api.routes import router as technical_router
 
 from src.agents.flow.api.http import router as flow_router
@@ -35,6 +35,7 @@ async def lifespan(app):
         if "app" in globals():app.state.technical_execution_runtime = None
 
 supervisor_router = make_supervisor_router(runtime=lambda: supervisor_meaning_runtime)
+supervisor_router.include_router(make_technical_core_router())
 
 app = FastAPI(title="verith-ai", lifespan=lifespan)
 app.state.technical_execution_runtime = None

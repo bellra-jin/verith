@@ -199,10 +199,35 @@ def project_cf023_exact_additions(api):
     del codes[-4:]
 
 
+def project_cf054_exact_additions(api):
+    """Verify the three exact Technical wires and strict model closure before projection."""
+    from fastapi import FastAPI
+    from src.modules.supervisor.api.router import router
+    from src.modules.supervisor.domain import technical_core_contracts as C
+    isolated=FastAPI();isolated.include_router(router);expected=isolated.openapi()
+    paths={'/api/supervisor/core/technical/prepare':{'post'},'/api/supervisor/core/technical/requests':{'post'},'/api/supervisor/core/technical/requests/{supervisor_id}':{'get'}}
+    for path,methods in paths.items():
+        assert set(api['paths'][path])==methods
+        assert api['paths'][path]==expected['paths'][path]
+    confirm=C.Confirm.model_json_schema()
+    assert set(confirm['properties'])=={'client_key','draft','expected_plan_hash','consent'} and confirm['additionalProperties'] is False
+    assert set(C.Consent.model_json_schema()['properties'])=={'allow_technical','allow_partial','waived_conditions'}
+    assert C.Reference.model_json_schema()['properties']['report_url']=={'default':None,'title':'Report Url','type':'null'}
+    shared={'CoreDraft','CoreAnswer','CoreMeaningFrame','CoreMention','CoreEvidence','CoreCondition','CoreResolution','CoreStock','CoreCandidate'}
+    names={'TechnicalConfirm','TechnicalConsent','TechnicalContext','TechnicalPlan','TechnicalProfile','TechnicalReference','TechnicalEffectiveScope','TechnicalOutcome','TechnicalSafeError','TechnicalEnvelope_TechnicalPlan_','TechnicalEnvelope_TechnicalOutcome_'}
+    assert shared <= set(expected['components']['schemas'])
+    for name in names:
+        assert api['components']['schemas'][name]==expected['components']['schemas'][name]
+        assert api['components']['schemas'][name].get('additionalProperties') is False
+    for path in paths:del api['paths'][path]
+    for name in names:del api['components']['schemas'][name]
+
+
 def project_cf022_exact_additions(api):
     from fastapi import FastAPI
     from src.modules.supervisor.api.router import router
     isolated=FastAPI();isolated.include_router(router);expected=isolated.openapi()
+    project_cf054_exact_additions(expected)
     project_cf023_exact_additions(expected)
     paths={'/api/supervisor/core/prepare','/api/supervisor/core/requests','/api/supervisor/core/requests/{supervisor_id}'}
     assert set(expected['paths'])==paths
@@ -247,6 +272,7 @@ def assert_public_contract_compatibility(values):
     from fastapi.openapi.models import Schema
     projected = copy.deepcopy(values)
     api = projected["openapi"]
+    project_cf054_exact_additions(api)
     project_cf036_exact_additions(api)
     project_cf023_exact_additions(api)
     project_cf022_exact_additions(api)
@@ -1532,4 +1558,17 @@ def test_cf012_projection_rejects_unapproved_delta(monkeypatch,mutation):
     elif mutation=='schema':values['openapi']['components']['schemas']['Unapproved']={'type':'object'}
     elif mutation=='existing':values['openapi']['components']['schemas']['FlowAdmissionRequest']['properties']['question']['maxLength']=2001
     else:values['openapi']['components']['schemas']['ErrorCode']['enum'].append('UNAPPROVED')
+    with pytest.raises(AssertionError):assert_public_contract_compatibility(values)
+
+@pytest.mark.parametrize('change',['method','body','response','metadata','parameter','unknown_schema','consent','url'])
+def test_cf054_public_projection_rejects_unknown_or_changed_wire(monkeypatch,change):
+    values=copy.deepcopy(public_contract_capture(monkeypatch));api=values['openapi'];path='/api/supervisor/core/technical/requests'
+    if change=='method':api['paths'][path]['delete']={}
+    elif change=='body':api['paths'][path]['post']['requestBody']['content']['application/json']['schema']={'type':'object'}
+    elif change=='response':api['paths'][path]['post']['responses']['200']['description']='changed'
+    elif change=='metadata':api['paths'][path]['post']['operationId']='changed'
+    elif change=='parameter':api['paths'][path]['post']['parameters']=[{'name':'owner','in':'query'}]
+    elif change=='unknown_schema':api['components']['schemas']['UnapprovedTechnical']={'type':'object'}
+    elif change=='consent':api['components']['schemas']['TechnicalConsent']['properties']['allow_flow']={'type':'boolean'}
+    else:api['components']['schemas']['TechnicalReference']['properties']['report_url']={'type':'string'}
     with pytest.raises(AssertionError):assert_public_contract_compatibility(values)

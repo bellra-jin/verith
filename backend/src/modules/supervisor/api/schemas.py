@@ -5,3 +5,9 @@ RequestResponse = Envelope[Outcome]
 PATH = '/api/supervisor/core'
 
 PreparationResponse = Envelope[PreparationView]
+
+from src.modules.supervisor.domain.technical_core_contracts import (
+    Confirm as TechnicalConfirm,Envelope as TechnicalEnvelope,Plan as TechnicalPlan,Outcome as TechnicalOutcome,
+)
+TechnicalPrepareResponse=TechnicalEnvelope[TechnicalPlan]
+TechnicalRequestResponse=TechnicalEnvelope[TechnicalOutcome]

@@ -139,6 +139,7 @@ class TechnicalAnalysisRun(Base):
     execution_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint('owner_user_id','operation','key_digest',name='uq_technical_analysis_key'),
+        UniqueConstraint('id','owner_user_id',name='uq_technical_run_id_owner'),
         ForeignKeyConstraint(['period_id','policy_sha256'],['technical_usage_periods.id','technical_usage_periods.policy_sha256'],ondelete='RESTRICT',name='fk_technical_run_period_policy'),
         Index('ix_technical_run_period_owner','period_id','owner_user_id'),
         *(CheckConstraint(value,name='cf048_run_'+key) for key,value in RUN_CHECKS.items()),

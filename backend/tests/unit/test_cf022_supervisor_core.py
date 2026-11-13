@@ -167,3 +167,150 @@ async def test_model_cannot_remove_explicit_clarification_or_injection_barrier(q
     proposal.update(interpretation_source='model_assisted',unresolved_slots=[],requested_views=['flow'])
     gateway=NS(extract=AsyncMock(return_value=proposal));result=await P.start(d,gateway)
     assert result.action=='clarify' and result.plan.status=='needs_clarification' and not result.plan.selected_views
+
+# CF054 exact reviewed pure modules use the existing loader's closed namespaces.
+def load_technical_plan():
+    from scripts.check_safe import CF054_INPUTS
+    import importlib.util
+    for suffix in ('domain.meaning_proposals','application.meaning_policy','domain.technical_core_contracts','application.planning.technical_core'):
+        name='src.supervisor.'+suffix;relative='ai/src/supervisor/'+suffix.replace('.','/')+'.py';path=ROOT/relative
+        assert hashlib.sha256(path.read_bytes()).hexdigest()==CF054_INPUTS[relative]
+        if name not in sys.modules:
+            spec=importlib.util.spec_from_file_location(name,path);module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module)
+            parent,_,leaf=name.rpartition('.');setattr(sys.modules[parent],leaf,module)
+        assert Path(sys.modules[name].__spec__.origin).resolve()==path.resolve()
+load_technical_plan()
+
+# CF054 uses a separate deterministic contract; old Flow fixtures remain unchanged.
+def technical_configuration():
+    from src.modules.technical.domain import provider_execution as P
+    value=dict(operation='technical.analysis.v1',enabled=True,currency='USD',supported_tickers=['005930'],user_daily_limit=10,service_daily_limit=100,daily_budget_nano=1000000000,attempt_reserve_nano=100000000,deadline_seconds=120,model='synthetic-model',service_tier='default',price_id='synthetic-price',price_evidence_sha256='a'*64,input_nano_per_token=1,output_nano_per_token=1,input_token_cap=1000,output_token_cap=1000,input_byte_cap=16384,output_byte_cap=16384,max_calls=4)
+    return P.Configuration(P.canonical(dict(schema_version='technical.execution.v1',policy=value,counter={'free':True,'mapping':'technical.responses.model-input.v1','version':'synthetic-count-v1','provenance_sha256':'b'*64,'evidence_sha256':'c'*64},caps={'request':65536,'count':8192,'generation':65536},ai_origin='https://ai.synthetic.invalid',authority_origin='https://backend.synthetic.invalid',cache_mode='none',trace_mode='none')))
+
+def technical_context(cfg=None):
+    from src.modules.supervisor.application.technical_service import TechnicalSupervisorService
+    return TechnicalSupervisorService.context(cfg or technical_configuration())
+
+def technical_plan(query='삼성전자 차트',*,answers=None,revision=0,resolved=None):
+    from src.supervisor.domain import technical_core_contracts as C
+    from src.supervisor.application.planning.technical_core import run
+    data=C.InternalInput(phase='start',draft=M.Draft(original_query=query,answers=answers or [],revision=revision),context=C.Context.model_validate(technical_context().model_dump(mode='json')))
+    first=run(data)
+    if first.action!='resolve_stock':return data,first
+    return data,run(C.InternalInput(phase='continue',draft=data.draft,context=data.context,frame=first.frame,resolution=resolved or resolution()))
+
+@pytest.mark.parametrize('query',['삼성전자 차트','005930 차트','삼성전자 최근 3주 차트','삼성전자 외국인 제외 차트','삼성전자 5분봉 차트'])
+def test_cf054_deterministic_single_view_conditions_and_fixed_support(query):
+    from src.modules.supervisor.domain import technical_core_contracts as C
+    from src.modules.supervisor.domain.technical_projection import confirmed_plan,intent_for
+    value,last=technical_plan(query);plan=C.validate_plan(last.plan.model_dump(mode='json'),B.Draft.model_validate(value.draft.model_dump(mode='json')),technical_context())
+    assert plan.selected_views==['technical'] and plan.support.periods==['3m','1y','5y']
+    assert plan.support.cutoff=='unverified' and plan.support.source_as_of is None and plan.support.intraday=='unavailable'
+    assert all(c.disposition!='honored' for c in plan.frame.conditions)
+    saved=confirmed_plan(plan,C.Consent(allow_technical=True,allow_partial=plan.partial,waived_conditions=list(plan.required_waivers)))
+    assert saved['effective_scope']['waived_conditions']==plan.required_waivers
+    assert plan.frame.original_query==query and intent_for(plan).data()['original_query']==plan.execution_query=='005930 차트'
+    assert saved['effective_scope']['execution_query']==plan.execution_query
+    assert intent_for(plan).data()['conditions']=={'profile':'technical.multiframe.v1','periods':['3m','1y','5y']}
+    assert plan.frame.interpretation_source=='deterministic' and not ATTEMPTS
+
+@pytest.mark.parametrize('query',['삼성전자 수급과 차트','삼성전자 차트 말고 수급','삼성전자와 SK하이닉스 차트','시장 전체 차트','삼성전자 이익 두배 차트','현대건설 차트','삼성전자 주식 정보'])
+def test_cf054_no_mixed_negative_residual_multi_or_unknown_name_promotion(query):
+    _,last=technical_plan(query)
+    assert last.plan.selected_views==[] and last.plan.status in {'needs_clarification','unsupported'}
+
+def test_cf054_typed_stock_answer_and_exact_answer_source():
+    answer=dict(answer_id=str(uuid4()),slot='stock',value='현대건설')
+    data,last=technical_plan('차트',answers=[answer],revision=1)
+    assert data.draft.answers[0].answer_id==answer['answer_id']
+    assert last.plan.frame.mentions[0].evidence.answer_id==answer['answer_id']
+    assert last.plan.selected_views==['technical']
+
+@pytest.mark.parametrize('change',['waiver_missing','waiver_extra','partial_false','allow_flow','owner','preparation_id','context','plan_hash','selected_view'])
+def test_cf054_consent_and_plan_shape_cannot_bypass_scope(change):
+    from src.modules.supervisor.domain import technical_core_contracts as C
+    from src.modules.supervisor.domain.technical_projection import confirmed_plan
+    data,last=technical_plan('삼성전자 최근 3주 차트');plan=C.Plan.model_validate(last.plan.model_dump(mode='json'))
+    consent=dict(allow_technical=True,allow_partial=True,waived_conditions=list(plan.required_waivers))
+    if change=='waiver_missing':consent['waived_conditions']=[]
+    if change=='waiver_extra':consent['waived_conditions']+=['invented']
+    if change=='partial_false':consent['allow_partial']=False
+    if change=='allow_flow':consent['allow_flow']=consent.pop('allow_technical')
+    if change in {'owner','preparation_id'}:
+        body=dict(client_key=str(uuid4()),draft=data.draft.model_dump(mode='json'),expected_plan_hash=plan.plan_hash,consent=consent);body[change]=str(uuid4())
+        with pytest.raises(ValueError):C.Confirm.model_validate(body)
+    elif change in {'context','plan_hash','selected_view'}:
+        body=plan.model_dump(mode='json')
+        if change=='context':body['context']['configuration_sha256']='f'*64
+        elif change=='plan_hash':body['plan_hash']='f'*64
+        else:body['selected_views']=['flow']
+        with pytest.raises(ValueError):C.Plan.model_validate(body)
+    else:
+        with pytest.raises(ValueError):confirmed_plan(plan,C.Consent.model_validate(consent))
+
+async def test_cf054_actual_AI_route_and_client_no_meaning_or_execution():
+    from fastapi import FastAPI
+    from src.supervisor.api.routes import make_router
+    from src.modules.supervisor.application.technical_service import TechnicalSupervisorService
+    cfg=technical_configuration();calls=[]
+    app=FastAPI();app.include_router(make_router(technical=True));app.state.technical_execution_runtime=NS(service_token=TOKEN.encode(),readiness=lambda:{'ready':True,'configuration':cfg.data(),'spec_sha256':cfg.data() and technical_context(cfg).spec_sha256})
+    async def send(request):calls.append(request.url.path);return await httpx.ASGITransport(app=app).handle_async_request(request)
+    # The actual client accepts only an explicit ASGI transport for this opt-in path.
+    client=AIClient('https://ai.synthetic.invalid',15,transport=httpx.ASGITransport(app=app),execution_token=TOKEN)
+    d=B.Draft(original_query='삼성전자 차트',answers=[],revision=0)
+    wire=dict(schema_version='supervisor.technical.v1',request_id=str(uuid4()),trace_id=str(uuid4()),data={'phase':'start','draft':d.model_dump(mode='json'),'context':TechnicalSupervisorService.context(cfg).model_dump(mode='json')},error=None)
+    result=await client.plan_supervisor_technical(wire,cfg,remaining=15)
+    assert result['data']['action']=='resolve_stock' and result['data']['lookup']=='삼성전자'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://ai.synthetic.invalid') as c:
+        assert (await c.post('/internal/supervisor/core/technical-plan',content=b'bad')).status_code==401
+        changed=copy.deepcopy(wire);changed['data']['context']['configuration_sha256']='f'*64
+        assert (await c.post('/internal/supervisor/core/technical-plan',json=changed,headers={'x-technical-service-token':TOKEN})).status_code==422
+        app.state.technical_execution_runtime=None
+        assert (await c.post('/internal/supervisor/core/technical-plan',json=wire,headers={'x-technical-service-token':TOKEN})).status_code==403
+    assert not ATTEMPTS
+
+@pytest.mark.parametrize('negative_status',['resolved','not_found','ambiguous'])
+async def test_cf054_negated_alias_requires_fresh_distinct_canonical_stock(monkeypatch,negative_status):
+    from src.modules.supervisor.application import technical_service as T
+    cfg=technical_configuration();cfg_data=cfg.data();cfg_data['policy']['supported_tickers']=['066570']
+    from src.modules.technical.domain import provider_execution as P
+    cfg=P.Configuration.parse(cfg_data)
+    from fastapi import FastAPI
+    app=FastAPI();app.include_router(sys.modules['src.supervisor.api.routes'].make_router(technical=True));app.state.technical_execution_runtime=NS(service_token=TOKEN.encode(),readiness=lambda:{'ready':True,'configuration':cfg.data(),'spec_sha256':P.SPEC_SHA256})
+    positive=B.Resolution(status='resolved',reason='exact_match',stock=dict(stock_code='066570',stock_name='LG전자',market='KOSPI'),candidates=[])
+    negative=positive if negative_status=='resolved' else B.Resolution(status=negative_status,reason='no_match' if negative_status=='not_found' else 'ambiguous_alias',stock=None,candidates=[])
+    looked=[]
+    async def resolve(value):looked.append(value);return positive if value=='066570' else negative
+    session=NS(rollback=AsyncMock(),commit=AsyncMock())
+    monkeypatch.setattr(T,'validate_principal',AsyncMock())
+    service=T.TechnicalSupervisorService(session,principal=NS(),client=AIClient(cfg.data()['ai_origin'],15,transport=httpx.ASGITransport(app=app),execution_token=TOKEN),configuration=cfg,resolver_factory=lambda s:NS(resolve=resolve))
+    value=B.Draft(original_query='엘지전자 말고 066570 차트',answers=[],revision=0)
+    with pytest.raises(T.CoreError) as error:await service.prepare(value,uuid4(),deadline=asyncio.get_running_loop().time()+15)
+    assert error.value.code=='INPUT_INVALID' and error.value.status==422 and looked==['066570','엘지전자']
+
+def test_cf054_normal_main_selects_technical_router_but_flow_factory_default_is_unchanged():
+    # Execute only the two reviewed pure composition nodes; no main/other AI imports.
+    from fastapi import FastAPI
+    from scripts.check_safe import CF054_INPUTS
+    source=ROOT/'ai/src/main.py';assert hashlib.sha256(source.read_bytes()).hexdigest()==CF054_INPUTS['ai/src/main.py']
+    tree=ast.parse(source.read_text())
+    assignment=next(n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='supervisor_router' for t in n.targets))
+    call=assignment.value
+    assert isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=='make_supervisor_router' and not call.args
+    assert [k.arg for k in call.keywords]==['runtime'] and isinstance(call.keywords[0].value,ast.Lambda)
+    mount=next(n for n in tree.body if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='supervisor_router' and n.value.func.attr=='include_router')
+    assert ast.unparse(mount)=='supervisor_router.include_router(make_technical_core_router())'
+    routes=sys.modules['src.supervisor.api.routes'];scope={'make_supervisor_router':routes.make_router,'make_technical_core_router':routes.make_technical_core_router,'supervisor_meaning_runtime':None}
+    exec(compile(ast.Module(body=[assignment,mount],type_ignores=[]),'<reviewed main composition>','exec'),scope)
+    app=FastAPI();app.include_router(scope['supervisor_router'])
+    assert '/internal/supervisor/core/technical-plan' in app.openapi()['paths']
+    other=FastAPI();other.include_router(routes.make_router())
+    assert '/internal/supervisor/core/technical-plan' not in other.openapi()['paths'] and not ATTEMPTS
+
+@pytest.mark.parametrize('change',['method','body','response','metadata','parameter','unknown_schema','consent','url'])
+def test_cf054_public_wire_negative_cases_are_in_the_protected_core_collection(monkeypatch,change):
+    sys.meta_path.remove(IMPORT_GUARD)
+    try:
+        from tests.unit.test_flow_contract import test_cf054_public_projection_rejects_unknown_or_changed_wire
+        test_cf054_public_projection_rejects_unknown_or_changed_wire(monkeypatch,change)
+    finally:sys.meta_path.insert(0,IMPORT_GUARD)

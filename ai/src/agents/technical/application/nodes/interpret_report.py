@@ -26,7 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from ...domain.interpretation import trajectory_eval
+from ...domain.interpretation import trajectory_eval, numeric_claims
+from ...config import MA_SHORT_WINDOW, MA_MID_WINDOW, MA_LONG_WINDOW, RSI_PERIOD
 from ...domain.interpretation.keyword_rules import ALIGNMENT_RULES, CONFIDENCE_LABELS, CONFIDENCE_RULES, CONSENSUS_LABELS, CONSENSUS_RULES, INDICATOR_LABELS, REGIME_LABELS, REGIME_RULES, RISK_LABELS, RISK_MENTION_TERMS, SIGNAL_LABELS, SIGNAL_RULES
 from ...domain.models.contracts import InterpretationResult, RegimeResult, RiskItem, SignalSummary
 from ...domain.models.enums import AlignmentFlag, Consensus, DirectionalBias, GenerationSource, IndicatorType, RiskFlag, Signal, Trend
@@ -170,6 +171,11 @@ def build_payload(
     `data_status`(있으면)는 limited/unavailable 일 때 LLM 이 단정하지 않도록 하는 **hedge 힌트**다.
     """
     payload: dict = {
+        "numeric_prose_policy": [
+            {"indicator": role.indicator, "role": role.role, "expression": role.expression,
+             "unit": role.unit, "window": role.window, "fields": list(role.fields)}
+            for role in _numeric_roles() if role.indicator in {s.indicator.value for s in signals}
+        ],
         "daily_regime": regime.daily_regime.value,
         "final_regime": regime.final_regime.value,
         "weekly_trend": regime.weekly_trend.value,
@@ -290,7 +296,7 @@ def verify(
     risks: Sequence[RiskItem] = (),
 ) -> trajectory_eval.EvalResult:
     """검증 ③ 호출. 라벨·신호에 더해 confidence_level·risk flag까지 확정값을 넘긴다."""
-    return trajectory_eval.evaluate(
+    result = trajectory_eval.evaluate(
         llm_output,
         final_regime=regime.final_regime,
         consensus=signal.consensus,
@@ -299,6 +305,11 @@ def verify(
         confidence_level=signal.confidence_level,
         risk_flags=[r.flag for r in risks],
     )
+    numeric = numeric_claims.evaluate(llm_output, indicators=[s.indicator.value for s in signals],
+                                      roles=_numeric_roles())
+    failures = result.failures + tuple(trajectory_eval.TargetFailure(
+        failure.target, numeric_claims.FAILURE_REASON, failure.indicator) for failure in numeric)
+    return trajectory_eval.EvalResult(passed=not failures, failures=failures)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -569,7 +580,7 @@ def unavailable_interpretation() -> InterpretationResult:
 _FALLBACK_DETAIL_HINTS: dict[str, tuple[str, str]] = {
     "moving_average": (
         "이동평균은 후행 지표라 방향 전환을 늦게 반영합니다. 단독으로 진입·청산 근거로 쓰지 마세요.",
-        "**5·20·60일선 배열 유지 여부**와 **골든/데드크로스** 발생을 확인하세요.",
+        f"**{MA_SHORT_WINDOW}·{MA_MID_WINDOW}·{MA_LONG_WINDOW}일선 배열 유지 여부**와 **골든/데드크로스** 발생을 확인하세요.",
     ),
     "rsi": (
         "RSI만으로 방향을 단정하기 어렵고, 과매수·과매도가 곧 반전을 뜻하지는 않습니다.",
@@ -588,6 +599,13 @@ _FALLBACK_DETAIL_HINTS: dict[str, tuple[str, str]] = {
         "**패턴 완성·확정 여부**와 **거래량 확인**을 이어서 관찰하세요.",
     ),
 }
+
+
+def _numeric_roles() -> tuple[numeric_claims.NumericRole, ...]:
+    return numeric_claims.build_roles(
+        ma_windows=(MA_SHORT_WINDOW, MA_MID_WINDOW, MA_LONG_WINDOW), rsi_period=RSI_PERIOD,
+        references=tuple((indicator, _FALLBACK_DETAIL_HINTS[indicator][1])
+                         for indicator in ("moving_average", "rsi")))
 
 
 # 지표별 "핵심 해석" 앞문장(결정론) — fallback reason 을 한 단계 더 설명적으로. 새 판정 없이 지표 성격만.

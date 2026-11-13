@@ -11,6 +11,12 @@ supervisor/technical_supervisor.py 가 소유한다. 이 프롬프트는 재생�
 직전 출력이 코드가 확정한 라벨·신호와 불일치했습니다.
 아래 확정값을 **반드시 그대로 반영하고, 절대 바꾸지 마세요.** 새로운 라벨·수치·매수/매도 표현을 만들지 마세요.
 
+# 수치와 정성 설명의 역할 분리
+
+측정값·가격·배율·비율·기간은 숫자로 서술하지 마세요. 입력의 value/metrics를 정확히 복사한 숫자도 출력 문장에는 쓰지 않습니다. 수치는 코드가 해당 지표의 value/metrics로 별도 표시합니다. 숫자 없는 정상 정성 설명과 확정 라벨은 유지하세요.
+
+입력 numeric_prose_policy의 identifier는 해당 indicator의 정확한 지표 이름에만 쓸 수 있습니다. reference는 허용된 watchpoint 필드 전체가 코드의 고정 문구와 같을 때만 허용됩니다. 고정 문구 앞뒤에 현재값·측정·비교·예측 주장을 붙이거나 다른 지표/필드로 옮기지 마세요. 표에 없는 표기·새 측정값·기간·단위를 만들지 않습니다. 이 표는 입력 지시이며 출력 JSON 필드가 아닙니다.
+
 # 반드시 그대로 반영할 확정값
 
 ```json
@@ -18,7 +24,7 @@ supervisor/technical_supervisor.py 가 소유한다. 이 프롬프트는 재생�
 ```
 
 - 확정 `final_regime`·`consensus`·`alignment_flag`를 문장 방향과 어긋나게 쓰지 마세요.
-- confidence는 **현재 지표의 규칙 기반 근거 점수**이며 **상승 확률·예측 정확도가 아닙니다**. 이 의미를 신호 설명에 명시하세요. 지표가 적어도 HIGH가 가능하므로 충분한 근거의 개수나 미래 성과로 해석하지 말고 `confidence_basis`의 긍정·중립·부정 개수를 그대로 보존하세요.
+- confidence는 **현재 지표의 규칙 기반 근거 점수**이며 **상승 확률·예측 정확도가 아닙니다**. 이 의미를 신호 설명에 명시하세요. 지표가 적어도 HIGH가 가능하므로 충분한 근거의 개수나 미래 성과로 해석하지 말고 긍정·중립·부정 개수는 코드의 `confidence_basis`에 그대로 보존되므로 LLM 문장에는 숫자로 재서술하지 마세요.
 - 각 지표의 확정 `signal`(예: moving_average=positive, rsi=neutral …)을 반대 뉘앙스로 서술하지 마세요.
 - `regime_context`가 담은 상위 추세 맥락을 누락하지 마세요. `alignment_flag=counter_trend`면 역행 맥락을 반드시 포함하세요.
 - 입력에 없는 가격·목표가·손절가·예상 수익률을 만들지 마세요.
@@ -60,7 +66,7 @@ supervisor/technical_supervisor.py 가 소유한다. 이 프롬프트는 재생�
     {
       "indicator": "moving_average",
       "detail": "확정 signal·value·metrics와 일치하는 설명 한 문장.",
-      "detail_reason": "현재 상태와 왜 그 방향인지 확정 수치를 근거로 2~3문장.",
+      "detail_reason": "현재 상태와 왜 그 방향인지 확정 신호를 근거로 정성적으로 설명(측정 숫자 복사 금지).",
       "detail_caution": "이 지표만으로 단정하면 안 되는 이유 1~2문장.",
       "detail_watchpoint": "어떤 조건이 충족되면 해석이 바뀔 수 있는지 구체 조건 1~2문장(행동 지시 아님)."
     }

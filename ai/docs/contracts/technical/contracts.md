@@ -426,3 +426,27 @@ JSON 데이터만 반환한다. 의미 단위로 중첩 구조를 유지한다(b
 7. **에이전트는 DB를 모른다.** 3장 매핑은 backend가 수행하는 참고용. 에이전트는 JSON 구조만 책임진다.
 8. **변경 시 소스 문서 순서:** JSON 계약(필드·구조)은 `contracts.md`를 먼저 고친다. DB 컬럼명·저장 구조 변경은 `schema.md`를 먼저 고친다(schema가 DB 이름의 최종 기준). enum 값 변경은 `enums.md`를 기준으로 삼는다. 세 경우 모두 소스 문서를 고친 뒤 나머지 문서 → 코드·backend 순으로 반영한다.
 9. **1D intraday는 조건부·보조(Beta).** `charts`는 `{3m, 1y, 5y}`가 항상 존재하고 `1d`는 조건부다 — 소비 측은 `len == 3`이 아니라 **period 집합**으로 처리한다. `chart_data`는 `candle_unit` 판별 유니온(D/W/M=`ChartData`, 1d=`IntradayChartData`)이며 `OHLCV.date`(날짜 전용)는 불변, intraday는 `IntradayCandle.timestamp`를 쓴다. `intraday_context`는 optional이고, intraday는 `final_regime`·top-level `confidence`/`signal_score`/`risk`를 바꾸지 않는다(보정값은 context 내부 설명용, cap ±0.05·signal_score_adjustment는 0.0). KIS 분봉 fetcher(`fetch_minute_ohlcv`)는 구현 완료이고, **`INTRADAY_FETCH_ENABLED=True`(또는 명시 `intraday_fetcher` 주입)면 리포트 생성 1회에 D/W/M과 함께 1d를 조립**한다(기본 False면 미포함). 프론트가 1d를 따로 호출하지 않는다. intraday annotation은 Phase 3다.
+
+
+## CF059 · 정성 설명과 코드 수치 근거 분리
+
+공개 출력 schema는 유지한다. TechnicalSignal.value/metrics의 순서·값·None·단위와 코드 계산/판정은
+그대로 보존한다. LLM은 정성 설명만 보완하며 측정값·가격·배율·비율·기간을 문장에 숫자로 서술하지
+않는다. 코드 값을 맞게 복사한 문장도 제한한다. Backend code_metrics projection을 역산하거나
+모델 응답을 수치 권위로 사용하지 않는다.
+
+예외는 해당 지표/역할/단위/필드에 묶인 닫힌 표현이다. 현재 설정에서 생성한 MA 창 식별자
+(예: 5MA·20MA·60MA, 대응 일선 표기)와 RSI 계산창 식별자는 해당 지표에서만 허용한다.
+고정 reference는 코드가 만든 watchpoint 문구 전체가 허용된 detail_watchpoint 또는
+what_to_watch_next 필드와 정확히 일치해야 한다. 현재값·비교·예측을 덧붙이거나 다른 지표/필드로
+옮길 수 없다. 역할 표는 내부 prompt 입력 numeric_prose_policy이며 새 공개 응답 필드가 아니다.
+
+기존 verify의 라벨·금지·구조 검사 뒤 이 제한을 결합한다. detail/reason/caution/watchpoint의
+숫자 실패는 정확 indicator target으로 연결해 기존 재생성 최대1회 뒤 그 지표 네 필드를 함께
+결정론 fallback으로 바꾼다. 다른 정상 지표의 정성 설명은 유지한다. 본문·구조화 섹션/리스트의
+실패는 기존 interpretation 블록 fallback이다. 선택 서술 필드의 missing/null/empty 보충은 유지한다.
+코드 basis/metrics/fallback을 모델 응답으로 오인해 재검사하지 않는다.
+
+정확한 숫자 복사도 제한하므로 문장이 덜 구체적일 수 있고 같은 대체 단위의 정상 문구도 함께
+대체될 수 있다. 수치는 기존 metrics에서 확인한다. 이 제한은 Unicode 숫자 표기와 닫힌 역할의
+범위이며 한글 수사·‘두 배/절반’·숫자 없는 비교관계/모든 우회의 전면 grounding이 아니다.

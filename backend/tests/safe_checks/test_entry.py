@@ -1322,6 +1322,55 @@ class CF040Boundary(unittest.TestCase):
 import hashlib
 
 class TechnicalGraphBoundary(unittest.TestCase):
+    def test_numeric_helper_exact_source_new_single_pin_drift_and_neighbor_rejection(self):
+        import ast
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        path='ai/src/agents/technical/domain/interpretation/numeric_claims.py'
+        raw=c.regular_bytes(root,path)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),c.GRAPH_INPUTS[path])
+        self.assertIn(path,c.selected_sources(root,technical_graph_only=True))
+        self.assertNotIn(path,c.CF021_INPUTS)
+        self.assertFalse(c.source_allowed(path+'.adjacent'))
+        self.assertFalse(c.source_allowed(path.replace('numeric_claims.py','numeric_claims_neighbor.py')))
+        fn=next(n for n in ast.parse(c.regular_bytes(root,'backend/scripts/check_safe.py')).body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        guard=next(n for n in ast.walk(fn) if isinstance(n,ast.If) and any(
+            isinstance(x,ast.Constant) and x.value=='reviewed graph source changed' for x in ast.walk(n)))
+        self.assertEqual({ast.unparse(n.func) for n in ast.walk(guard) if isinstance(n,ast.Call)},
+                         {'hashlib.sha256(data).hexdigest','hashlib.sha256','UnsafeCheck'})
+        self.assertFalse(any(isinstance(n,(ast.Import,ast.ImportFrom,ast.Global,ast.Nonlocal)) for n in ast.walk(guard)))
+        wrapper=ast.parse('def verify(p,data):\n pass').body[0];wrapper.body=[guard]
+        env={'__builtins__':{},'technical_graph_only':True,'GRAPH_INPUTS':c.GRAPH_INPUTS,'hashlib':hashlib,'UnsafeCheck':c.UnsafeCheck}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<actual-graph-pin-guard>','exec'),env)
+        self.assertIsNone(env['verify'](path,raw))
+        with self.assertRaises(c.UnsafeCheck):env['verify'](path,raw+b'\n# unreviewed drift\n')
+
+    def test_numeric_helper_roles_reject_value_borrowing_before_module_result_merge(self):
+        import importlib.util
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3];relative='ai/src/agents/technical/domain/interpretation/numeric_claims.py'
+        name='_technical_numeric_self';self.assertNotIn(name,sys.modules)
+        self.assertEqual(hashlib.sha256(c.regular_bytes(root,relative)).hexdigest(),c.GRAPH_INPUTS[relative])
+        spec=importlib.util.spec_from_file_location(name,root/relative);module=importlib.util.module_from_spec(spec)
+        sys.modules[name]=module
+        try:
+            spec.loader.exec_module(module)
+            self.assertEqual(Path(module.__spec__.origin).resolve(),(root/relative).resolve())
+            reference='RSI 기준선 돌파 여부와 50선 안착 여부를 확인하세요.'
+            roles=module.build_roles(ma_windows=(5,20,60),rsi_period=14,references=(('rsi',reference),))
+            self.assertFalse(module.unsupported('5MA와 20일선의 배열',indicators=('moving_average',),field='detail',roles=roles))
+            self.assertFalse(module.unsupported(reference,indicators=('rsi',),field='detail_watchpoint',roles=roles))
+            for indicator,text,field in (('rsi','RSI 현재값50','detail'),('volume','50배','detail'),
+                    ('moving_average','50원','detail'),('moving_average','15MA','detail'),
+                    ('moving_average','(5MA)%','detail'),('rsi','현재값 '+reference,'detail_watchpoint'),
+                    ('volume',reference,'detail_watchpoint'),('rsi',reference,'detail_reason')):
+                self.assertTrue(module.unsupported(text,indicators=(indicator,),field=field,roles=roles))
+            failures=module.evaluate({'details':[{'indicator':'rsi','detail_reason':'50원'}],
+                'key_drivers':['50배']},indicators=('rsi',),roles=roles)
+            self.assertEqual({f.target for f in failures},{'technical_signals[rsi].detail_reason','interpretation.key_drivers[0]'})
+            self.assertEqual([f.indicator for f in failures if f.target.startswith('technical_signals')],['rsi'])
+        finally:sys.modules.pop(name,None)
+
     def test_confidence_math_unchanged_and_actual_basis_summary_preserve_score_meaning(self):
         import ast
         import __future__

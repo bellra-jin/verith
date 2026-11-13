@@ -17,8 +17,10 @@ import logging
 import math
 import re
 import time
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError
@@ -228,19 +230,98 @@ _token_state: dict[str, object] = {"access_token": None, "expires_at": 0.0}
 _TOKEN_EXPIRY_MARGIN_SECONDS = 300  # 만료 5분 전 갱신
 
 
-def get_access_token(*, client: httpx.Client | None = None) -> str:
+def _explicit_settings(settings: KISSettings) -> KISSettings:
+    """Caller-owned settings only: no discovery, coercion or secret diagnostics."""
+    try:
+        if type(settings) is not KISSettings:
+            raise ValueError()
+        if any(type(v) is not str or not v or any(ord(c) < 33 or ord(c) > 126 for c in v)
+               for v in (settings.api_key, settings.api_secret, settings.base_url)):
+            raise ValueError()
+        url = urlsplit(settings.base_url)
+        if (url.scheme != 'https' or not url.hostname or url.username or url.password
+                or url.path not in {'', '/'} or url.query or url.fragment or url.port == 0):
+            raise ValueError()
+        return KISSettings(settings.api_key, settings.api_secret, settings.base_url.rstrip('/'))
+    except (ValueError, TypeError, AttributeError):
+        raise KisApiError('Invalid explicit KIS settings') from None
+
+
+def kis_request_gate(*, settings: KISSettings, ticker: str, deadline, stopped,
+                     token_limit: int, market_limit: int):
+    """Caller-owned HTTPX request hook: consume before send, never refund/retry.
+
+    Caller must own a TLS-verifying, proxy/redirect/transport-retry-free client,
+    and set stopped before cancelling its waiter. No client or deadline is made here.
+    """
+    settings = _explicit_settings(settings)
+    validate_ticker(ticker)
+    if any(type(n) is not int or n <= 0 for n in (token_limit, market_limit)):
+        raise KisApiError('Invalid KIS invocation limits')
+    origin = httpx.URL(settings.base_url)
+    counts = {'token': 0, 'market': 0}
+    lock = threading.Lock()
+
+    def before(request):
+        with lock:
+            remaining = deadline.remaining_seconds()
+            if (stopped.is_set() or type(remaining) not in (int, float)
+                    or not math.isfinite(remaining) or remaining <= 0):
+                raise KisApiError('KIS invocation closed')
+            url = request.url
+            if (url.scheme != origin.scheme or url.host != origin.host or url.port != origin.port
+                    or url.userinfo or url.fragment):
+                raise KisApiError('KIS request denied')
+            if request.method == 'POST' and url.path == TOKEN_PATH and not url.query:
+                kind, limit = 'token', token_limit
+            elif request.method == 'GET' and url.path == CHART_PATH:
+                expected = {'FID_COND_MRKT_DIV_CODE', 'FID_INPUT_ISCD', 'FID_INPUT_DATE_1',
+                            'FID_INPUT_DATE_2', 'FID_PERIOD_DIV_CODE', 'FID_ORG_ADJ_PRC'}
+                params = url.params
+                if (set(params) != expected or len(params.multi_items()) != len(expected)
+                        or params['FID_INPUT_ISCD'] != ticker or params['FID_PERIOD_DIV_CODE'] not in ALLOWED_PERIODS
+                        or params['FID_COND_MRKT_DIV_CODE'] != MARKET_DIV_CODE or params['FID_ORG_ADJ_PRC'] != ORG_ADJ_PRC):
+                    raise KisApiError('KIS request denied')
+                kind, limit = 'market', market_limit
+            else:
+                raise KisApiError('KIS request denied')
+            if counts[kind] >= limit:
+                raise KisApiError('KIS invocation limit reached')
+            old = request.extensions.get('timeout')
+            old = old if type(old) is dict else {}
+            ceiling = min(KIS_TIMEOUT_SECONDS, remaining)
+            request.extensions['timeout'] = {key: min(value, ceiling)
+                if type(value := old.get(key)) in (int, float) and math.isfinite(value) and value > 0
+                else ceiling for key in ('connect', 'read', 'write', 'pool')}
+            counts[kind] += 1
+
+    def observed():
+        with lock:
+            return dict(counts)
+
+    return before, observed
+
+
+def get_access_token(*, client: httpx.Client | None = None, settings: KISSettings | None = None) -> str:
     """KIS access token을 발급하거나 만료 전이면 메모리 캐시에서 재사용한다.
 
-    인증정보는 load_kis_settings()로 .env에서만 읽는다(코드 하드코딩 없음). secret은 로그에 남기지 않는다.
+    기본 호출은 기존 설정/메모리 캐시를 유지한다. 명시 settings는 환경 로딩과
+    전역 캐시 읽기/쓰기를 모두 하지 않으며 호출자가 소유한 한 인증에만 사용한다.
     """
+    explicit = settings is not None
+    if explicit:
+        settings = _explicit_settings(settings)
     now = time.time()
-    cached = _token_state["access_token"]
-    if isinstance(cached, str) and now < float(_token_state["expires_at"]):
-        return cached
+    if not explicit:
+        cached = _token_state["access_token"]
+        if isinstance(cached, str) and now < float(_token_state["expires_at"]):
+            return cached
 
-    settings = load_kis_settings()
+    if not explicit:
+        settings = load_kis_settings()
     owns_client = client is None
-    client = client or httpx.Client(timeout=KIS_TIMEOUT_SECONDS)
+    client = client or (httpx.Client(timeout=KIS_TIMEOUT_SECONDS, trust_env=False, follow_redirects=False)
+                        if explicit else httpx.Client(timeout=KIS_TIMEOUT_SECONDS))
     try:
         resp = client.post(
             f"{settings.base_url}{TOKEN_PATH}",
@@ -250,20 +331,30 @@ def get_access_token(*, client: httpx.Client | None = None) -> str:
                 "appsecret": settings.api_secret,
             },
         )
+    except httpx.RequestError:
+        if explicit:raise KisApiError('KIS_AUTH_NETWORK_FAILED') from None
+        raise
     finally:
         if owns_client:
             client.close()
 
     if resp.status_code != 200:
-        raise KisApiError(f"토큰 발급 실패 HTTP {resp.status_code}: {resp.text[:200]}")
-    data = resp.json()
+        raise KisApiError('KIS_AUTH_HTTP_FAILED' if explicit else f"토큰 발급 실패 HTTP {resp.status_code}: {resp.text[:200]}")
+    try:data = resp.json()
+    except ValueError:
+        if explicit:raise KisApiError('KIS_AUTH_RESPONSE_INVALID') from None
+        raise
+    if explicit and type(data) is not dict:raise KisApiError('KIS_AUTH_RESPONSE_INVALID')
     token = data.get("access_token")
     if not token:
         raise KisApiError("토큰 응답에 access_token 없음")
 
+    if explicit and (type(data.get('expires_in')) is not int or not 0<data['expires_in']<=2147483647):
+        raise KisApiError('KIS_AUTH_RESPONSE_INVALID')
     expires_in = int(data.get("expires_in", 86400))
-    _token_state["access_token"] = token
-    _token_state["expires_at"] = now + expires_in - _TOKEN_EXPIRY_MARGIN_SECONDS
+    if not explicit:
+        _token_state["access_token"] = token
+        _token_state["expires_at"] = now + expires_in - _TOKEN_EXPIRY_MARGIN_SECONDS
     logger.info("kis_token_issued", extra={"expires_in": expires_in})
     return token
 
@@ -334,6 +425,7 @@ def _call_chart(
     date_from: str,
     date_to: str,
     client: httpx.Client,
+    *, safe_errors: bool = False,
 ) -> dict:
     """기간별시세 1회 호출. 네트워크/타임아웃/429/EGW00201은 재시도, 그 외 오류는 즉시 실패."""
     headers = {
@@ -359,19 +451,24 @@ def _call_chart(
         try:
             resp = client.get(url, headers=headers, params=params)
         except httpx.RequestError as exc:  # 타임아웃 포함(TimeoutException ⊂ RequestError)
-            last_err = f"network error: {exc}"
+            last_err = 'KIS_MARKET_NETWORK_FAILED' if safe_errors else f"network error: {exc}"
         else:
             if resp.status_code == 429 or RATE_LIMIT_MSG_CODE in resp.text:
                 last_err = f"rate limit(HTTP {resp.status_code})"  # 재시도 대상
             elif resp.status_code != 200:
-                raise KisApiError(f"KIS HTTP {resp.status_code}: {resp.text[:200]}")
+                raise KisApiError('KIS_MARKET_HTTP_FAILED' if safe_errors else f"KIS HTTP {resp.status_code}: {resp.text[:200]}")
             else:
-                data = resp.json()
+                try:data = resp.json()
+                except ValueError:
+                    if safe_errors:raise KisApiError('KIS_MARKET_RESPONSE_INVALID') from None
+                    raise
+                if safe_errors and type(data) is not dict:raise KisApiError('KIS_MARKET_RESPONSE_INVALID')
                 if data.get("rt_cd") == "0":
                     return data
                 if data.get("msg_cd") == RATE_LIMIT_MSG_CODE:
-                    last_err = f"rate limit(rt_cd): {data.get('msg1')}"  # 재시도 대상
+                    last_err = 'KIS_MARKET_RATE_LIMITED' if safe_errors else f"rate limit(rt_cd): {data.get('msg1')}"  # 재시도 대상
                 else:
+                    if safe_errors:raise KisApiError('KIS_MARKET_API_FAILED')
                     raise KisApiError(
                         f"KIS 오류 rt_cd={data.get('rt_cd')} "
                         f"msg_cd={data.get('msg_cd')} msg1={data.get('msg1')}"
@@ -379,7 +476,7 @@ def _call_chart(
         if attempt < KIS_MAX_RETRIES - 1:
             logger.warning("kis_request_retry", extra={"ticker": ticker, "period": period, "reason": last_err})
             _sleep_backoff(attempt)
-    raise KisApiError(f"KIS 최대 재시도({KIS_MAX_RETRIES}) 초과: {last_err}")
+    raise KisApiError('KIS_MARKET_RETRY_EXHAUSTED' if safe_errors else f"KIS 최대 재시도({KIS_MAX_RETRIES}) 초과: {last_err}")
 
 
 def _extract_output2(data: dict) -> list:
@@ -397,6 +494,7 @@ def _extract_output2(data: dict) -> list:
 
 def _fetch_ohlcv_range(
     ticker: str, period: str, start: date, end: date, client: httpx.Client,
+    *, settings: KISSettings | None = None, _token: str | None = None,
 ) -> list[OHLCV]:
     """[start, end]를 청크로 나눠 KIS를 여러 번 호출·병합한다(kis_mapping §8.1).
 
@@ -404,8 +502,16 @@ def _fetch_ohlcv_range(
     최고(最古) date 정체·KIS_MAX_CHUNKS) 중 하나면 멈춘다. 결과는 date dedup → 범위 필터 →
     과거→최신 정렬. 청크 실패·EGW00201은 _call_chart의 기존 retry/backoff를 그대로 쓴다.
     """
-    settings = load_kis_settings()
-    token = get_access_token(client=client)
+    explicit = settings is not None
+    if settings is None:
+        if _token is not None:raise KisApiError('KIS_INVOCATION_TOKEN_INVALID')
+        settings = load_kis_settings()
+        token = get_access_token(client=client)
+    else:
+        settings = _explicit_settings(settings)
+        token = get_access_token(client=client, settings=settings) if _token is None else _token
+        if type(token) is not str or not token or not token.isascii() or any(ord(c)<=32 or ord(c)>=127 for c in token):
+            raise KisApiError('KIS_INVOCATION_TOKEN_INVALID')
     chunk_days = KIS_FETCH_CHUNK_DAYS[period]
 
     by_date: dict[str, OHLCV] = {}
@@ -413,7 +519,8 @@ def _fetch_ohlcv_range(
     oldest_seen: str | None = None
     for _ in range(KIS_MAX_CHUNKS):
         chunk_start = max(start, cursor_end - timedelta(days=chunk_days))
-        data = _call_chart(settings, token, ticker, period, _ymd(chunk_start), _ymd(cursor_end), client)
+        data = (_call_chart(settings, token, ticker, period, _ymd(chunk_start), _ymd(cursor_end), client, safe_errors=True)
+                if explicit else _call_chart(settings, token, ticker, period, _ymd(chunk_start), _ymd(cursor_end), client))
         bars = parse_kis_ohlcv_output(_extract_output2(data))  # 빈 배열이면 []
 
         if not bars:  # 자연 종료 ②: 빈 청크(더 과거 데이터 없음)
@@ -445,7 +552,7 @@ def _fetch_ohlcv_range(
 
 def fetch_ohlcv_range(
     ticker: str, period: str, start_date: str, end_date: str,
-    *, client: httpx.Client | None = None,
+    *, client: httpx.Client | None = None, settings: KISSettings | None = None,
 ) -> list[OHLCV]:
     """명시 구간 [start_date, end_date]의 내부 표준 OHLCV(과거→최신)를 반환한다.
 
@@ -461,10 +568,15 @@ def fetch_ohlcv_range(
     if start > end:  # 역전 범위 → 토큰/네트워크 전에 거부
         raise ValueError(f"start_date가 end_date보다 뒤입니다: start={start_date!r} end={end_date!r}")
 
+    if settings is not None:
+        settings = _explicit_settings(settings)
     owns_client = client is None
-    client = client or httpx.Client(timeout=KIS_TIMEOUT_SECONDS)
+    client = client or (httpx.Client(timeout=KIS_TIMEOUT_SECONDS, trust_env=False, follow_redirects=False)
+                        if settings is not None else httpx.Client(timeout=KIS_TIMEOUT_SECONDS))
     try:
-        return _fetch_ohlcv_range(ticker, period, start, end, client)
+        if settings is None:
+            return _fetch_ohlcv_range(ticker, period, start, end, client)
+        return _fetch_ohlcv_range(ticker, period, start, end, client, settings=settings)
     finally:
         if owns_client:
             client.close()
@@ -473,6 +585,7 @@ def fetch_ohlcv_range(
 def fetch_ohlcv(
     ticker: str, period: str,
     *, end_date: datetime | date | str | None = None, client: httpx.Client | None = None,
+    settings: KISSettings | None = None,
 ) -> list[OHLCV]:
     """한 종목·한 타임프레임(D/W/M)의 내부 표준 OHLCV(과거→최신)를 반환한다.
 
@@ -484,11 +597,14 @@ def fetch_ohlcv(
     validate_period(period)
     end = normalize_end_date(end_date) or datetime.now().date()
     start = end - timedelta(days=KIS_FETCH_LOOKBACK_DAYS[period])
-    return fetch_ohlcv_range(ticker, period, _ymd(start), _ymd(end), client=client)
+    if settings is None:
+        return fetch_ohlcv_range(ticker, period, _ymd(start), _ymd(end), client=client)
+    return fetch_ohlcv_range(ticker, period, _ymd(start), _ymd(end), client=client, settings=settings)
 
 
 def fetch_multi_timeframe_ohlcv(
     ticker: str, *, end_date: datetime | date | str | None = None,
+    client: httpx.Client | None = None, settings: KISSettings | None = None,
 ) -> dict[str, list[OHLCV]]:
     """한 종목의 D/W/M 세 타임프레임을 각각 KIS에서 직접 받아 dict로 반환한다.
 
@@ -497,7 +613,21 @@ def fetch_multi_timeframe_ohlcv(
     """
     validate_ticker(ticker)
     end = normalize_end_date(end_date)  # 한 번 정규화 → 세 타임프레임 동일 기준일
-    return {period: fetch_ohlcv(ticker, period, end_date=end) for period in ALLOWED_PERIODS}
+    if settings is None:
+        return {period: fetch_ohlcv(ticker, period, end_date=end, client=client) for period in ALLOWED_PERIODS}
+    # One invocation owns one in-memory token across D/W/M. No global/disk
+    # cache, automatic refresh or fallback to credential discovery.
+    settings = _explicit_settings(settings)
+    owns_client = client is None
+    client = client or httpx.Client(timeout=KIS_TIMEOUT_SECONDS, trust_env=False, follow_redirects=False)
+    try:
+        end = end or datetime.now().date()
+        token = get_access_token(client=client, settings=settings)
+        return {period: _fetch_ohlcv_range(ticker, period,
+            end-timedelta(days=KIS_FETCH_LOOKBACK_DAYS[period]),end,client,settings=settings,_token=token)
+            for period in ALLOWED_PERIODS}
+    finally:
+        if owns_client:client.close()
 
 
 # ── 종목명(hts_kor_isnm) best-effort 조회 — stocks 마스터에 없는 코드(ETF·외국주 등) 표시명 보강용 ──

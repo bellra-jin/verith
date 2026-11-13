@@ -20,6 +20,7 @@ from itertools import count
 from pathlib import Path
 import json
 import math
+import ssl
 import re
 import sys
 import threading
@@ -35,6 +36,7 @@ DEPENDENCIES_PATH = 'ai/src/api/dependencies.py'
 LIMITS_PATH = 'ai/src/agents/technical/domain/intraday_limits.py'
 DEADLINE_PATH = 'ai/src/shared/runtime/deadline.py'
 LLM_PATH = 'ai/src/agents/technical/infrastructure/openai_llm_client.py'
+KIS_PATH = 'ai/src/agents/technical/infrastructure/kis_client.py'
 PRIVATE = 'cf040-synthetic-private-sentinel-never-output'
 FORBIDDEN = ('src.agents.technical.application.', 'agents.technical.application.',
              'src.agents.technical.infrastructure.', 'agents.technical.infrastructure.',
@@ -46,7 +48,7 @@ def load_readonly():
     """Preserve the existing six actual pure Flow source origins before collection."""
     from scripts.check_safe import CF040_COMPAT, CF040_INPUTS
     ai = ROOT/'ai/src'
-    assert len(CF040_COMPAT) == 6 and set(CF040_INPUTS) == {CONFIG_PATH, DEPENDENCIES_PATH, LIMITS_PATH, DEADLINE_PATH, LLM_PATH}
+    assert len(CF040_COMPAT) == 6 and set(CF040_INPUTS) == {CONFIG_PATH, DEPENDENCIES_PATH, LIMITS_PATH, DEADLINE_PATH, LLM_PATH, KIS_PATH}
     for name in ('agents','agents.flow','agents.flow.api','agents.flow.domain','agents.flow.domain.verification','agents.flow.infrastructure'):
         if name not in sys.modules:
             module = ModuleType(name)
@@ -397,6 +399,7 @@ def test_selected_body_alias_and_graph_import_boundary_are_explicit():
 # Execute only the actual usage/text helpers and adapter class body. No SDK,
 # client factory, config loader, graph or provider module is imported.
 def usage_adapter():
+    from http.cookiejar import CookieJar, DefaultCookiePolicy
     tree=ast.parse((ROOT/LLM_PATH).read_text())
     names={'_extract_usage','_extract_text','OpenAiLlmClient','_StrictLlmFailure',
            '_strict_json','_strict_sha','_strict_int','_strict_hash','_strict_same_callable',
@@ -420,6 +423,7 @@ def usage_adapter():
     values.update(time=SimpleNamespace(perf_counter=lambda:1.0,monotonic=lambda:1.0),openai=SimpleNamespace(OpenAIError=SDKError),
                   asyncio=asyncio,dataclass=dataclass,fields=fields,replace=replace,datetime=datetime,UTC=UTC,
                   hashlib=hashlib,json=json,math=math,re=re,threading=threading,UUID=UUID,
+                  CookieJar=CookieJar,DefaultCookiePolicy=DefaultCookiePolicy,
                   httpx=SimpleNamespace(BaseTransport=httpx.BaseTransport,SyncByteStream=httpx.SyncByteStream,Response=httpx.Response),
                   os=SimpleNamespace(environ={}),logging=SimpleNamespace(DEBUG=logging.DEBUG,getLogger=lambda _:SimpleNamespace(isEnabledFor=lambda _:False)),
                   logger=SimpleNamespace(warning=lambda *a,**kw:None),
@@ -885,7 +889,7 @@ def test_reverse_response_order_keeps_usage_on_original_ordinal():
 # CF051 uses real Request/Response/stream protocol objects but synthetic SDK,
 # HTTP client/transport constructors and bytes. No SDK import or socket exists.
 def official_adapter(*,calls=4,count_body=None,status=200,chunks=None,headers=None,
-                     request_change=None,inner=None,constructor_failure=None,defer=False,**limits):
+                     request_change=None,inner=None,constructor_failure=None,defer=False,wrap_transport_errors=False,**limits):
     h=strict_adapter(counter=False,calls=calls);events=[];sent=[];closed=[];read=[]
     a=h.a
     class Parts(httpx.SyncByteStream):
@@ -911,7 +915,7 @@ def official_adapter(*,calls=4,count_body=None,status=200,chunks=None,headers=No
             events.append(('client',kwargs))
             if constructor_failure=='client':raise RuntimeError(PRIVATE)
             self._transport=kwargs['transport'];self._trust_env=kwargs['trust_env']
-            self.follow_redirects=kwargs['follow_redirects'];self._mounts={};self._event_hooks={'request':[],'response':[]}
+            self.follow_redirects=kwargs['follow_redirects'];self._mounts={};self._event_hooks={'request':[],'response':[]};self.cookies=httpx.Cookies(kwargs.get('cookies'))
         def close(self):closed.append('client');self._transport.close()
     def send(sdk,path,request,timeout,streaming=False):
         values=dict(sdk.default_headers);values={k:v for k,v in values.items() if type(v) is str}
@@ -923,7 +927,10 @@ def official_adapter(*,calls=4,count_body=None,status=200,chunks=None,headers=No
         req=httpx.Request('POST','https://api.openai.com/v1/'+path,content=raw,headers=values,
             extensions={'timeout':dict.fromkeys(('connect','read','write','pool'),timeout)})
         if request_change:request_change(req)
-        return sdk._client._transport.handle_request(req)
+        try:return sdk._client._transport.handle_request(req)
+        except a['_StrictLlmFailure'] as error:
+            if wrap_transport_errors:raise RuntimeError(PRIVATE) from error
+            raise
     class CountContext:
         def __init__(self,sdk,request,timeout):self.sdk=sdk;self.request=request;self.timeout=timeout;events.append(('context-created',None))
         def __enter__(self):
@@ -1295,10 +1302,11 @@ def test_official_opaque_receipt_keeps_hash_binding_without_retaining_prompt():
 async def test_CF053_callback_late_fixed_ACK_is_not_adopted_after_clock_advance():
     from src.modules.technical.domain import provider_execution as P
     path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
-    tree=ast.parse(path.read_text());node=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient')
+    nodes=authority_nodes(path)
     clock=SimpleNamespace(value=0.0)
     values={'P':P,'asyncio':asyncio,'httpx':httpx,'math':math,'time':SimpleNamespace(monotonic=lambda:clock.value)}
-    exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),values)
+    values.update(ssl=ssl,hashlib=hashlib)
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),values)
     from fastapi import FastAPI
     from starlette.responses import JSONResponse
     app=FastAPI();seen=[]
@@ -1313,9 +1321,10 @@ async def test_CF053_callback_late_fixed_ACK_is_not_adopted_after_clock_advance(
 async def test_CF053_authority_snapshot_survives_await_mutation_without_credential_redirect():
     from src.modules.technical.domain import provider_execution as P
     path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
-    node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient')
+    nodes=authority_nodes(path)
     values={'P':P,'asyncio':asyncio,'httpx':httpx,'math':math,'time':__import__('time')}
-    exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),values)
+    values.update(ssl=ssl,hashlib=hashlib)
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),values)
     from fastapi import FastAPI,Request
     from starlette.responses import JSONResponse
     app=FastAPI();seen=[]
@@ -1353,7 +1362,7 @@ def test_CF053_actual_CF051_overflow_failure_keeps_usage_and_null_estimate():
 async def test_CF053_authority_cleanup_delay_cannot_return_late_ACK():
     from src.modules.technical.domain import provider_execution as P
     path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
-    node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient')
+    nodes=authority_nodes(path)
     clock=SimpleNamespace(value=0.0);app=__import__('fastapi').FastAPI()
     from starlette.responses import JSONResponse
     @app.post('/internal/technical/execution/start')
@@ -1364,6 +1373,349 @@ async def test_CF053_authority_cleanup_delay_cannot_return_late_ACK():
         async def __aexit__(self,*args):
             result=await self.inner.__aexit__(*args);clock.value=6;return result
     values={'P':P,'asyncio':asyncio,'httpx':SimpleNamespace(AsyncClient=DelayedClose,ASGITransport=httpx.ASGITransport,AsyncBaseTransport=httpx.AsyncBaseTransport),'math':math,'time':SimpleNamespace(monotonic=lambda:clock.value)}
-    exec(compile(ast.Module(body=[node],type_ignores=[]),str(path),'exec'),values)
+    values.update(ssl=ssl,hashlib=hashlib)
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),values)
     client=values['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,transport=httpx.ASGITransport(app=app))
     with pytest.raises(P.ExecutionInvalid):await client._post('/internal/technical/execution/start',{'schema_version':P.SCHEMA},'f'*64,5,8192)
+
+
+def explicit_kis_slices():
+    """Closed copied adapter functions, actual pure OHLCV, MockTransport only."""
+    import __future__
+    import _strptime
+    import time
+    from datetime import date
+    from urllib.parse import urlsplit
+    tree=ast.parse((ROOT/KIS_PATH).read_text())
+    names={'kis_request_gate','_explicit_settings','get_access_token','validate_ticker','validate_period',
+        '_to_iso_date','_to_price','_to_int','parse_kis_ohlcv_item','parse_kis_ohlcv_output',
+        '_normalize_to_date','_ymd','normalize_end_date','_sleep_backoff','_call_chart',
+        '_extract_output2','_fetch_ohlcv_range','fetch_ohlcv_range','fetch_ohlcv','fetch_multi_timeframe_ohlcv'}
+    nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
+    assert {n.name for n in nodes}==names
+    calls=names|{'type','any','ord','ValueError','TypeError','AttributeError','isinstance','float','int','str',
+        'KisApiError','KisFieldError','KisRangeIncompleteError','OutOfScopeTickerError','InvalidPeriodError',
+        'KISSettings','urlsplit','len','max','min','range','list','dict','set','timedelta','OHLCV','sorted','load_kis_settings',
+        'is_supported_ticker'}
+    attrs={'api_key','api_secret','base_url','scheme','hostname','username','password','path','query','fragment','port',
+        'rstrip','strip','match','time','Client','post','get','close','status_code','text','json','info','warning',
+        'replace','strftime','fromisoformat','strptime','date','now','today','tzinfo','isoformat','sleep','RequestError',
+        'fullmatch','isdigit','lstrip','isfinite','sort','values','isascii','URL','Lock','remaining_seconds','is_set',
+        'url','host','userinfo','method','params','multi_items','extensions'}
+    for n in ast.walk(ast.Module(body=nodes,type_ignores=[])):
+        assert not isinstance(n,(ast.Import,ast.ImportFrom,ast.Global,ast.Nonlocal,ast.ClassDef,ast.AsyncWith,
+                                 ast.Await,ast.Yield,ast.YieldFrom,ast.Delete))
+        if isinstance(n,ast.With):
+            assert len(n.items)==1 and ast.dump(n.items[0].context_expr)==ast.dump(ast.Name(id='lock',ctx=ast.Load()))
+            assert n.items[0].optional_vars is None
+        if isinstance(n,ast.Call):
+            if isinstance(n.func,ast.Name): assert n.func.id in calls,n.func.id
+            else: assert isinstance(n.func,ast.Attribute) and n.func.attr in attrs,n.func.attr
+        if isinstance(n,ast.Attribute):
+            if n.attr=='__name__':
+                assert ast.dump(n.value) in {ast.dump(ast.parse(x,mode='eval').body)
+                                             for x in ('type(value)','type(output2)')}
+            else:assert n.attr in attrs,n.attr
+        if isinstance(n,ast.Name):assert not n.id.startswith('__')
+    config=COLLECTION_CONFIG
+    env={'__builtins__':{k:getattr(builtins,k) for k in ('type','any','ord','ValueError','TypeError','AttributeError',
+         'isinstance','float','int','str','len','max','min','range','list','dict','set','sorted','OverflowError')},
+         'KISSettings':config.KISSettings,'date':date,'datetime':datetime,'timedelta':timedelta,'urlsplit':urlsplit,
+         'math':math,'httpx':httpx,'threading':threading,'time':SimpleNamespace(time=lambda:1000,sleep=lambda _:None),
+         'logger':SimpleNamespace(info=lambda *a,**k:None,warning=lambda *a,**k:None),
+         'is_supported_ticker':config.is_supported_ticker}
+    def datetime_import(name,*args,**kwargs):
+        # datetime's C strptime/strftime uses this exact stdlib lookup, even
+        # when already loaded. Never forward arbitrary generated imports.
+        assert name in {'_strptime','time'}
+        return {'_strptime':_strptime,'time':time}[name]
+    env['__builtins__']['__import__']=datetime_import
+    for name in ('KisApiError','KisFieldError','KisRangeIncompleteError','OutOfScopeTickerError','InvalidPeriodError'):
+        env[name]=ValueError
+    for name in ('KIS_BACKOFF_SECONDS','KIS_FETCH_CHUNK_DAYS','KIS_FETCH_LOOKBACK_DAYS','KIS_MAX_CHUNKS',
+                 'KIS_MAX_RETRIES','KIS_TIMEOUT_SECONDS'):
+        env[name]=getattr(config,name)
+    constants={'TOKEN_PATH','CHART_PATH','TR_ID','MARKET_DIV_CODE','ORG_ADJ_PRC','CUST_TYPE','RATE_LIMIT_MSG_CODE',
+        'KIS_FIELD_DATE','KIS_FIELD_OPEN','KIS_FIELD_HIGH','KIS_FIELD_LOW','KIS_FIELD_CLOSE','KIS_FIELD_VOLUME',
+        'KIS_FIELD_TRADING_VALUE','_TOKEN_EXPIRY_MARGIN_SECONDS'}
+    for node in tree.body:
+        if isinstance(node,ast.Assign) and isinstance(node.targets[0],ast.Name) and node.targets[0].id in constants:
+            env[node.targets[0].id]=ast.literal_eval(node.value)
+    env.update(ALLOWED_PERIODS=('D','W','M'),_YMD_RE=re.compile(r'^\d{8}$'),_ISO_DATE_RE=re.compile(r'^\d{4}-\d{2}-\d{2}$'))
+    env['REQUIRED_KIS_FIELDS']=tuple(env[k] for k in ('KIS_FIELD_DATE','KIS_FIELD_OPEN','KIS_FIELD_HIGH','KIS_FIELD_LOW',
+        'KIS_FIELD_CLOSE','KIS_FIELD_VOLUME','KIS_FIELD_TRADING_VALUE'))
+    env['OHLCV']=pure_module('ai/src/agents/technical/domain/models/ohlcv.py','kis_actual_ohlcv').OHLCV
+    state={'access_token':'old-cached-synthetic-token','expires_at':1000000}
+    env['_token_state']=state
+    loads=[]
+    def forbidden():loads.append(True);raise AssertionError('KIS env discovery prohibited')
+    env['load_kis_settings']=forbidden
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'<fixed-explicit-kis-slices>','exec',
+                 flags=__future__.annotations.compiler_flag,dont_inherit=True),env)
+    return env,state,loads
+
+
+@pytest.mark.parametrize('failures',[0,2])
+def test_explicit_kis_standard_fetcher_preserves_DWM_bounds_and_never_loads_env_or_cache(failures):
+    env,state,loads=explicit_kis_slices();before=dict(state);calls=[];attempts={}
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid:9443')
+    def respond(req):
+        calls.append(req)
+        assert req.url.host=='kis.example.invalid' and req.url.scheme=='https'
+        if req.method=='POST':
+            assert req.url.path==env['TOKEN_PATH']
+            assert json.loads(req.content)==dict(grant_type='client_credentials',appkey=settings.api_key,appsecret=settings.api_secret)
+            return httpx.Response(200,json={'access_token':'new-synthetic-token','expires_in':86400})
+        assert req.method=='GET' and req.url.path==env['CHART_PATH']
+        assert req.headers['authorization']=='Bearer new-synthetic-token'
+        key=str(req.url)
+        attempts[key]=attempts.get(key,0)+1
+        if attempts[key]<=failures:return httpx.Response(429,json={})
+        day=req.url.params['FID_INPUT_DATE_1']
+        return httpx.Response(200,json={'rt_cd':'0','output2':[dict(stck_bsop_date=day,stck_oprc='10',stck_hgpr='12',
+            stck_lwpr='9',stck_clpr='11',acml_vol='100',acml_tr_pbmn='1000')]})
+    hook,observed=env['kis_request_gate'](settings=settings,ticker='000720',deadline=SimpleNamespace(remaining_seconds=lambda:10),
+        stopped=threading.Event(),token_limit=3,market_limit=30)
+    with httpx.Client(transport=httpx.MockTransport(respond),trust_env=False,follow_redirects=False,event_hooks={'request':[hook]}) as client:
+        data=env['fetch_multi_timeframe_ohlcv']('000720',end_date='2026-11-12',client=client,settings=settings)
+    assert set(data)=={'D','W','M'} and all(data.values())
+    assert len([r for r in calls if r.method=='POST'])==1
+    assert [len([r for r in calls if r.method=='GET' and r.url.params['FID_PERIOD_DIV_CODE']==p]) for p in ('D','W','M')]==[n*(failures+1) for n in (5,4,1)]
+    assert observed()=={'token':1,'market':10*(failures+1)}
+    assert not loads and state==before
+    assert all(r.headers.get('appkey')==settings.api_key for r in calls if r.method=='GET')
+
+
+@pytest.mark.parametrize('base',['http://kis.example.invalid','https://user:secret@kis.example.invalid',
+    'https://kis.example.invalid/path','https://kis.example.invalid?x=y','https://kis.example.invalid#fragment',
+    'https://kis.example.invalid:0','https://kis.example.invalid\n'])
+def test_explicit_kis_invalid_origin_fails_before_token_or_client(base):
+    env,state,loads=explicit_kis_slices();calls=[];before=dict(state)
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret',base)
+    with httpx.Client(transport=httpx.MockTransport(lambda r:calls.append(r))) as client:
+        with pytest.raises(ValueError,match='^Invalid explicit KIS settings$'):
+            env['fetch_multi_timeframe_ohlcv']('000720',end_date='2026-11-12',client=client,settings=settings)
+    assert not calls and not loads and state==before
+
+
+@pytest.mark.parametrize('field,value',[('api_key',''),('api_secret','secret\n'),('api_key',123),('base_url',None)])
+def test_explicit_kis_invalid_fields_use_fixed_secret_free_error(field,value):
+    env,state,loads=explicit_kis_slices();calls=[]
+    settings=replace(COLLECTION_CONFIG.KISSettings('synthetic-key',PRIVATE,'https://kis.example.invalid'),**{field:value})
+    with httpx.Client(transport=httpx.MockTransport(lambda r:calls.append(r))) as client:
+        with pytest.raises(ValueError,match='^Invalid explicit KIS settings$') as error:
+            env['get_access_token'](client=client,settings=settings)
+    assert PRIVATE not in str(error.value) and not calls and not loads
+
+
+def test_legacy_kis_cache_still_returns_before_config_or_http():
+    env,state,loads=explicit_kis_slices();calls=[]
+    with httpx.Client(transport=httpx.MockTransport(lambda r:calls.append(r))) as client:
+        assert env['get_access_token'](client=client)=='old-cached-synthetic-token'
+    assert not calls and not loads
+
+
+def test_owned_kis_hook_denies_destination_paths_stock_and_count_without_send():
+    env,_,_=explicit_kis_slices();calls=[]
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid:9443')
+    hook,observed=env['kis_request_gate'](settings=settings,ticker='000720',deadline=SimpleNamespace(remaining_seconds=lambda:10),
+        stopped=threading.Event(),token_limit=1,market_limit=1)
+    with httpx.Client(transport=httpx.MockTransport(lambda r:(calls.append(r),httpx.Response(200,json={}))[1]),
+                      trust_env=False,follow_redirects=False,event_hooks={'request':[hook]}) as client:
+        for url in ('https://other.invalid:9443'+env['TOKEN_PATH'],'https://kis.example.invalid'+env['TOKEN_PATH'],
+                    settings.base_url+'/uapi/domestic-stock/v1/trading/order-cash',
+                    settings.base_url+'/uapi/domestic-stock/v1/trading/inquire-balance'):
+            with pytest.raises(ValueError,match='^KIS request denied$'):client.post(url)
+        assert not calls and observed()=={'token':0,'market':0}
+        client.post(settings.base_url+env['TOKEN_PATH'])
+        with pytest.raises(ValueError,match='^KIS invocation limit reached$'):client.post(settings.base_url+env['TOKEN_PATH'])
+        params=dict(FID_COND_MRKT_DIV_CODE='J',FID_INPUT_ISCD='005930',FID_INPUT_DATE_1='20261101',
+                    FID_INPUT_DATE_2='20261112',FID_PERIOD_DIV_CODE='D',FID_ORG_ADJ_PRC='0')
+        with pytest.raises(ValueError,match='^KIS request denied$'):client.get(settings.base_url+env['CHART_PATH'],params=params)
+        params['FID_INPUT_ISCD']='000720'
+        client.get(settings.base_url+env['CHART_PATH'],params=params)
+        with pytest.raises(ValueError,match='^KIS invocation limit reached$'):client.get(settings.base_url+env['CHART_PATH'],params=params)
+    assert len(calls)==2 and observed()=={'token':1,'market':1}
+    result=observed();result['token']=0
+    assert observed()['token']==1
+
+
+@pytest.mark.parametrize('kind',['expired','cancelled','nan'])
+def test_owned_kis_hook_stops_before_next_send_and_preserves_consumption(kind):
+    env,_,_=explicit_kis_slices();calls=[];remaining=[10];stopped=threading.Event()
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid:9443')
+    hook,observed=env['kis_request_gate'](settings=settings,ticker='000720',deadline=SimpleNamespace(remaining_seconds=lambda:remaining[0]),
+        stopped=stopped,token_limit=3,market_limit=30)
+    with httpx.Client(transport=httpx.MockTransport(lambda r:(calls.append(r),httpx.Response(200,json={}))[1]),
+                      trust_env=False,follow_redirects=False,event_hooks={'request':[hook]}) as client:
+        request=client.build_request('POST',settings.base_url+env['TOKEN_PATH'])
+        request.extensions['timeout']={'connect':None,'read':float('nan'),'write':.5,'pool':20}
+        remaining[0]=1.25
+        client.send(request)
+        assert calls[0].extensions['timeout']==dict(connect=1.25,read=1.25,write=.5,pool=1.25)
+        if kind=='cancelled':stopped.set()
+        else:remaining[0]=0 if kind=='expired' else float('nan')
+        with pytest.raises(ValueError,match='^KIS invocation closed$'):client.post(settings.base_url+env['TOKEN_PATH'])
+    assert len(calls)==1 and observed()=={'token':1,'market':0}
+
+
+def authority_nodes(path):
+    tree=ast.parse(path.read_text())
+    nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'_tls_snapshot','_owned_tls'}
+           or isinstance(n,ast.ClassDef) and n.name=='ExecutionAuthorityClient']
+    assert {n.name for n in nodes}=={'_tls_snapshot','_owned_tls','ExecutionAuthorityClient'}
+    assert not any(isinstance(n,(ast.Import,ast.ImportFrom)) for root in nodes for n in ast.walk(root))
+    return nodes
+
+
+def test_explicit_runtime_snapshot_has_no_env_discovery_and_cannot_reconfigure():
+    p=Probe({'INTRADAY_FETCH_ENABLED':'true','TECHNICAL_TRACE_ENABLED':'true'});config=p.import_actual()
+    settings=config.RuntimeSettings(False,False,'synthetic-owned-trace-unused')
+    with p.file_spies():
+        assert config.initialize_runtime(settings=settings) is settings
+        assert config.initialize_runtime(settings=settings) is settings
+        assert config.initialize_runtime() is settings
+        with pytest.raises(config.TechnicalRuntimeUnavailable):
+            config.initialize_runtime(settings=config.RuntimeSettings(True,False,'other'))
+    assert not p.loads and not p.events and not p.io
+    assert config.INTRADAY_FETCH_ENABLED is False and config.TECHNICAL_TRACE_ENABLED is False
+
+
+@pytest.mark.parametrize('kind',['bool','path','type','late'])
+def test_explicit_runtime_snapshot_invalid_or_late_stays_closed_without_env(kind):
+    p=Probe();config=p.import_actual();settings=config.RuntimeSettings(False,False,'unused')
+    if kind=='bool':settings=config.RuntimeSettings(1,False,'unused')
+    elif kind=='path':settings=config.RuntimeSettings(False,False,None)
+    elif kind=='type':settings=SimpleNamespace(intraday_fetch_enabled=False,trace_enabled=False,trace_path='unused')
+    with p.file_spies(),ExitStack() as stack:
+        if kind=='late':stack.enter_context(patch.dict(sys.modules,{next(iter(config._runtime_readers)):ModuleType('late')}))
+        with pytest.raises(config.TechnicalRuntimeUnavailable):config.initialize_runtime(settings=settings)
+    assert not p.loads and not p.events and not p.io
+    assert_defaults(config)
+
+
+def synthetic_tls_context():
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes,serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key=ec.generate_private_key(ec.SECP256R1())
+    name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'owned synthetic CA')])
+    now=datetime.now(UTC)
+    cert=(x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(x509.random_serial_number()).not_valid_before(now-timedelta(minutes=1)).not_valid_after(now+timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True,path_length=None),critical=True).sign(key,hashes.SHA256()))
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(cadata=cert.public_bytes(serialization.Encoding.PEM).decode('ascii'))
+    return context
+
+
+def authority_tls_values():
+    from src.modules.technical.domain import provider_execution as P
+    path=ROOT/'ai/src/agents/technical/infrastructure/execution_authority_client.py'
+    env={'P':P,'asyncio':asyncio,'httpx':httpx,'math':math,'time':__import__('time'),'ssl':ssl,'hashlib':hashlib}
+    exec(compile(ast.Module(body=authority_nodes(path),type_ignores=[]),str(path),'exec'),env)
+    return env,P
+
+
+def test_authority_TLS_owns_CA_copy_and_rejects_weakened_or_empty_trust():
+    env,P=authority_tls_values();context=synthetic_tls_context()
+    client=env['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,tls_context=context)
+    owned=client._configuration[-1]
+    assert owned is not context and env['_tls_snapshot'](owned)==env['_tls_snapshot'](context)
+    assert owned.verify_mode==ssl.CERT_REQUIRED and owned.check_hostname is True
+    context.check_hostname=False;context.verify_mode=ssl.CERT_NONE
+    assert owned.verify_mode==ssl.CERT_REQUIRED and owned.check_hostname is True
+    with pytest.raises(P.ExecutionInvalid):env['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,tls_context=context)
+    with pytest.raises(P.ExecutionInvalid):env['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,tls_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
+
+async def test_authority_TLS_drift_fails_before_callback_HTTP():
+    env,P=authority_tls_values();context=synthetic_tls_context();calls=[]
+    from fastapi import FastAPI
+    app=FastAPI()
+    @app.post('/internal/technical/execution/start')
+    async def callback():calls.append(True);return {}
+    client=env['ExecutionAuthorityClient'](origin='https://backend.invalid',token='b'*32,
+        tls_context=context,transport=httpx.ASGITransport(app=app))
+    context.check_hostname=False
+    with pytest.raises(P.ExecutionInvalid):await client._post('/internal/technical/execution/start',{},'f'*64,5,8192)
+    assert not calls
+
+
+@pytest.mark.parametrize('phase',['count','generation'])
+def test_owned_transport_fixed_reason_survives_SDK_wrapper_without_raw_text(phase):
+    def add_denied_header(request):
+        if request.url.path.endswith('input_tokens')==(phase=='count'):
+            request.headers['Cookie']=PRIVATE
+    h=official_adapter(request_change=add_denied_header,wrap_transport_errors=True)
+    with pytest.raises(h.a['LlmCallError']) as error:h.client.complete('synthetic')
+    assert str(error.value)=='TECHNICAL_LLM_HTTP_INVALID' and PRIVATE not in str(error.value)
+    row,=h.budget.snapshot()
+    assert row.reason=='HTTP_INVALID' and row.held_nano==2000 and not row.entered
+    assert row.count_validated is (phase=='generation') and len(h.sent)==(phase=='generation')
+    with pytest.raises(h.a['LlmCallError']):h.client.complete('again')
+    assert len(h.sent)==(phase=='generation');h.client.close()
+
+
+def test_official_owned_cookie_jar_rejects_provider_cookie_and_injected_cookie():
+    h=official_adapter();cookies=h.budget._official_bundle.client.cookies
+    req=httpx.Request('POST','https://api.openai.com/v1/responses/input_tokens')
+    response=httpx.Response(200,headers={'Set-Cookie':PRIVATE+'=synthetic; Secure; Path=/'},request=req)
+    cookies.extract_cookies(response)
+    assert not list(cookies.jar)
+    generation=httpx.Request('POST','https://api.openai.com/v1/responses')
+    cookies.set_cookie_header(generation)
+    assert 'Cookie' not in generation.headers
+    assert h.client.complete('synthetic')=='official result'
+    cookies.set('injected',PRIVATE,domain='api.openai.com')
+    with pytest.raises(h.a['LlmCallError'],match='SDK_POLICY_INVALID') as error:h.client.complete('again')
+    assert PRIVATE not in str(error.value) and len(h.sent)==2;h.client.close()
+
+
+@pytest.mark.parametrize('kind',['auth','market_http','market_api','market_network'])
+def test_explicit_KIS_failures_are_fixed_and_do_not_reauthenticate_or_leak(kind):
+    env,state,loads=explicit_kis_slices();before=dict(state);calls=[]
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid')
+    def respond(request):
+        calls.append(request.method)
+        if request.method=='POST':
+            if kind=='auth':return httpx.Response(403,text=PRIVATE)
+            return httpx.Response(200,json={'access_token':'synthetic-token','expires_in':86400})
+        if kind=='market_http':return httpx.Response(500,text=PRIVATE)
+        if kind=='market_api':return httpx.Response(200,json={'rt_cd':'1','msg_cd':PRIVATE,'msg1':PRIVATE})
+        raise httpx.ConnectError(PRIVATE,request=request)
+    codes={'auth':'KIS_AUTH_HTTP_FAILED','market_http':'KIS_MARKET_HTTP_FAILED',
+           'market_api':'KIS_MARKET_API_FAILED','market_network':'KIS_MARKET_RETRY_EXHAUSTED'}
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(env['KisApiError']) as error:
+            env['fetch_multi_timeframe_ohlcv']('000720',end_date='2026-11-12',settings=settings,client=client)
+    assert str(error.value)==codes[kind] and PRIVATE not in str(error.value)
+    assert calls.count('POST')==1 and calls.count('GET')==({'auth':0,'market_http':1,'market_api':1,'market_network':3}[kind])
+    assert not loads and state==before
+
+
+def test_explicit_KIS_separate_invocations_do_not_share_token_or_global_cache():
+    env,state,loads=explicit_kis_slices();before=dict(state);token_count=[];used=[]
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid')
+    def respond(request):
+        if request.method=='POST':
+            token_count.append(True);return httpx.Response(200,json={'access_token':'synthetic-token-'+str(len(token_count)),'expires_in':86400})
+        used.append(request.headers['authorization']);return httpx.Response(200,json={'rt_cd':'0','output2':[]})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        for _ in range(2):env['fetch_multi_timeframe_ohlcv']('000720',end_date='2026-11-12',settings=settings,client=client)
+    assert len(token_count)==2 and used==['Bearer synthetic-token-1']*3+['Bearer synthetic-token-2']*3
+    assert not loads and state==before
+
+
+@pytest.mark.parametrize('payload',[[],{'access_token':'synthetic-token','expires_in':True},
+    {'access_token':'synthetic-token','expires_in':'private-not-a-number'},
+    {'access_token':'synthetic-token','expires_in':0}])
+def test_explicit_KIS_auth_response_invalid_is_fixed_no_followup(payload):
+    env,state,loads=explicit_kis_slices();before=dict(state);calls=[]
+    settings=COLLECTION_CONFIG.KISSettings('synthetic-key','synthetic-secret','https://kis.example.invalid')
+    def respond(request):calls.append(request.method);return httpx.Response(200,json=payload)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(env['KisApiError'],match='^KIS_AUTH_RESPONSE_INVALID$'):
+            env['fetch_multi_timeframe_ohlcv']('000720',end_date='2026-11-12',settings=settings,client=client)
+    assert calls==['POST'] and not loads and state==before

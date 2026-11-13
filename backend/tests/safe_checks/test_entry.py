@@ -595,6 +595,22 @@ class CF014Boundary(unittest.TestCase):
 
 
 class CF015Boundary(unittest.TestCase):
+    def test_count_control_adds_only_two_backend_sources_and_keeps_AI_allowset(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        additions={'backend/src/modules/fundamental/domain/execution_limits.py',
+                   'backend/src/modules/fundamental/application/execution_limit_control.py'}
+        self.assertTrue(additions<=c.CF015_SOURCES)
+        for name in additions:
+            self.assertTrue(c.source_allowed(name))
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):
+            copied=c.selected_sources(Path('/synthetic'),fundamental_only=True)
+        self.assertTrue(additions<=set(copied))
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF015_INPUTS))
+
     def test_exact_fourteen_AI_inputs_and_one_collection(self):
         import hashlib
         from scripts import check_safe as c

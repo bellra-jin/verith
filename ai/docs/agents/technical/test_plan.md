@@ -654,3 +654,14 @@ compiled graph를 검사한다. 새 mode/collector·AI 전체 pytest·실제 공
   기존 제한 재시도와 비재시도500 fail-fast를 가짜 응답으로 구분한다.
 - normal·정렬·유일 날짜만으로 시장 캘린더 무누락이나 공급자 기준시점 검증을 주장하지 않는다.
   [직접 근거와 한계](../../../../docs/work/technical-validation-diagnostics.md)를 따른다.
+
+## 대표 사례 무키 회귀의 해석 범위
+
+`backend/tests/unit/test_technical_compiled_bridge.py`의 대표 사례는 기존 합성 날짜 자료에
+상승·하락·횡보·급락·저유동성 조건을 고정한 스트레스 검사다. 입력 구성에서 정한 국면·신호·
+평균/가중합·위험 기준과 실제 graph 연결을 함께 확인한다. 모델 답변은 가짜이므로 실모델 정확도나
+수익률 backtest라고 표현하지 않는다. 관측 현대건설 일봉 차트 투영은 별도의 제한된 재생 자료다.
+
+동일 입력의 반복 출력과 지표 prefix 불변, 실제 KIS range의 종료일 초과 날짜 필터를 구분해
+검사한다. 날짜가 맞는 주·월봉의 당일/기간 마감 또는 공급자 게시 시각은 증명되지 않는다.
+상세 출처·oracle·남은 한계는 [대표 사례 평가](../../../../docs/work/technical-representative-evaluation.md)를 따른다.

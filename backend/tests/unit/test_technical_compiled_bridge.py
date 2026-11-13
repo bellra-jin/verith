@@ -1608,3 +1608,427 @@ async def test_actual_compiled_graph_uses_targeted_regeneration_contract_without
     events=[x for x in sink.events if x['event_type']=='validation' and x['node']=='interpret_report']
     assert len(events)==2 and events[0]['status']=='failed' and events[1]['status']=='success'
     assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+
+
+# Observed market-only projection from the owned 000720 report (KIS D chart).
+# Captured 2026-11-13; provider publication/close finality unreported. No raw
+# request, approval, owner identity, token or model candidate is included.
+# Visible 1y chart history is NOT the complete original D/W/M engine input.
+OBSERVED_000720_DAILY = (
+    ('2025-11-13', 62000, 65200, 61600, 65200, 1615590, 102896673250),
+    ('2025-11-14', 63700, 65900, 62300, 62800, 1161641, 74107461450),
+    ('2025-11-17', 62900, 64400, 62200, 63900, 783255, 49622235300),
+    ('2025-11-18', 63100, 64000, 60100, 60800, 1211557, 74496794200),
+    ('2025-11-19', 61400, 61800, 59400, 60600, 775878, 47058697900),
+    ('2025-11-20', 61800, 63500, 61500, 61600, 751829, 46857363450),
+    ('2025-11-21', 60000, 60200, 58700, 59300, 893700, 52934522300),
+    ('2025-11-24', 60600, 61500, 59200, 59700, 873020, 52515206050),
+    ('2025-11-25', 61100, 63000, 60200, 60800, 733921, 45002455350),
+    ('2025-11-26', 62700, 66400, 62700, 65500, 2724164, 177248674950),
+    ('2025-11-27', 65600, 68200, 64500, 65200, 1603476, 105962509850),
+    ('2025-11-28', 65200, 67800, 64500, 67000, 1653068, 110500181400),
+    ('2025-12-01', 67500, 67600, 64000, 64100, 1105629, 71930946650),
+    ('2025-12-02', 64100, 66400, 63400, 65900, 884562, 57905067300),
+    ('2025-12-03', 68200, 70900, 65800, 70500, 3685154, 254857446500),
+    ('2025-12-04', 70700, 70700, 67100, 68300, 2100648, 143648785850),
+    ('2025-12-05', 68300, 75900, 67700, 75100, 6496369, 473572001150),
+    ('2025-12-08', 75100, 77800, 73200, 74100, 4018024, 302750411150),
+    ('2025-12-09', 74100, 74200, 72300, 72900, 1122926, 81879525750),
+    ('2025-12-10', 73200, 73700, 71000, 71800, 1344321, 97083642000),
+    ('2025-12-11', 71800, 77200, 71600, 73600, 3186617, 238474872650),
+    ('2025-12-12', 75000, 78500, 74500, 78000, 3448644, 265733968200),
+    ('2025-12-15', 70700, 74500, 70000, 73100, 4609253, 328507426300),
+    ('2025-12-16', 72000, 72100, 69000, 69500, 2738310, 191486418250),
+    ('2025-12-17', 69800, 71600, 69300, 70800, 1686432, 119309181550),
+    ('2025-12-18', 69000, 70500, 68000, 69400, 1236991, 85972810800),
+    ('2025-12-19', 70000, 71200, 68800, 69400, 1382505, 96245598550),
+    ('2025-12-22', 70500, 71800, 70300, 71100, 1083046, 76929552550),
+    ('2025-12-23', 71100, 71600, 69800, 70000, 891216, 62774906950),
+    ('2025-12-24', 70100, 70800, 69500, 70000, 666441, 46737841250),
+    ('2025-12-26', 69900, 70300, 67900, 68700, 1868061, 130764183600),
+    ('2025-12-29', 68100, 70800, 67900, 70000, 1373087, 94301788050),
+    ('2025-12-30', 70000, 71100, 68800, 70100, 1169220, 81472803200),
+    ('2026-01-02', 70100, 70100, 68400, 69000, 1097563, 75317729850),
+    ('2026-01-05', 70200, 74200, 70100, 74000, 1630936, 119535112500),
+    ('2026-01-06', 74400, 76300, 72800, 76200, 1196318, 89626849250),
+    ('2026-01-07', 75600, 77900, 73800, 74700, 985607, 73781164750),
+    ('2026-01-08', 74900, 76400, 74700, 75000, 1053683, 79314007700),
+    ('2026-01-09', 76400, 77900, 74300, 75800, 1064775, 80677158850),
+    ('2026-01-12', 78000, 92700, 77900, 91100, 10105765, 886301714000),
+    ('2026-01-13', 88800, 92000, 87400, 92000, 3254252, 292503091600),
+    ('2026-01-14', 92000, 100100, 91300, 94900, 6077551, 583723125950),
+    ('2026-01-15', 94000, 100000, 92600, 99900, 2337522, 226567613600),
+    ('2026-01-16', 99600, 105900, 97400, 104300, 3122648, 317750656750),
+    ('2026-01-19', 108500, 109400, 103000, 107900, 1759969, 187799941250),
+    ('2026-01-20', 106600, 111600, 105400, 107600, 2247114, 243098335000),
+    ('2026-01-21', 103000, 109500, 103000, 108500, 1896790, 203321563550),
+    ('2026-01-22', 111500, 112300, 103000, 104000, 1685978, 179740817800),
+    ('2026-01-23', 105400, 122000, 105100, 109200, 4604938, 522450832200),
+    ('2026-01-26', 109000, 110800, 103900, 106200, 1528569, 162072401900),
+    ('2026-01-27', 110500, 110500, 104400, 105900, 1305240, 138686603550),
+    ('2026-01-28', 105900, 107000, 103600, 105700, 1384140, 145695566450),
+    ('2026-01-29', 105700, 110600, 105600, 108700, 1694731, 183242569420),
+    ('2026-01-30', 106600, 107800, 102400, 102600, 1705061, 177272585100),
+    ('2026-02-02', 99600, 103700, 98000, 98800, 1111606, 111495021000),
+    ('2026-02-03', 100900, 109300, 100900, 108600, 1502300, 159215964400),
+    ('2026-02-04', 115200, 115400, 106600, 113000, 2061897, 231007631700),
+    ('2026-02-05', 109500, 119000, 107800, 110000, 2272728, 256184499650),
+    ('2026-02-06', 105500, 107200, 102300, 106600, 1070332, 112817077600),
+    ('2026-02-09', 110600, 119300, 109500, 114200, 2217238, 254972103650),
+    ('2026-02-10', 115000, 116100, 111300, 112000, 976442, 110650261821),
+    ('2026-02-11', 114100, 116500, 110600, 114600, 1361153, 155699143574),
+    ('2026-02-12', 114700, 115400, 111200, 115400, 1565751, 178635826500),
+    ('2026-02-13', 113200, 121400, 113200, 114300, 1530762, 178269084950),
+    ('2026-02-19', 116100, 127700, 115500, 124300, 2167996, 265035105250),
+    ('2026-02-20', 124500, 132100, 122500, 128300, 1508112, 193469997950),
+    ('2026-02-23', 132000, 143000, 130100, 135400, 1769867, 241326134500),
+    ('2026-02-24', 136300, 140500, 133100, 138500, 1596458, 218944289550),
+    ('2026-02-25', 140500, 159800, 139400, 155200, 2922470, 446878836600),
+    ('2026-02-26', 160200, 163400, 155200, 162000, 1872361, 300073340200),
+    ('2026-02-27', 165000, 176900, 160300, 164700, 9658729, 1592270672400),
+    ('2026-03-03', 162900, 166000, 147400, 150500, 2187209, 339084517550),
+    ('2026-03-04', 139800, 147700, 122700, 126900, 2405244, 321983361650),
+    ('2026-03-05', 145000, 148500, 136400, 144000, 1583053, 226112379150),
+    ('2026-03-06', 140400, 157800, 139400, 156800, 1801129, 267331364850),
+    ('2026-03-09', 147400, 147700, 139800, 146400, 1584152, 227400984600),
+    ('2026-03-10', 155500, 160400, 149000, 152000, 1212368, 187265191100),
+    ('2026-03-11', 157900, 158000, 146400, 148800, 1032454, 157871780250),
+    ('2026-03-12', 147200, 161900, 147200, 155700, 1490261, 232402159700),
+    ('2026-03-13', 152800, 169000, 151800, 164400, 2710670, 443708101300),
+    ('2026-03-16', 166400, 166400, 157500, 159600, 1051718, 170302236582),
+    ('2026-03-17', 163400, 168500, 160400, 161000, 716382, 117479166700),
+    ('2026-03-18', 163700, 173600, 162800, 170100, 1475128, 248894829350),
+    ('2026-03-19', 167300, 174400, 166700, 169500, 1053700, 180170996200),
+    ('2026-03-20', 173200, 174900, 164000, 164000, 1805813, 305162535050),
+    ('2026-03-23', 165600, 165600, 153600, 154100, 1314307, 205441693900),
+    ('2026-03-24', 161100, 161600, 143300, 149900, 1703908, 254399464100),
+    ('2026-03-25', 153600, 161900, 150700, 157900, 994207, 156324089100),
+    ('2026-03-26', 158000, 160300, 150100, 152400, 664660, 102332704750),
+    ('2026-03-27', 147400, 150600, 142600, 149800, 1149192, 168140687850),
+    ('2026-03-30', 140800, 149200, 139600, 148400, 855222, 124618013750),
+    ('2026-03-31', 148500, 148500, 141300, 142100, 977221, 140652068500),
+    ('2026-04-01', 152300, 161800, 152100, 159900, 1304104, 204819733300),
+    ('2026-04-02', 165400, 165400, 146000, 148800, 1646258, 252114744000),
+    ('2026-04-03', 153900, 155500, 147800, 151100, 840917, 127548253400),
+    ('2026-04-06', 151100, 156900, 150100, 151900, 672484, 102822289750),
+    ('2026-04-07', 155400, 166300, 153200, 155900, 1276012, 202428728550),
+    ('2026-04-08', 165200, 198400, 164900, 188700, 5892562, 1084373267700),
+    ('2026-04-09', 182500, 185800, 177200, 183400, 1607503, 291282439350),
+    ('2026-04-10', 191000, 191100, 179100, 179500, 1650776, 301008832600),
+    ('2026-04-13', 172000, 177400, 170200, 176000, 1047344, 184743699050),
+    ('2026-04-14', 180400, 180500, 173900, 176700, 1110504, 196564172900),
+    ('2026-04-15', 180700, 186500, 177300, 179100, 1824686, 332011551350),
+    ('2026-04-16', 181600, 181900, 176000, 179500, 880334, 157372385800),
+    ('2026-04-17', 179600, 179800, 176500, 177000, 669693, 118771733950),
+    ('2026-04-20', 171800, 178100, 170300, 174300, 2193984, 386461280844),
+    ('2026-04-21', 176600, 179500, 173800, 174900, 1390912, 244781781100),
+    ('2026-04-22', 173000, 173200, 166800, 168800, 1864120, 318455611250),
+    ('2026-04-23', 173200, 178300, 171100, 175400, 1925314, 336853505150),
+    ('2026-04-24', 174500, 174500, 170400, 173000, 837252, 144368237250),
+    ('2026-04-27', 173600, 173700, 169500, 171400, 727618, 124758001500),
+    ('2026-04-28', 171600, 179300, 165800, 167100, 2075193, 360144732250),
+    ('2026-04-29', 169500, 169600, 164100, 168600, 831334, 138977919600),
+    ('2026-04-30', 167600, 168800, 160900, 161800, 1239416, 201019091350),
+    ('2026-05-04', 163100, 163200, 157600, 159400, 1088761, 172806140100),
+    ('2026-05-06', 161000, 165800, 159100, 163700, 1313559, 214809552500),
+    ('2026-05-07', 172100, 175500, 165100, 167400, 1504678, 253941104600),
+    ('2026-05-08', 165000, 165000, 159800, 164000, 881257, 142823474700),
+    ('2026-05-11', 162000, 170900, 161500, 165800, 1086998, 180889903300),
+    ('2026-05-12', 164400, 164500, 150300, 156000, 1224048, 192180533400),
+    ('2026-05-13', 154500, 163500, 150200, 160700, 982899, 155394043958),
+    ('2026-05-14', 160900, 170300, 160800, 169300, 1696756, 283833526650),
+    ('2026-05-15', 167500, 167500, 151700, 155000, 1149196, 181678684900),
+    ('2026-05-18', 143800, 149700, 136200, 144900, 1238386, 176645759700),
+    ('2026-05-19', 142900, 147300, 136800, 139300, 942475, 131948341700),
+    ('2026-05-20', 137000, 139000, 130000, 136200, 1092585, 146588802500),
+    ('2026-05-21', 143500, 148500, 139100, 147100, 967862, 140025966700),
+    ('2026-05-22', 154300, 154600, 147900, 150300, 611239, 91857142350),
+    ('2026-05-26', 157100, 160700, 149100, 152000, 725637, 111419684100),
+    ('2026-05-27', 151000, 151100, 143200, 143600, 776042, 113312577750),
+    ('2026-05-28', 144000, 146800, 135800, 141400, 648547, 91005632500),
+    ('2026-05-29', 143400, 147000, 138000, 147000, 1376563, 197881442450),
+    ('2026-06-01', 142500, 144100, 138300, 138900, 1175049, 165063714300),
+    ('2026-06-02', 135900, 137000, 129500, 134200, 909449, 119968268600),
+    ('2026-06-04', 132000, 139100, 131400, 136600, 722094, 97826400900),
+    ('2026-06-05', 135300, 136600, 126600, 131900, 528781, 68873044300),
+    ('2026-06-08', 116000, 121000, 115100, 116500, 834619, 98116036850),
+    ('2026-06-09', 117500, 123900, 115900, 122300, 633184, 76146464250),
+    ('2026-06-10', 119800, 133000, 118400, 130300, 1145106, 147196726050),
+    ('2026-06-11', 125200, 126300, 118500, 122700, 974982, 118739587600),
+    ('2026-06-12', 138500, 157500, 128500, 157500, 1157067, 159781180900),
+    ('2026-06-15', 157600, 157700, 141900, 145000, 1817675, 265147698200),
+    ('2026-06-16', 146000, 155500, 140600, 147800, 1894314, 282811869050),
+    ('2026-06-17', 150500, 150500, 138900, 139300, 931255, 131551305100),
+    ('2026-06-18', 142700, 145000, 133100, 133200, 896771, 121763336200),
+    ('2026-06-19', 133700, 135600, 125000, 128600, 1054343, 136133346750),
+    ('2026-06-22', 126100, 132100, 124900, 127800, 856076, 110337567550),
+    ('2026-06-23', 127800, 128900, 114500, 115100, 963337, 115093347600),
+    ('2026-06-24', 113900, 119000, 112600, 114700, 918853, 105865921050),
+    ('2026-06-25', 115400, 117400, 111400, 112600, 735354, 83727141900),
+    ('2026-06-26', 110600, 112500, 100000, 103300, 1109667, 115608486050),
+    ('2026-06-29', 102400, 117000, 101200, 116100, 980428, 110159121500),
+    ('2026-06-30', 115900, 119000, 112500, 114200, 512443, 59061200400),
+    ('2026-07-01', 118200, 122700, 114300, 119000, 540386, 64297358250),
+    ('2026-07-02', 118500, 119400, 111700, 115200, 446151, 51731160100),
+    ('2026-07-03', 115000, 115800, 107500, 115300, 471289, 52849018750),
+    ('2026-07-06', 116400, 120200, 111600, 115000, 456578, 52580358800),
+    ('2026-07-07', 112500, 113400, 105400, 109500, 553518, 60184142750),
+    ('2026-07-08', 105000, 106900, 98200, 100700, 858870, 87673744150),
+    ('2026-07-09', 99500, 102500, 96400, 98900, 818799, 81345747300),
+    ('2026-07-10', 100200, 110000, 99600, 107200, 546029, 58616573150),
+    ('2026-07-13', 105600, 109200, 99500, 101500, 436521, 45079529350),
+    ('2026-07-14', 99600, 101500, 94200, 98000, 579021, 56628931300),
+    ('2026-07-15', 100900, 104000, 100000, 101400, 440956, 44784720550),
+    ('2026-07-16', 99400, 100600, 95900, 99000, 380664, 37415865800),
+    ('2026-07-20', 94700, 95800, 90100, 91000, 590535, 54452722900),
+    ('2026-07-21', 90000, 95800, 88800, 93800, 376027, 34858269350),
+    ('2026-07-22', 96500, 102700, 96000, 98600, 536179, 53520770650),
+    ('2026-07-23', 98600, 110000, 97600, 108900, 538299, 56773597600),
+    ('2026-07-24', 107000, 111150, 105500, 106200, 531116, 57324566200),
+    ('2026-07-27', 108100, 108700, 101400, 103600, 236933, 24702688800),
+    ('2026-07-28', 99200, 99700, 92600, 94300, 331845, 31542639700),
+    ('2026-07-29', 94800, 96300, 77700, 84600, 812537, 68989174150),
+    ('2026-07-30', 80300, 88800, 80300, 81700, 563735, 47391570200),
+    ('2026-07-31', 85500, 94600, 85500, 94600, 1391976, 127540232100),
+    ('2026-08-03', 94500, 97300, 89000, 95600, 477597, 44837828550),
+    ('2026-08-04', 97300, 101900, 94300, 101500, 622625, 61453827450),
+    ('2026-08-05', 104600, 110600, 102400, 110100, 732453, 79645289050),
+    ('2026-08-06', 112900, 115800, 109200, 112600, 643555, 72497198050),
+    ('2026-08-07', 110300, 111900, 105200, 109900, 440302, 47450803350),
+    ('2026-08-10', 110400, 110800, 105800, 110600, 324857, 35442480400),
+    ('2026-08-11', 112000, 117500, 110100, 112300, 608973, 69055475150),
+    ('2026-08-12', 114800, 117500, 112200, 113800, 391227, 44573669450),
+    ('2026-08-13', 115900, 117200, 111800, 113700, 458053, 52161390650),
+    ('2026-08-14', 118900, 121700, 112400, 115800, 493320, 57012417650),
+    ('2026-08-18', 116200, 117400, 109000, 110100, 429694, 48096731250),
+    ('2026-08-19', 105200, 118700, 103500, 116500, 848390, 97322577650),
+    ('2026-08-20', 115200, 116600, 112600, 113800, 482327, 55348891500),
+    ('2026-08-21', 112600, 113000, 105000, 105600, 640873, 68296618550),
+    ('2026-08-24', 105700, 105900, 103300, 105600, 226607, 23722044500),
+    ('2026-08-25', 108800, 122600, 106200, 121300, 2051210, 240024385950),
+    ('2026-08-26', 126900, 132600, 122700, 130400, 2203826, 285125010400),
+    ('2026-08-27', 129200, 135900, 128100, 129300, 978040, 128253062750),
+    ('2026-08-28', 129000, 130300, 124300, 128900, 560482, 71382271050),
+    ('2026-08-31', 126000, 126000, 120400, 123300, 675675, 82937410150),
+    ('2026-09-01', 122100, 124000, 118000, 120700, 475204, 56869952950),
+    ('2026-09-02', 115600, 116700, 112300, 112600, 703058, 79985873650),
+    ('2026-09-03', 115000, 123200, 110700, 119500, 929172, 109539562900),
+    ('2026-09-04', 119300, 120200, 116800, 119700, 433776, 51580561200),
+    ('2026-09-07', 119400, 128700, 117600, 126900, 812263, 101108385100),
+    ('2026-09-08', 129500, 137100, 127900, 131400, 1684608, 225034286900),
+    ('2026-09-09', 134300, 142000, 131600, 133600, 873138, 119138361400),
+    ('2026-09-10', 129100, 132900, 127100, 131200, 662837, 86151132050),
+    ('2026-09-11', 129600, 136400, 128400, 134900, 725882, 97162932700),
+    ('2026-09-14', 133000, 133100, 126200, 128200, 608828, 78291481450),
+    ('2026-09-15', 126100, 128800, 124500, 128100, 418746, 53265237050),
+    ('2026-09-16', 127400, 127500, 123500, 124300, 463631, 57754453250),
+    ('2026-09-17', 125300, 129200, 124600, 125300, 428542, 54294086350),
+    ('2026-09-18', 127000, 129300, 123300, 124800, 819090, 102973813600),
+    ('2026-09-21', 126700, 128100, 123500, 125600, 387162, 48692654700),
+    ('2026-09-22', 130600, 136100, 125700, 131300, 1023754, 134330315300),
+    ('2026-09-23', 130000, 130000, 120200, 121100, 1201523, 147407345200),
+    ('2026-09-28', 121900, 126800, 118900, 124600, 663034, 82544596050),
+    ('2026-09-29', 122900, 123700, 115500, 117000, 619980, 72891315400),
+    ('2026-09-30', 118300, 120200, 117000, 117500, 308341, 36443942800),
+    ('2026-10-01', 122100, 123500, 113800, 117200, 541904, 63426556400),
+    ('2026-10-02', 116100, 116200, 113000, 114400, 705754, 80658566250),
+    ('2026-10-06', 115100, 116600, 112600, 112900, 578555, 65727277550),
+    ('2026-10-07', 114600, 114700, 110600, 110900, 445459, 49879942200),
+    ('2026-10-08', 108800, 109800, 103950, 107800, 1046277, 111139676850),
+    ('2026-10-12', 104000, 104500, 99800, 100200, 809875, 81906657116),
+    ('2026-10-13', 96800, 98800, 93100, 98200, 867562, 83630828200),
+    ('2026-10-14', 97900, 101600, 97100, 98800, 676092, 67411175250),
+    ('2026-10-15', 93200, 94900, 89200, 91100, 605718, 55529538400),
+    ('2026-10-16', 91900, 96400, 91900, 93800, 462672, 43792215550),
+    ('2026-10-19', 92100, 95000, 89000, 94900, 491427, 45485776800),
+    ('2026-10-20', 94300, 95200, 90200, 91500, 388691, 35614638800),
+    ('2026-10-21', 93000, 94600, 91100, 92500, 380239, 35244065750),
+    ('2026-10-22', 92600, 96900, 92100, 93000, 524278, 49441535000),
+    ('2026-10-23', 90200, 92500, 88200, 92500, 532106, 48375017950),
+    ('2026-10-26', 90000, 93200, 89100, 90700, 434777, 39358489500),
+    ('2026-10-27', 91500, 93900, 90800, 91700, 415721, 38342007000),
+    ('2026-10-28', 92900, 97100, 92800, 95500, 486076, 46360858100),
+    ('2026-10-29', 94800, 95400, 85000, 91400, 1404017, 123754743700),
+    ('2026-10-30', 89300, 89400, 81600, 83600, 678504, 57426461250),
+    ('2026-11-02', 81000, 90500, 80300, 89700, 575396, 50879935250),
+    ('2026-11-03', 88000, 90500, 84800, 88000, 463695, 40638638900),
+    ('2026-11-04', 89100, 91600, 84500, 87700, 593092, 51774538000),
+    ('2026-11-05', 89100, 90000, 82500, 83300, 555711, 47222502135),
+    ('2026-11-06', 75500, 80800, 73100, 78100, 864014, 66805911750),
+    ('2026-11-09', 76400, 78700, 74800, 75200, 636751, 48647494800),
+    ('2026-11-10', 78200, 84400, 78200, 84200, 619252, 50857206400),
+    ('2026-11-11', 82900, 85000, 82400, 84700, 325062, 27344909850),
+    ('2026-11-12', 84300, 85500, 82500, 83600, 441626, 37015120500),
+    ('2026-11-13', 83600, 87400, 83300, 84300, 341498, 29083917900),
+)
+OBSERVED_000720_DAILY_SHA256 = 'eedced5821cf1807b80e4feab49021c4ee6c986f5e1819a0632cf5797c641c6b'
+
+
+def representative_daily(case):
+    """Authored synthetic stress cases; calendar days are NOT an exchange calendar."""
+    from src.agents.technical.domain.models.ohlcv import OHLCV
+    bars=[]
+    for i,seed in enumerate(st.DAILY):
+        if case in ('rising','low_liquidity'):close=100+.2*i+(1 if i%2 else -1)
+        elif case=='falling':close=200-i
+        else:close=100
+        if case=='crash' and i==len(st.DAILY)-1:close=60
+        opened=100 if case=='crash' and i==len(st.DAILY)-1 else close+.25 if case=='falling' else close-.25 if case in ('rising','low_liquidity') else close
+        bars.append(OHLCV(date=seed.date,open=opened,high=max(opened,close)+.25,
+                          low=min(opened,close),close=close,volume=1 if case=='low_liquidity' else 1000000,
+                          trading_value=100 if case=='low_liquidity' else 2000000000))
+    return bars
+
+
+# Oracle authored from the input construction and published rule order/weights,
+# before running the product. A crash is NOT a new enum or a return forecast.
+REPRESENTATIVE_EXPECTED = {
+    'rising':('uptrend_intact',('positive','positive','positive','negative','positive'),.6),
+    'falling':('downtrend',('negative','neutral','negative','positive','negative'),-.4),
+    'sideways':('sideways',('neutral','neutral','neutral','neutral','neutral'),0),
+    'crash':('downtrend',('negative','neutral','negative','positive','negative'),-.4),
+    'low_liquidity':('uptrend_intact',('positive','positive','positive','negative','positive'),.6),
+}
+
+
+def representative_facts(daily):
+    from src.agents.technical.application.orchestration import pipeline_steps as steps
+    rr=st.run_regime_classify(daily,st.WEEKLY,st.MONTHLY)
+    bundle=st.run_indicator_calculate(daily);score=st.run_signal_aggregate(daily)
+    conf=st.run_confidence_calculate(score,bundle,rr);risks=st.run_risk_detect(score,bundle,rr)
+    return SimpleNamespace(regime=steps._to_regime_result(rr),signal=steps._to_signal_summary(score,conf),rows=score.technical_signals,risks=risks,bundle=bundle)
+
+
+@pytest.mark.parametrize('case',list(REPRESENTATIVE_EXPECTED))
+async def test_representative_synthetic_cases_actual_graph_independent_oracle_and_repeatability(case):
+    from src.agents.technical.application.nodes import interpret_report as node
+    daily=representative_daily(case);before=copy.deepcopy(daily);facts=representative_facts(daily)
+    regime,directions,expected_score=REPRESENTATIVE_EXPECTED[case]
+    assert facts.regime.daily_regime.value==regime
+    assert tuple(s.signal.value for s in facts.rows)==directions
+    assert facts.signal.signal_score==pytest.approx(expected_score)
+    assert facts.bundle.ma_short==pytest.approx(sum(x.close for x in daily[-config.MA_SHORT_WINDOW:])/config.MA_SHORT_WINDOW)
+    assert facts.bundle.ma_mid==pytest.approx(sum(x.close for x in daily[-config.MA_MID_WINDOW:])/config.MA_MID_WINDOW)
+    if case in ('rising','low_liquidity'):assert 50<facts.bundle.rsi<config.RSI_OVERBOUGHT
+    elif case=='sideways':assert facts.bundle.rsi==50
+    else:assert facts.bundle.rsi==0
+    low='low_liquidity' in [r.flag.value for r in facts.risks]
+    assert low is (case=='low_liquidity')
+    if case=='crash':
+        assert (daily[-1].close/daily[-2].close-1)==pytest.approx(-.4)
+        assert facts.bundle.latest_candle['lower_wick']==0 and not facts.bundle.latest_candle['is_bullish']
+        assert facts.regime.daily_regime.value!='oversold_rebound_watch'
+    outputs=[]
+    for _ in range(2):
+        class Llm:
+            def __init__(self):self.prompts=[]
+            def complete(self,prompt):
+                self.prompts.append(prompt)
+                if len(self.prompts)==1:return st.NORM_OK
+                if len(self.prompts)==2:return st.FOCUS_OK
+                payload=json.loads(prompt.rsplit('```json\n',1)[1].split('\n```',1)[0])
+                assert payload['validated_output_example'] is not None
+                return json.dumps(payload['validated_output_example'],ensure_ascii=False)
+        llm=Llm();seen=[]
+        def fetcher(ticker,*,end_date=None):
+            seen.append(end_date);return dict(D=daily,W=st.WEEKLY,M=st.MONTHLY)
+        bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,fetcher=fetcher,cache=None,trace_sink=None,enabled=True)
+        req=request();result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req)
+        actual=result['data']['result'];outputs.append(actual)
+        assert seen==[datetime.fromisoformat(req['data']['requested_as_of']).date()]
+        assert actual['regime']==facts.regime.model_dump(mode='json') and actual['signal']==facts.signal.model_dump(mode='json')
+        assert tuple(x['signal'] for x in actual['technical_signals'])==directions
+        assert [x['value'] for x in actual['technical_signals']]==[s.value for s in facts.rows]
+        assert [x['metrics'] for x in actual['technical_signals']]==[s.metrics for s in facts.rows]
+        assert actual['technical_signals'][-1]['value']==abs(daily[-1].close-daily[-1].open)
+        assert not any(a['kind']=='cup_handle_candidate' for chart in actual['charts'] for a in chart['chart_data']['annotations'])
+        assert actual['verification']['outcome']=='passed' and actual['verification']['regen_count']==0
+        assert actual['interpretation']['source']=='llm' and all(x['detail_source']=='llm' for x in actual['technical_signals'])
+        assert len(llm.prompts)==3 and result['data']['coverage']['cutoff_validation']=='unverified'
+        assert actual['as_of']==req['data']['requested_as_of']
+        assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+    assert outputs[0]==outputs[1] and daily==before
+    # Independent negative oracle: correct label does not excuse a measurement
+    # claim, an opposite label, or trading instructions. No threshold relaxation.
+    payload=node.build_payload(regime=facts.regime,signal=facts.signal,signals=facts.rows,risks=facts.risks)
+    for text in ('현재 가격 50원입니다.','매수하세요.','강한 부정' if directions[0]=='positive' else '강한 긍정'):
+        bad=copy.deepcopy(payload['validated_output_example']);bad['details'][0]['detail']+=' '+text
+        assert not node.verify(bad,regime=facts.regime,signal=facts.signal,signals=facts.rows,risks=facts.risks).passed
+
+
+@pytest.mark.parametrize('case',list(REPRESENTATIVE_EXPECTED))
+def test_representative_indicator_prefixes_do_not_change_when_later_bars_are_appended(case):
+    from src.agents.technical.domain.indicators.moving_average import calculate_moving_averages
+    from src.agents.technical.domain.indicators.rsi import calculate_rsi
+    from src.agents.technical.domain.indicators.pattern import calculate_candle_features
+    daily=representative_daily(case)
+    mas=calculate_moving_averages(daily);rsi=calculate_rsi(daily);candles=calculate_candle_features(daily)
+    for n in (65,80,100,len(daily)):
+        subset=daily[:n];part=calculate_moving_averages(subset)
+        assert all(part[w]==values[:n] for w,values in mas.items())
+        assert calculate_rsi(subset)==rsi[:n] and calculate_candle_features(subset)==candles[:n]
+    # This is causality of pure calculations, NOT proof that a fetcher cuts data
+    # or that a historical W/M aggregate was finalized at its date label.
+
+
+@pytest.mark.parametrize('period',['D','W','M'])
+def test_standard_KIS_range_discards_after_cutoff_dates_in_all_periods(monkeypatch,period):
+    from datetime import date
+    from src.agents.technical.infrastructure import kis_client as kis
+    seen=[]
+    def chart(settings,token,ticker,kind,lo,hi,client,**kwargs):
+        seen.append((kind,lo,hi));return {'output2':[kis_bar(d) for d in ('20250331','20250324','20250317')]}
+    monkeypatch.setattr(kis,'_call_chart',chart)
+    bars=kis._fetch_ohlcv_range('000720',period,date(2025,3,17),date(2025,3,24),None,
+        settings=config.KISSettings('fake-key','fake-secret','https://kis.invalid'),_token='fake-token')
+    assert [x.date for x in bars]==['2025-03-17','2025-03-24'] and len(seen)==1
+    # W/M row values can still be an in-progress aggregate. Dates alone cannot
+    # establish publication time, session-close finality, or point-in-time truth.
+
+
+def test_observed_market_projection_provenance_and_limited_daily_replay():
+    from src.agents.technical.domain.models.ohlcv import OHLCV
+    from src.agents.technical.domain.indicators.moving_average import calculate_moving_averages
+    from src.agents.technical.domain.indicators.rsi import calculate_rsi
+    assert hashlib.sha256(json.dumps(OBSERVED_000720_DAILY,separators=(',',':')).encode()).hexdigest()==OBSERVED_000720_DAILY_SHA256
+    bars=[OHLCV(**dict(zip(('date','open','high','low','close','volume','trading_value'),row))) for row in OBSERVED_000720_DAILY]
+    assert len(bars)==245 and (bars[0].date,bars[-1].date)==('2025-11-13','2026-11-13')
+    assert len({x.date for x in bars})==len(bars) and bars==sorted(bars,key=lambda x:x.date)
+    bundle=st.run_indicator_calculate(bars)
+    assert bundle.close==bars[-1].close and bundle.ma_long==pytest.approx(sum(x.close for x in bars[-config.MA_LONG_WINDOW:])/config.MA_LONG_WINDOW)
+    assert st.run_regime_classify(bars,[],[]).daily_regime.value=='downtrend'
+    full=calculate_rsi(bars);mas=calculate_moving_averages(bars)
+    for n in (65,120,200,245):
+        assert calculate_rsi(bars[:n])==full[:n]
+        assert all(calculate_moving_averages(bars[:n])[w]==v[:n] for w,v in mas.items())
+    # No invented M history, exchange calendar, future return labels, or claim
+    # that chart-visible bars reproduce the complete original engine input.
+
+
+@pytest.mark.parametrize('vol_delta,value_delta,expected',[(0,0,False),(-1,0,True),(0,-1,True),(1,1,False)])
+def test_representative_liquidity_boundary_is_OR_and_strictly_below(vol_delta,value_delta,expected):
+    bars=[b.model_copy(update={'volume':config.MIN_AVG_VOLUME+vol_delta,
+                              'trading_value':config.MIN_AVG_TRADING_VALUE+value_delta}) for b in representative_daily('rising')]
+    facts=representative_facts(bars)
+    assert facts.bundle.avg_volume==config.MIN_AVG_VOLUME+vol_delta
+    assert facts.bundle.avg_trading_value==config.MIN_AVG_TRADING_VALUE+value_delta
+    assert ('low_liquidity' in [r.flag.value for r in facts.risks]) is expected
+
+
+@pytest.mark.parametrize('case',list(REPRESENTATIVE_EXPECTED))
+def test_representative_pattern_anchor_does_not_read_appended_future_bar(case):
+    from datetime import date
+    from src.agents.technical.api.charts import chart_builder as charts
+    from src.agents.technical.domain.indicators.volume import calculate_volume_average
+    from src.agents.technical.domain.models.ohlcv import OHLCV
+    bars=representative_daily(case);end=len(bars)-1
+    # None of these authored cases has a rounded bottom AND a recovered rim
+    # AND a handle: a crash without recovery is not a cup-and-handle candidate.
+    future=OHLCV(date=(date.fromisoformat(bars[-1].date)+timedelta(days=1)).isoformat(),
+                  open=1000,high=1000,low=1000,close=1000,volume=9999999,trading_value=9999999999)
+    extended=bars+[future]
+    assert charts._cup_handle_at(bars,end,lookback=config.CUP_HANDLE_DAILY_LOOKBACK_BARS,
+                                 vol_avg=calculate_volume_average(bars)) is None
+    assert charts._cup_handle_at(extended,end,lookback=config.CUP_HANDLE_DAILY_LOOKBACK_BARS,
+                                 vol_avg=calculate_volume_average(extended)) is None
+    assert charts._box_range_at(extended,end)==charts._box_range_at(bars,end)

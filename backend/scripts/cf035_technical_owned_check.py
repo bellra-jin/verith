@@ -637,7 +637,7 @@ async def _verify_completion(proof):
         async with owned_session(proof) as s:return await E.TechnicalOwnedReportService(s,principal=p).read(item['claimed'].run.report_id)
 
     config=Config();config.set_main_option('script_location',str(Path(__file__).resolve().parents[1]/'db/migrations'))
-    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c53001a7e0001'],'CF053 single migration head')
+    heads=ScriptDirectory.from_config(config).get_heads();check(heads==['c54001a7e0001'],'CF054 single migration head')
     check(await scalar('SELECT version_num FROM alembic_version')==heads[0],'CF050 current head')
     async with owned_session(proof) as s:s.add(Stock(stock_code='000720',stock_name='CF050 synthetic canonical',market='KOSPI'));await s.commit()
     p,a2=await user();other,_=await user()
@@ -958,7 +958,7 @@ async def _verify_completion(proof):
         _provider_diagnostic(error,'provider_connection');raise
     return dict(status='passed',groups=groups,receiving_only=False,baseline_receiving_only=True,
         runtime_groups=runtime_groups,provider_groups=provider_groups,synthetic_boundary_invocations=len(synthetic_boundary_invocations),new_admission_or_claim_in_completion=0,
-        provider_calls=0,engine_dispatch=0,compiled_graph_dispatch=0,synthetic_provider_execution_runs=2,mock_provider_HTTP_requests=4,usage_settlement=False,hold_refund=0,
+        provider_calls=0,engine_dispatch=0,compiled_graph_dispatch=0,synthetic_provider_execution_runs=3,mock_provider_HTTP_requests=6,usage_settlement=False,hold_refund=0,
         concurrency='actual two SQL sessions',ACK_loss='wrapper simulation around actual PG commits',
         expiry='actual DB clock',dirty_session='rejected before ORM refresh',fixture='synthetic CF031; no actual engine')
 
@@ -1248,6 +1248,8 @@ async def _verify_provider(proof,policy,intent,user,totals,scalar,refused,mark):
     check(await totals()==before_downgrade and await scalar('SELECT version_num FROM alembic_version')=='c53001a7e0001','CF053 downgrade refusal preserves provider/old rows and all holds')
     passed('provider_populated_downgrade_refused_before_drop_preserves_all_accounting')
 
+    await migration(proof,'c54001a7e0001')
+    await _verify_supervisor_handoff(proof,cfg,policy,ai,client,backend,runner_calls,factory_calls,mark,scalar,refused,totals,load)
     return labels
 
 
@@ -1275,3 +1277,226 @@ def _provider_diagnostic(error,stage):
             if tag in str(error):row['fixed_guard']=tag;break
         rows.append(row);error=getattr(error,'orig',None) or error.__context__
     safe_print({'phase':'cf053_bounded_diagnostic','stage':stage,'errors':rows})
+
+async def _verify_supervisor_handoff(proof,cfg,policy,ai,client,backend,runner_calls,factory_calls,mark,scalar,refused,totals,load):
+    """CF054 real auth/SQL/public Backend -> AI deterministic planner -> CF053 synthetic runner."""
+    import asyncio
+    from contextlib import ExitStack
+    from unittest.mock import patch
+    import httpx
+    from sqlalchemy import select,func,text
+    from db.models.auth.models import AuthUser
+    from db.models.supervisor.request_binding import SupervisorRequestBinding as Binding
+    from db.models.technical.execution_admission import TechnicalAnalysisRun as Run
+    from db.session import get_session
+    from src.api.main import app
+    from src.shared.config import settings
+    from src.modules.auth.api import router as auth
+    from src.modules.auth.application.session_service import issue_session,csrf_token,revoke_session
+    from src.modules.supervisor.api import router as core
+    from src.modules.supervisor.application.technical_service import TechnicalSupervisorService as Service
+    from src.modules.supervisor.domain import technical_core_contracts as C
+    from src.modules.supervisor.domain.technical_projection import fixed_key
+    from src.modules.supervisor.infrastructure import repository as bindings
+    from src.modules.technical.application.execution_admission_service import TechnicalAdmissionService as Admission
+    from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+    from src.modules.technical.application.execution_authority_service import TechnicalExecutionAuthority as Authority
+    from src.modules.technical.domain.execution_admission import Intent,TechnicalAdmissionError
+    from src.modules.technical.domain import provider_execution as P
+    from scripts.cf002_interactive_login import owned_session
+    from scripts.cf003_admission_check import check,migration
+    from src.shared.infrastructure.clients.ai_client import AIClient
+    for suffix in ('supervisor.domain.meaning','supervisor.domain.core_contracts','supervisor.domain.meaning_proposals','supervisor.application.meaning_policy','supervisor.domain.technical_core_contracts','supervisor.application.planning.technical_core','supervisor.api.routes'):load(suffix)
+    import sys
+    ai.include_router(sys.modules['src.supervisor.api.routes'].make_router(technical=True))
+    async def identity(owner=None):
+        async with owned_session(proof) as s:
+            if owner is None:owner=AuthUser(id=uuid4());s.add(owner);await s.flush()
+            cookie,p=await issue_session(s,owner);await s.commit();return cookie,p
+    a=await identity()
+    async with owned_session(proof) as s:owner=await s.get(AuthUser,a[1].user_id)
+    a2=await identity(owner);b=await identity()
+    mode=['normal'];target=[None];injected=[False];planning=[]
+    async def sessions():
+        async with owned_session(proof) as s:
+            original=s.commit
+            async def commit():
+                if target[0] is not None and not injected[0] and mode[0] in {'binding_ack','admission_ack','link_ack'}:
+                    await s.flush()  # Match commit's flush before inspecting the exact ACK stage.
+                    row=await bindings.technical_read(s,a[1].user_id,key=target[0])
+                    exists=row is not None
+                    if exists and mode[0]=='admission_ack':exists=await s.scalar(select(Run.id).where(Run.key_digest==row.technical_key_digest,Run.owner_user_id==row.owner_user_id)) is not None and row.technical_run_id is None
+                    if exists and mode[0]=='link_ack':exists=row.technical_run_id is not None
+                    if exists:await original();injected[0]=True;raise OSError('fixed CF054 commit ACK loss')
+                await original()
+            s.commit=commit;yield s
+    transport=httpx.ASGITransport(app=ai)
+    def client_factory(*args,**kwargs):return AIClient(cfg.data()['ai_origin'],125,transport=transport,execution_token='a'*32)
+    async def call(method,path,body=None,who=None,headers=None):
+        cookie,p=who or a
+        h={'origin':'http://localhost:3200','cookie':auth.SESSION_COOKIE+'='+cookie,'x-csrf-token':csrf_token(p)}|(headers or {})
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://localhost:8200') as c:return await c.request(method,path,json=body,headers=h)
+    base='/api/supervisor/core/technical'
+    def data(response,status=200):
+        check(response.status_code==status,'CF054 public HTTP status')
+        value=response.json();check(value['schema_version']==C.VERSION and value['error'] is None and response.headers.get('cache-control')=='private, no-store','CF054 closed private envelope');return value['data']
+    def error(response,status,code=None):
+        check(response.status_code==status,'CF054 fixed failure status');value=response.json();check(value['data'] is None and value['error']['message']=='Supervisor request unavailable' and value['schema_version']==C.VERSION,'CF054 safe failure')
+        if code is not None:check(value['error']['code']==code,'CF054 safe error code')
+    query='000720 외국인 제외 3주 차트'
+    draft={'original_query':query,'answers':[],'revision':0}
+    async def prepare():
+        planning.append(True);return data(await call('POST',base+'/prepare',draft))
+    def confirm(plan,key=None):return dict(client_key=key or str(uuid4()),draft=copy.deepcopy(draft),expected_plan_hash=plan['plan_hash'],consent=dict(allow_technical=True,allow_partial=True,waived_conditions=list(plan['required_waivers'])))
+    async def binding_for(body):
+        async with owned_session(proof) as s:return await bindings.technical_read(s,a[1].user_id,key=hashlib.sha256(body['client_key'].encode()).digest())
+    original_overrides=dict(app.dependency_overrides);app.dependency_overrides[get_session]=sessions
+    try:
+      with ExitStack() as stack:
+        for name,value in dict(AI_SERVICE_URL=cfg.data()['ai_origin'],FLOW_ANALYSIS_ENABLED=True,TECHNICAL_EXECUTION_ENABLED='true',TECHNICAL_EXECUTION_CONFIG=cfg.text,TECHNICAL_EXECUTION_AI_SERVICE_TOKEN='a'*32,TECHNICAL_EXECUTION_AUTHORITY_TOKEN='b'*32).items():stack.enter_context(patch.object(settings,name,value))
+        stack.enter_context(patch.object(core,'AIClient',client_factory))
+        before=await totals();starts=len(runner_calls)
+        from db.models.common.stock_alias import StockAlias
+        from src.modules.stocks.domain.text_normalize import normalize_stock_text
+        async with owned_session(proof) as s:
+            s.add(StockAlias(stock_code='000720',alias='대우전자',normalized_alias=normalize_stock_text('대우전자'),alias_type='alias'));await s.commit()
+        error(await call('POST',base+'/prepare',dict(original_query='대우전자 말고 000720 차트',answers=[],revision=0)),422,'INPUT_INVALID')
+        error(await call('POST',base+'/prepare',draft,headers={'cookie':''}),401,'AUTH_REQUIRED')
+        error(await call('POST',base+'/prepare',draft,headers={'x-csrf-token':'bad'}),401,'AUTH_REQUIRED')
+        error(await call('POST',base+'/prepare?unexpected=1',draft),422,'INPUT_INVALID')
+        check(await totals()==before and len(runner_calls)==starts,'CF054 negated canonical alias/auth/query denied before admission')
+        mark('CF054_negated_alias_canonical_master_and_public_auth_fences')
+        plan=await prepare();check(plan['selected_views']==['technical'] and plan['partial'] and len(plan['required_waivers'])==2,'CF054 exact conditions retained as two waivers')
+        body=confirm(plan)
+        bad=copy.deepcopy(body);bad['consent']['waived_conditions']=[];error(await call('POST',base+'/requests',bad),422,'INPUT_INVALID')
+        bad=copy.deepcopy(body);bad['expected_plan_hash']='f'*64;error(await call('POST',base+'/requests',bad),409,'PLAN_STALE')
+        check(await totals()==before and len(runner_calls)==starts,'CF054 invalid consent/hash admission0')
+        responses=await asyncio.gather(call('POST',base+'/requests',body),call('POST',base+'/requests',body))
+        check(all(r.status_code in {200,202} for r in responses),'CF054 concurrent confirms safe')
+        current=await binding_for(body);result=data(await call('GET',base+'/requests/'+str(current.id)))
+        check(result['technical']['state']=='stored' and result['technical']['report_id'] is not None and result['technical']['report_url'] is None and result['coverage']=='partial','CF054 stored internal reference no public URL')
+        check(result['effective_scope']['waived_conditions']==plan['required_waivers'] and len(runner_calls)==starts+1,'CF054 graph once and exact waivers')
+        after=await totals();check(after[0]==before[0]+1 and after[1]==before[1]+1 and after[2]==before[2]+policy.data()['attempt_reserve_nano'] and after[3]==before[3]+policy.data()['attempt_reserve_nano'],'CF054 one admission/hold')
+        mark('CF054_public_prepare_concurrent_confirm_admission_link_start_store_once')
+        with patch.object(settings,'TECHNICAL_EXECUTION_ENABLED',False),patch.object(settings,'TECHNICAL_EXECUTION_CONFIG',''),patch.object(settings,'FLOW_ANALYSIS_ENABLED',False):
+            check(data(await call('GET',base+'/requests/'+str(current.id),who=a2))==result,'CF054 A2 settings-off readonly same owner result')
+            check(data(await call('POST',base+'/requests',body,who=a2))==result,'CF054 same-key A2 no replan/admission')
+        error(await call('GET',base+'/requests/'+str(current.id),who=b),404,'RESOURCE_NOT_FOUND')
+        old_get=await call('GET','/api/supervisor/core/requests/'+str(current.id));check(old_get.status_code==404,'CF054 old Flow GET hides Technical target')
+        flow_body=dict(client_key=body['client_key'],draft=draft,expected_plan_hash=plan['plan_hash'],consent=dict(allow_flow=True,allow_partial=True,waived_conditions=[]))
+        check((await call('POST','/api/supervisor/core/requests',flow_body)).status_code==409,'CF054 Flow confirm cannot adopt Technical key')
+        check(await totals()==after and len(runner_calls)==starts+1,'CF054 all replays/read new work0')
+        mark('CF054_A2_B_cross_target_settings_off_readonly_replay_hold_unchanged')
+        # Opposite target uses a valid old SQL binding; no fake Flow execution.
+        flow_id=uuid4();flow_client=str(uuid4());flow_text=C.canonical({'idempotency_key':str(flow_id)})
+        async with owned_session(proof) as s:
+            from src.modules.technical.infrastructure import execution_admission_repository as R
+            stamp=await R.clock(s)
+            await bindings.admit(s,dict(id=flow_id,owner_user_id=a[1].user_id,client_key_digest=hashlib.sha256(flow_client.encode()).digest(),confirm_digest='a'*64,plan_json='{}',plan_sha256=P.sha('{}'),flow_input_json=flow_text,flow_sha256=P.sha(flow_text),flow_key_digest=hashlib.sha256(str(flow_id).encode()).digest(),confirmed_at=stamp,handoff_before=stamp+timedelta(seconds=120)))
+            await s.commit()
+        error(await call('POST',base+'/requests',confirm(plan,flow_client)),409,'IDEMPOTENCY_CONFLICT')
+        error(await call('GET',base+'/requests/'+str(flow_id)),404,'RESOURCE_NOT_FOUND')
+        mark('CF054_old_Flow_target_not_promoted')
+        # Each actual commit wrapper loses only the first ACK at its named stage.
+        rows={}
+        for stage in ('binding_ack','admission_ack','link_ack'):
+            body_lost=confirm(plan);target[0]=hashlib.sha256(body_lost['client_key'].encode()).digest();mode[0]=stage;injected[0]=False;initial=await totals();sent=len(runner_calls)
+            error(await call('POST',base+'/requests',body_lost),503);check(injected[0],'CF054 requested ACK boundary reached');mode[0]='normal'
+            lost=await binding_for(body_lost);rows[stage]=lost
+            if stage=='admission_ack':
+                async with owned_session(proof) as s:
+                    recovery=await Admission(s,principal=a2[1]).reconcile(fixed_key(lost.id))
+                    await s.rollback()
+                snapshot=Service.run_snapshot(recovery.run)
+                from datetime import timezone
+                alternative=copy.deepcopy(snapshot);alternative['as_of']=recovery.run.as_of.astimezone(timezone(timedelta(hours=9))).isoformat()
+                check(await scalar('SELECT clock_timestamp()<deadline_at FROM technical_analysis_runs WHERE id=:id',{'id':recovery.run.analysis_id}),'CF054 fresh timestamp negative fixture')
+                await refused('UPDATE supervisor_request_bindings SET technical_run_id=:run,technical_run_json=:value WHERE id=:id',{'run':recovery.run.analysis_id,'value':C.canonical(alternative),'id':lost.id})
+                await refused('UPDATE supervisor_request_bindings SET technical_run_id=:run,technical_run_json=:value WHERE id=:id',{'run':recovery.run.analysis_id,'value':json.dumps(snapshot,indent=2),'id':lost.id})
+                async with owned_session(proof) as s:
+                    await s.execute(text('UPDATE supervisor_request_bindings SET technical_run_id=:run,technical_run_json=:value WHERE id=:id'),{'run':recovery.run.analysis_id,'value':C.canonical(snapshot),'id':lost.id});await s.rollback()
+            view=data(await call('GET',base+'/requests/'+str(lost.id),who=a2))
+            check(data(await call('POST',base+'/requests',body_lost,who=a2),202 if view['coverage']=='pending' else 200)==view,'CF054 lost ACK read-only replay')
+            check(len(runner_calls)==sent,'CF054 lost ACK never executes')
+            final=await totals();check(final==initial if stage=='binding_ack' else final[0]==initial[0]+1 and final[2]==initial[2]+policy.data()['attempt_reserve_nano'],'CF054 ACK accounting retained')
+            check(view['technical'] is None if stage=='binding_ack' else view['technical']['state']=='admitted','CF054 fixed-key readonly reconcile without token')
+        target[0]=None;mark('CF054_binding_admission_link_commit_ACK_loss_no_reissue_no_dispatch')
+        # Same-owner wrong-key run must not be linkable to the unaccepted binding.
+        unlinked=rows['binding_ack'];wrong_intent=Intent(unlinked.technical_intent_json)
+        async with owned_session(proof) as s:wrong=await Admission(s,principal=a[1],policy=policy).admit_provider('cf054-wrong-key',wrong_intent,cfg)
+        values={'run':wrong.run.analysis_id,'value':C.canonical(Service.run_snapshot(wrong.run)),'id':unlinked.id}
+        await refused('UPDATE supervisor_request_bindings SET technical_run_id=:run,technical_run_json=:value WHERE id=:id',values)
+        await refused("UPDATE supervisor_request_bindings SET target='flow' WHERE id=:id",{'id':current.id})
+        await refused('DELETE FROM supervisor_request_bindings WHERE id=:id',{'id':current.id})
+        # Existing incoming FK may refuse TRUNCATE before this revision's trigger.
+        # Do not add CASCADE or broaden the target tables to reach the trigger.
+        from sqlalchemy.exc import DBAPIError
+        async with owned_session(proof) as s:
+            try:await s.execute(text('TRUNCATE supervisor_request_bindings'))
+            except DBAPIError as denied:
+                check(getattr(denied.orig,'sqlstate',None) in {'0A000','23514'},'CF054 exact TRUNCATE FK/trigger denial');await s.rollback()
+            else:check(False,'CF054 TRUNCATE must fail')
+        mark('CF054_fixed_key_owner_intent_run_link_SQL_and_delete_guards')
+        # Durable start ACK loss cannot grant the graph; all underlying SQL is real.
+        body_start=confirm(plan);sent=len(runner_calls);original_start=Authority.start;start_lost=[False]
+        async def lose_start(self,*args,**kwargs):
+            original=self.session.commit
+            async def lost():await original();start_lost[0]=True;raise OSError('fixed CF054 start ACK loss')
+            self.session.commit=lost
+            try:return await original_start(self,*args,**kwargs)
+            finally:self.session.commit=original
+        with patch.object(Authority,'start',lose_start):
+            # The HTTP client remains unchanged; only the Backend SQL callback is wrapped.
+            response=await call('POST',base+'/requests',body_start)
+        lost=await binding_for(body_start);view=data(await call('GET',base+'/requests/'+str(lost.id),who=a2))
+        check(start_lost[0] and len(runner_calls)==sent and view['technical']['state']=='unknown','CF054 consumed start/unknown full hold without graph')
+        mark('CF054_start_ACK_loss_retains_consumption_unknown_full_hold')
+        # A task cancelled after acknowledged admission must not link/reclaim/retry it.
+        cancel_body=confirm(plan);original_admit=TechnicalExecutionRuntime.admit_provider_once;sent=len(runner_calls)
+        async def cancel_after_admission(self,*args,**kwargs):
+            await original_admit(self,*args,**kwargs)
+            asyncio.current_task().cancel();await asyncio.sleep(0)
+        with patch.object(TechnicalExecutionRuntime,'admit_provider_once',cancel_after_admission):
+            cancelled=asyncio.create_task(call('POST',base+'/requests',cancel_body))
+            try:await cancelled
+            except asyncio.CancelledError:pass
+            else:check(False,'CF054 cancellation must propagate')
+        cancelled_binding=await binding_for(cancel_body)
+        cancelled_view=data(await call('GET',base+'/requests/'+str(cancelled_binding.id),who=a2))
+        check(cancelled_binding.technical_run_id is None and cancelled_view['technical']['state']=='admitted' and len(runner_calls)==sent,'CF054 cancellation preserves acknowledged hold without link/execution')
+        mark('CF054_post_admission_task_cancel_propagates_hold_no_resume')
+        # A stale binding cannot create a reservation even through direct admission SQL.
+        from src.modules.technical.infrastructure import execution_admission_repository as R
+        expired_id=uuid4();expired_body=confirm(plan);expired_key=hashlib.sha256(expired_body['client_key'].encode()).digest()
+        async with owned_session(proof) as s:
+            original=await bindings.technical_read(s,a[1].user_id,id=unlinked.id)
+            values={c.key:getattr(original,c.key) for c in Binding.__table__.columns}
+            stamp=await R.clock(s)
+            values.update(id=expired_id,client_key_digest=expired_key,confirm_digest=C.sha(expired_body),confirmed_at=stamp-timedelta(seconds=121),handoff_before=stamp-timedelta(seconds=1),technical_key_digest=hashlib.sha256(fixed_key(expired_id).encode()).digest())
+            await bindings.admit(s,values);await s.commit()
+        before_expired=await totals()
+        async with owned_session(proof) as s:
+            try:await Admission(s,principal=a[1],policy=policy).admit_provider(fixed_key(expired_id),wrong_intent,cfg)
+            except TechnicalAdmissionError as closed:check(closed.code=='UNAVAILABLE','CF054 expired handoff SQL guard refusal')
+            else:check(False,'CF054 expired handoff cannot reserve')
+        check(await totals()==before_expired and data(await call('GET',base+'/requests/'+str(expired_id),who=a2))['technical'] is None,'CF054 expired binding no run/counter/hold delta')
+        mark('CF054_expired_handoff_SQL_admission_reservation0')
+        # New original session revocation after admission, before link; A2 may only observe.
+        body_revoke=confirm(plan);original_admit=TechnicalExecutionRuntime.admit_provider_once;revocation=[False]
+        async def revoked_admission(self,*args,**kwargs):
+            result=await original_admit(self,*args,**kwargs)
+            async with owned_session(proof) as s:await revoke_session(s,a[1]);revocation[0]=True
+            return result
+        sent=len(runner_calls)
+        with patch.object(TechnicalExecutionRuntime,'admit_provider_once',revoked_admission):error(await call('POST',base+'/requests',body_revoke),401,'AUTH_REQUIRED')
+        revoked_binding=await binding_for(body_revoke)
+        check(revocation[0] and len(runner_calls)==sent and data(await call('GET',base+'/requests/'+str(revoked_binding.id),who=a2))['technical']['state']=='admitted','CF054 revoked original no link/execute; A2 observes only')
+        mark('CF054_admission_then_original_session_revoke_no_link_or_execution')
+        before_downgrade=await totals()
+        try:await migration(proof,'c53001a7e0001',downgrade=True)
+        except RuntimeError:pass
+        else:check(False,'CF054 populated downgrade denied')
+        check(await totals()==before_downgrade and await scalar('SELECT version_num FROM alembic_version')=='c54001a7e0001','CF054 populated handoff history and full hold retained')
+        mark('CF054_populated_downgrade_denied_before_drop')
+    finally:
+        app.dependency_overrides.clear();app.dependency_overrides.update(original_overrides)

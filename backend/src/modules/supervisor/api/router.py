@@ -63,12 +63,21 @@ class CoreRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def safe(request):
+            fail=technical_failure if request.url.path.startswith(PATH+'/technical/') else failure
             try:
                 prior = request.scope.get('fastapi_function_astack')
                 try:
                     now = asyncio.get_running_loop().time()
                     if request.method == 'POST' and request.url.path == PATH + '/preparations':
                         deadline = preparation_deadlines(request, now)
+                    elif request.url.path.startswith(PATH+'/technical/'):
+                        state=request.scope.setdefault('state',{})
+                        total=state.get('core_deadline',now+15)
+                        if not finite_deadline(total):raise TimeoutError()
+                        deadline=min(total,now+(140 if request.method=='POST' and request.url.path==PATH+'/technical/requests' and 'core_planning_deadline' in state else 15))
+                        state['core_deadline']=deadline
+                        state.setdefault('core_admission_deadline',min(deadline,now+15))
+                        state.setdefault('core_planning_deadline',min(deadline,now+15))
                     else:
                         timeout = 140 if request.method == 'POST' and request.url.path.endswith('/requests') else 15
                         deadline = request.scope.get('state', {}).get('core_deadline', now + timeout)
@@ -79,26 +88,26 @@ class CoreRoute(APIRoute):
                 finally:
                     request.scope['fastapi_function_astack'] = prior
                 if len(response.body) > 65536:
-                    return failure(request.scope, 'RESULT_CONTRACT_INVALID', 502)
+                    return fail(request.scope, 'RESULT_CONTRACT_INVALID', 502)
                 response.headers.update(PRIVATE)
                 return response
             except PreparationConflict as e:
-                return failure(request.scope, e.code, e.status)
+                return fail(request.scope, e.code, e.status)
             except CoreError as e:
-                return failure(request.scope, e.code, e.status)
+                return fail(request.scope, e.code, e.status)
             except AnalysisError as e:
                 code = e.code.value if hasattr(e.code, 'value') else e.code
-                return failure(request.scope, code, {'RESOURCE_NOT_FOUND': 404, 'IDEMPOTENCY_CONFLICT': 409, 'USAGE_LIMIT_EXCEEDED': 429, 'FEATURE_UNAVAILABLE': 403}.get(code, 503))
+                return fail(request.scope, code, {'RESOURCE_NOT_FOUND': 404, 'IDEMPOTENCY_CONFLICT': 409, 'USAGE_LIMIT_EXCEEDED': 429, 'FEATURE_UNAVAILABLE': 403}.get(code, 503))
             except AuthenticationRequired:
-                return failure(request.scope, 'AUTH_REQUIRED', 401)
+                return fail(request.scope, 'AUTH_REQUIRED', 401)
             except RequestValidationError:
-                return failure(request.scope, 'INPUT_INVALID', 422)
+                return fail(request.scope, 'INPUT_INVALID', 422)
             except HTTPException as e:
-                return failure(request.scope, 'AUTH_REQUIRED' if e.status_code == 401 else 'AUTH_REQUEST_INVALID', 401 if e.status_code == 401 else 403)
+                return fail(request.scope, 'AUTH_REQUIRED' if e.status_code == 401 else 'AUTH_REQUEST_INVALID', 401 if e.status_code == 401 else 403)
             except TimeoutError:
-                return failure(request.scope, 'DEADLINE_EXCEEDED', 504)
+                return fail(request.scope, 'DEADLINE_EXCEEDED', 504)
             except Exception:
-                return failure(request.scope, 'SERVICE_UNAVAILABLE', 503)
+                return fail(request.scope, 'SERVICE_UNAVAILABLE', 503)
         return safe
 router = APIRouter(prefix=PATH, route_class=CoreRoute, tags=['supervisor-core'])
 
@@ -162,3 +171,46 @@ async def preparation_get(request: Request, preparation_id: UUID, value=Depends(
 @router.delete('/preparations/{preparation_id}', response_model=PreparationResponse)
 async def preparation_delete(request: Request, preparation_id: UUID, value=Depends(service)):
     return envelope(request, await preparations(value).delete(preparation_id))
+
+# Separate Technical DTOs keep Flow plan/confirm/hash and preparation bytes unchanged.
+from src.modules.supervisor.api.schemas import TechnicalConfirm,TechnicalPrepareResponse,TechnicalRequestResponse
+
+def technical_failure(scope,code,status):
+    response=failure(scope,code,status)
+    from src.modules.supervisor.domain.contracts import decode
+    value=decode(response.body);value['schema_version']='supervisor.technical.v1'
+    return JSONResponse(value,status_code=response.status_code,headers=PRIVATE)
+
+async def technical_service(request:Request,session=Depends(get_session,scope='function')):
+    from src.modules.technical.api.execution_authority_router import enabled
+    from src.modules.technical.domain import provider_execution as P
+    from src.modules.supervisor.application.technical_service import TechnicalSupervisorService
+    loop=asyncio.get_running_loop();state=request.scope.setdefault('state',{})
+    deadline=state.get('core_admission_deadline',state.get('core_deadline',loop.time()+15))
+    if not finite_deadline(deadline) or loop.time()>=deadline:raise TimeoutError()
+    async with asyncio.timeout_at(deadline):principal=await request_principal(request,session,mutation=request.method=='POST')
+    if loop.time()>=deadline:raise TimeoutError()
+    def config():
+        if not enabled(settings.TECHNICAL_EXECUTION_ENABLED):raise CoreError('FEATURE_UNAVAILABLE',403)
+        if P.service_token(settings.TECHNICAL_EXECUTION_AI_SERVICE_TOKEN)==P.service_token(settings.TECHNICAL_EXECUTION_AUTHORITY_TOKEN):raise CoreError('FEATURE_UNAVAILABLE',403)
+        return P.Configuration(settings.TECHNICAL_EXECUTION_CONFIG)
+    return TechnicalSupervisorService(session,principal=principal,client=AIClient(settings.AI_SERVICE_URL,125,execution_token=settings.TECHNICAL_EXECUTION_AI_SERVICE_TOKEN),configuration=config)
+
+def technical_envelope(request,data):
+    value=envelope(request,data);value['schema_version']='supervisor.technical.v1';return value
+
+@router.post('/technical/prepare',response_model=TechnicalPrepareResponse)
+async def technical_prepare(request:Request,body:Draft,value=Depends(technical_service)):
+    deadline=request.scope.get('state',{}).get('core_planning_deadline',asyncio.get_running_loop().time()+15)
+    return technical_envelope(request,(await value.prepare(body,http_request_id(request.scope),deadline=deadline)).model_dump(mode='json'))
+
+@router.post('/technical/requests',response_model=TechnicalRequestResponse)
+async def technical_post(request:Request,body:TechnicalConfirm,response:Response,value=Depends(technical_service)):
+    deadline=request.scope.get('state',{}).get('core_planning_deadline',asyncio.get_running_loop().time()+15)
+    result=await value.post(body,http_request_id(request.scope),planning_deadline=deadline)
+    response.status_code=202 if result['coverage']=='pending' else 200
+    return technical_envelope(request,result)
+
+@router.get('/technical/requests/{supervisor_id}',response_model=TechnicalRequestResponse)
+async def technical_get(request:Request,supervisor_id:UUID,value=Depends(technical_service)):
+    return technical_envelope(request,await value.get(supervisor_id))

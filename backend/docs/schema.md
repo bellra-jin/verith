@@ -408,3 +408,19 @@ schema 조합, SQL run spec에서 분기한 binding hash와 completion/stored gu
 controlled snapshot은 대응 accepted/stored provider run 없이 생성할 수 없다. c530 자체의 부분 DDL
 실패는 같은 transaction에서 rollback하며 provider record가 있으면 downgrade를 DROP 전에 거절한다.
 기존 c350/c480/c500 migration bytes는 수정하지 않는다.
+
+## CF054 Supervisor Technical handoff
+
+Revision `c54001a7e0001` follows c530. Existing Supervisor bindings gain `target` (old rows default
+`flow`) and nullable Technical intent/hash, fixed-key digest, configuration/hash, policy/spec hashes,
+Stock/hash, confirmation-session identity and run/snapshot link. Flow payload fields are NULL only
+for the Technical branch; old Flow CHECK text remains the Flow branch of the new checks. New JSON
+snapshots have exact canonical bytes. Technical run `(id,owner_user_id)` UNIQUE supports a RESTRICT
+composite owner FK. No new run/budget/ledger table is introduced.
+
+The binding guard preserves immutable identity and permits only a first exact run link or redaction.
+The link verifies key/intent/config/policy/spec/Stock/original session, run IDs and UTC canonical
+as-of/deadline. A narrow run INSERT guard enforces an associated Supervisor handoff window before
+reservation can commit. Technical binding DELETE/TRUNCATE and populated downgrade are refused;
+empty downgrade locks the two affected tables, restores old Flow constraints and removes only the
+additive revision. Run counters/full holds and the existing Technical deletion rules are unchanged.

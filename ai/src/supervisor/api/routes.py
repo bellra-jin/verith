@@ -10,7 +10,7 @@ PRIVATE={'Cache-Control':'private, no-store'}
 def error(status,code):
     return JSONResponse({'error':{'code':code,'message':'Supervisor plan unavailable'}},status_code=status,headers=PRIVATE)
 
-def make_router(*,gateway=None,runtime=None):
+def make_router(*,gateway=None,runtime=None,technical=False):
     router=APIRouter(prefix='/internal/supervisor',tags=['supervisor-internal'])
     @router.post('/analyze')
     async def legacy():return error(403,'FEATURE_UNAVAILABLE')
@@ -45,6 +45,7 @@ def make_router(*,gateway=None,runtime=None):
             return JSONResponse(result,headers=PRIVATE)
         except Exception:return error(502,'RESULT_CONTRACT_INVALID')
     router.include_router(make_core_router(gateway=gateway,runtime=runtime))
+    if technical is True:router.include_router(make_technical_core_router())
     return router
 
 def make_core_router(*,gateway=None,token=None,enabled=None,runtime=None):
@@ -106,4 +107,52 @@ def make_core_router(*,gateway=None,token=None,enabled=None,runtime=None):
         except Exception:return fail(503,'SERVICE_UNAVAILABLE')
     return core
 
-router=make_router()
+
+
+def make_technical_core_router():
+    """No planning import, credential supply or provider work before service auth."""
+    from uuid import uuid4
+    router=APIRouter()
+    def fail(status,code):
+        return JSONResponse(dict(schema_version='supervisor.technical.v1',request_id=str(uuid4()),trace_id=str(uuid4()),data=None,error=dict(code=code,message='Supervisor request unavailable')),status_code=status,headers=PRIVATE)
+    @router.post('/core/technical-plan')
+    async def technical_plan(request:Request):
+        installed=getattr(request.app.state,'technical_execution_runtime',None)
+        if installed is None:return fail(403,'FEATURE_UNAVAILABLE')
+        try:
+            token=installed.service_token
+            values=[v for k,v in request.scope['headers'] if k.lower()==b'x-technical-service-token']
+            if type(token) is not bytes or len(token)<32 or len(values)!=1 or not hmac.compare_digest(token,values[0]):return fail(401,'AUTH_REQUIRED')
+            path='/internal/supervisor/core/technical-plan'
+            if request.scope.get('raw_path',path.encode())!=path.encode() or request.url.query:raise ValueError()
+            h=request.headers
+            if len(h.getlist('content-type'))!=1 or h.get('content-type','').lower()!='application/json' or h.getlist('content-encoding'):raise ValueError()
+            if len(h.getlist('content-length'))>1:raise ValueError()
+            length=h.get('content-length')
+            if length is not None and (not length.isascii() or not length.isdigit() or len(length)>8 or int(length)>16384):raise ValueError()
+            deadline=asyncio.get_running_loop().time()+15
+            async with asyncio.timeout_at(deadline):
+                raw=bytearray()
+                async for chunk in request.stream():
+                    if len(raw)+len(chunk)>16384:raise ValueError()
+                    raw.extend(chunk)
+                if length is not None and int(length)!=len(raw):raise ValueError()
+                from src.supervisor.domain import technical_core_contracts as C
+                from src.supervisor.application.planning.technical_core import run
+                body=C.Envelope[C.InternalInput].model_validate(C.decode(raw))
+                if body.data is None or body.error is not None:raise ValueError()
+                ready=installed.readiness();configuration=ready['configuration']
+                context=C.Context(configuration_sha256=C.sha(configuration),policy_sha256=C.sha(configuration['policy']),spec_sha256=ready['spec_sha256'],reserved_nano=configuration['policy']['attempt_reserve_nano'])
+                if ready['ready'] is not True or body.data.context!=context:raise ValueError()
+                result=run(body.data)
+                value=dict(schema_version=C.VERSION,request_id=body.request_id,trace_id=body.trace_id,data=result.model_dump(mode='json'),error=None)
+                if len(C.canonical(value).encode('utf8'))>65536:raise ValueError()
+            if asyncio.get_running_loop().time()>=deadline:raise TimeoutError()
+            return JSONResponse(value,headers=PRIVATE)
+        except asyncio.CancelledError:raise
+        except TimeoutError:return fail(504,'DEADLINE_EXCEEDED')
+        except (ValueError,TypeError,UnicodeError,RecursionError):return fail(422,'INPUT_INVALID')
+        except Exception:return fail(503,'SERVICE_UNAVAILABLE')
+    return router
+
+router=make_router(technical=True)

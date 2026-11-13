@@ -386,3 +386,12 @@ class AIClient:
         if resp.status_code in (502, 503):
             raise AIUnavailableError(f"AI 서버 사용 불가({resp.status_code})")
         raise AIUnavailableError(f"AI 서버 오류({resp.status_code})")
+
+    async def plan_supervisor_technical(self,payload,configuration,*,remaining):
+        """Fixed deterministic planner, authenticated only by the Technical token."""
+        from src.modules.supervisor.domain import technical_core_contracts as C
+        body=C.Envelope[C.InternalInput].model_validate(payload)
+        expected=C.Context(configuration_sha256=configuration.fingerprint,policy_sha256=configuration.policy_sha256,spec_sha256=body.data.context.spec_sha256,reserved_nano=configuration.data()['policy']['attempt_reserve_nano'])
+        if body.data.context!=expected:raise AIContractError('Technical plan invalid')
+        captured=self._technical_execution_configuration(configuration)
+        return await self._technical_execution_post('/internal/supervisor/core/technical-plan',payload,captured,min(15,remaining),65536)

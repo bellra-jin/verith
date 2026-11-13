@@ -17,7 +17,7 @@ async def flow_run(session, binding):
     return await session.scalar(select(FlowAnalysisRun).where(FlowAnalysisRun.owner_user_id == binding.owner_user_id, FlowAnalysisRun.operation == 'flow.analysis.v1', FlowAnalysisRun.key_digest == binding.flow_key_digest))
 
 async def redact_for_flow(session, owner, key):
-    ids = list((await session.scalars(update(Binding).where(Binding.owner_user_id == owner, Binding.flow_key_digest == key, Binding.redacted_at.is_(None)).values(plan_json=None, flow_input_json=None, redacted_at=func.clock_timestamp()).returning(Binding.preparation_id))).all())
+    ids = list((await session.scalars(update(Binding).where(Binding.owner_user_id == owner, Binding.target == "flow", Binding.flow_key_digest == key, Binding.redacted_at.is_(None)).values(plan_json=None, flow_input_json=None, redacted_at=func.clock_timestamp()).returning(Binding.preparation_id))).all())
     from src.modules.supervisor.infrastructure import preparation_repository as preparations
     for id in sorted((value for value in ids if value is not None), key=str):
         rows = await preparations.lineage(session, owner, id)
@@ -37,6 +37,17 @@ class Snapshot:
     handoff_before: object
     redacted_at: object
     preparation_id: object = None
+    target: str = "flow"
 
 def snapshot(row):
-    return Snapshot(**{k: getattr(row, k) for k in Snapshot.__dataclass_fields__})
+    return Snapshot(**{k: getattr(row, k, "flow" if k=="target" else None) for k in Snapshot.__dataclass_fields__})
+
+async def technical_link_row(session,owner,id):
+    return await session.scalar(select(Binding).where(Binding.owner_user_id==owner,Binding.id==id,Binding.target=='technical').with_for_update().execution_options(populate_existing=True,autoflush=False))
+
+async def technical_read(session,owner,id=None,key=None):
+    from types import SimpleNamespace
+    query=select(Binding.__table__).where(Binding.owner_user_id==owner)
+    query=query.where(Binding.id==id) if id is not None else query.where(Binding.client_key_digest==key)
+    value=(await session.execute(query.execution_options(autoflush=False))).mappings().one_or_none()
+    return SimpleNamespace(**value) if value is not None else None

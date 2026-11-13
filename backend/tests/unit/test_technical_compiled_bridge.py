@@ -332,6 +332,176 @@ async def test_confidence_meaning_actual_graph_keeps_calculated_numbers_and_rege
         assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
 
 
+def qualitative_response():
+    """Fake LLM reply for the qualitative-only contract; never patches product validation."""
+    from src.agents.technical.application.nodes import interpret_report as interp
+    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    rows={row.indicator.value:row for row in st.run_signal_aggregate(st.DAILY).technical_signals}
+    for entry in good['details']:
+        row=rows[entry['indicator']]
+        entry['detail']=interp.fallback_detail(row.indicator,row.signal,()).detail
+    return json.dumps(good,ensure_ascii=False)
+
+
+def numeric_context():
+    from src.agents.technical.application.nodes import interpret_report as interp
+    from src.agents.technical.application.orchestration import pipeline_steps as steps
+    rr=st.run_regime_classify(st.DAILY,st.WEEKLY,st.MONTHLY)
+    bundle=st.run_indicator_calculate(st.DAILY);score=st.run_signal_aggregate(st.DAILY)
+    conf=st.run_confidence_calculate(score,bundle,rr);risks=st.run_risk_detect(score,bundle,rr)
+    return SimpleNamespace(node=interp,rows=score.technical_signals,regime=steps._to_regime_result(rr),
+        signal=steps._to_signal_summary(score,conf),risks=risks,good=json.loads(qualitative_response()))
+
+
+@pytest.mark.parametrize('indicator,text,accepted',[
+    ('moving_average','5MA와 20MA 및 60일선의 배열을 관찰합니다.',True),
+    ('moving_average','**20일선**의 방향을 관찰합니다.',True),
+    ('moving_average','5MA, 20MA 배열을 관찰합니다.',True),
+    ('moving_average','5MA,20MA 배열을 관찰합니다.',True),
+    ('moving_average','추세를 확인합니다. 20MA 회복 여부를 봅니다.',True),
+    ('rsi','RSI(14)는 중립 신호입니다.',True),
+    ('volume','가격과 동반된 거래량인지 살펴야 합니다.',True),
+    ('rsi','RSI 현재값 50',False),('moving_average','현재가 50원',False),
+    ('volume','거래량 50배',False),('rsi','50%',False),('volume','3주',False),
+    ('moving_average','5MA 100',False),('moving_average','15MA',False),
+    ('moving_average','5MA50',False),('moving_average','5MA%',False),
+    ('moving_average','(5MA)%',False),('moving_average','‘5MA’원',False),
+    ('moving_average','- 5MA',False),('moving_average','1/5MA',False),
+    ('moving_average','5.0MA',False),('moving_average','５MA',False),
+    ('moving_average','.5MA',False),
+    ('moving_average','5MA²',False),('moving_average','100,000원',False),
+    ('moving_average','+1.2e3',False),('moving_average','2026-11-13',False),
+    ('moving_average','Ⅳ',False),('moving_average','0',False),
+    ('rsi','5MA',False),('volume','RSI(14)',False),('rsi','RSI(14)원',False),
+])
+def test_numeric_roles_bind_identifier_unit_and_indicator_not_numeric_whitelist(indicator,text,accepted):
+    from src.agents.technical.application.nodes import interpret_report as interp
+    from src.agents.technical.domain.interpretation import numeric_claims as n
+    assert n.unsupported(text,indicators=(indicator,),field='detail',roles=interp._numeric_roles()) is (not accepted)
+
+
+def test_numeric_reference_is_exact_code_watchpoint_in_its_own_field_only():
+    from src.agents.technical.application.nodes import interpret_report as interp
+    from src.agents.technical.domain.interpretation import numeric_claims as n
+    roles=interp._numeric_roles()
+    for indicator in ('moving_average','rsi'):
+        reference=interp._FALLBACK_DETAIL_HINTS[indicator][1]
+        assert not n.unsupported(reference,indicators=(indicator,),field='detail_watchpoint',roles=roles)
+        assert not n.unsupported(reference,indicators=(indicator,),field='what_to_watch_next',roles=roles)
+        for field in ('detail','detail_reason','detail_caution','text','key_drivers'):
+            assert n.unsupported(reference,indicators=(indicator,),field=field,roles=roles)
+        for text in ('현재값 '+reference,reference+' 현재값입니다.',reference+' 50원',
+                     'RSI 50선이 현재값입니다.','RSI 현재값50이므로 50선을 관찰합니다.'):
+            assert n.unsupported(text,indicators=(indicator,),field='detail_watchpoint',roles=roles)
+        assert n.unsupported(reference,indicators=('volume',),field='detail_watchpoint',roles=roles)
+
+
+def test_numeric_identifier_policy_tracks_configured_window_and_keeps_role_metadata():
+    from src.agents.technical.domain.interpretation import numeric_claims as n
+    roles=n.build_roles(ma_windows=(7,21,63),rsi_period=9,references=())
+    assert not n.unsupported('7MA와 21일선',indicators=('moving_average',),field='detail',roles=roles)
+    assert n.unsupported('5MA',indicators=('moving_average',),field='detail',roles=roles)
+    assert not n.unsupported('RSI(9)',indicators=('rsi',),field='detail',roles=roles)
+    assert n.unsupported('RSI(14)',indicators=('rsi',),field='detail',roles=roles)
+    assert all(role.role=='identifier' and role.unit and role.window in {7,21,63,9} for role in roles)
+
+
+@pytest.mark.parametrize('field',['detail','detail_reason','detail_caution','detail_watchpoint'])
+def test_actual_verify_adds_fixed_failure_to_old_label_validation_without_changing_facts(field):
+    c=numeric_context();bad=copy.deepcopy(c.good);code=bad['details'][0]['indicator']
+    bad['details'][0][field]=bad['details'][0].get(field,'')+' 관측값 50원'
+    before=[(r.indicator,r.signal,r.value,list(r.metrics),r.weight) for r in c.rows]
+    old=c.node.trajectory_eval.evaluate(bad,final_regime=c.regime.final_regime,consensus=c.signal.consensus,
+        alignment_flag=c.regime.alignment_flag,signals=[(r.indicator,r.signal) for r in c.rows],
+        confidence_level=c.signal.confidence_level,risk_flags=[r.flag for r in c.risks])
+    assert old.passed  # Existing label/forbidden/shape checks alone do not establish numeric truth.
+    checked=c.node.verify(bad,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks)
+    assert not checked.passed and checked.failed_indicators==frozenset({code}) and not checked.interpretation_failed
+    assert any(f.target==f'technical_signals[{code}].{field}' and f.info==code and f.reason=='numeric_claim_unsupported' for f in checked.failures)
+    assert all('50원' not in (f.info or '') for f in checked.failures)
+    assert before==[(r.indicator,r.signal,r.value,list(r.metrics),r.weight) for r in c.rows]
+
+
+def test_qualitative_reply_nullable_optional_fields_and_correct_numeric_copy_tradeoff():
+    c=numeric_context()
+    for entry in c.good['details']:
+        entry.update(detail_reason=None,detail_caution='',detail_watchpoint=None)
+    checked=c.node.verify(c.good,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks)
+    assert checked.passed
+    copied=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    assert not c.node.verify(copied,regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks).passed
+    payload=c.node.build_payload(regime=c.regime,signal=c.signal,signals=c.rows,risks=c.risks)
+    assert payload['numeric_prose_policy'] and all({'indicator','role','expression','unit','window','fields'}==set(r) for r in payload['numeric_prose_policy'])
+    assert [(r['indicator'],r['value'],r['metrics']) for r in payload['technical_signals']]==[(r.indicator.value,r.value,r.metrics) for r in c.rows]
+
+
+async def run_numeric_reply(reply,regenerated=None):
+    llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK,json.dumps(reply,ensure_ascii=False),
+        json.dumps(reply if regenerated is None else regenerated,ensure_ascii=False)])
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kw:dict(D=st.DAILY,W=st.WEEKLY,M=st.MONTHLY),cache=None,trace_sink=None,enabled=True)
+    req=request()
+    try:
+        result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req)
+        assert runtime._ACTIVE_TASK is None and not ATTEMPTS and len(llm.prompts)==4
+        assert result['data']['result']['verification']['regen_count']==1
+        return result['data']['result'],llm
+    finally:
+        await asyncio.sleep(0);assert runtime._ACTIVE_TASK is None
+        assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
+
+
+@pytest.mark.parametrize('field',['detail','detail_reason','detail_caution','detail_watchpoint'])
+async def test_numeric_graph_replaces_four_fields_of_only_failed_indicator(field):
+    c=numeric_context();bad=copy.deepcopy(c.good);code=bad['details'][0]['indicator']
+    bad['details'][0][field]=bad['details'][0].get(field,'')+' 현재가 50원입니다.'
+    out,llm=await run_numeric_reply(bad)
+    assert out['interpretation']['source']=='llm_regenerated'
+    for actual,row,good in zip(out['technical_signals'],c.rows,c.good['details']):
+        assert (actual['indicator'],actual['signal'],actual['value'],actual['metrics'],actual['weight'])==(row.indicator.value,row.signal.value,row.value,row.metrics,row.weight)
+        if actual['indicator']==code:
+            fallback=c.node.fallback_detail(row.indicator,row.signal,row.metrics)
+            assert actual['detail_source']=='template_fallback'
+            for key in ('detail','detail_reason','detail_caution','detail_watchpoint'):assert actual[key]==getattr(fallback,key)
+        else:
+            assert actual['detail_source']=='llm_regenerated' and actual['detail']==good['detail']
+    assert out['signal']==c.signal.model_dump(mode='json') and out['verification']['label_matched'] is False
+    for prompt in llm.prompts[2:]:assert 'numeric_prose_policy' in prompt and '정확히 복사한 숫자도' in prompt
+
+
+@pytest.mark.parametrize('field',['interpretation_text','one_line_summary','trend_interpretation','signal_interpretation',
+    'risk_interpretation','timeframe_alignment','what_to_watch_next','invalidation_or_caution','key_drivers','warning_points'])
+async def test_numeric_graph_summary_and_lists_use_existing_whole_interpretation_fallback(field):
+    c=numeric_context();bad=copy.deepcopy(c.good)
+    if field=='interpretation_text':bad[field]+=' 현재가 50원입니다.'
+    else:bad[field]=['현재가 50원입니다.'] if field in ('key_drivers','warning_points') else '현재가 50원입니다.'
+    out,_=await run_numeric_reply(bad)
+    assert out['interpretation']['source']=='template_fallback'
+    assert all(row['detail_source']=='llm_regenerated' for row in out['technical_signals'])
+    assert '현재가 50원입니다.' not in json.dumps(out['interpretation'],ensure_ascii=False)
+    assert out['signal']==c.signal.model_dump(mode='json') and out['verification']['label_matched'] is False
+
+
+async def test_numeric_regeneration_can_keep_valid_qualitative_reply_without_an_extra_call():
+    c=numeric_context();bad=copy.deepcopy(c.good);bad['details'][0]['detail']+=' 현재가 50원입니다.'
+    out,_=await run_numeric_reply(bad,c.good)
+    assert out['verification']['outcome']=='passed' and out['verification']['label_matched'] is True
+    assert out['interpretation']['source']=='llm_regenerated'
+    assert all(row['detail_source']=='llm_regenerated' for row in out['technical_signals'])
+    assert out['signal']==c.signal.model_dump(mode='json')
+
+
+def test_missing_observed_value_cannot_become_zero_in_LLM_prose_or_prompt_facts():
+    from dataclasses import replace
+    c=numeric_context();row=replace(c.rows[0],value=None,metrics=[])
+    reply=copy.deepcopy(c.good);reply['details']=reply['details'][:1]
+    reply['details'][0]['detail']+=' 현재값 0입니다.'
+    checked=c.node.verify(reply,regime=c.regime,signal=c.signal,signals=[row],risks=c.risks)
+    assert not checked.passed and checked.failed_indicators==frozenset({row.indicator.value})
+    payload=c.node.build_payload(regime=c.regime,signal=c.signal,signals=[row],risks=c.risks)
+    assert row.value is None and payload['technical_signals'][0]['value'] is None and payload['technical_signals'][0]['metrics']==[]
+
+
 # CF053: the actual graph/bridge/runtime plus selected CF051 definitions; SDK
 # constructors and OHLCV are synthetic. This is not a SQL or provider test.
 import json
@@ -549,7 +719,7 @@ async def test_CF053_start_DB_remaining_only_narrows_original_monotonic_deadline
     'risk_interpretation','timeframe_alignment','what_to_watch_next','invalidation_or_caution',
     'key_drivers','warning_points'])
 async def test_explanation_failed_summary_section_never_survives_final_fallback(field):
-    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    bad=json.loads(qualitative_response())
     bad[field]=['금지된 매수 문장'] if field in {'key_drivers','warning_points'} else '금지된 매수 문장'
     llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK]+[json.dumps(bad,ensure_ascii=False)]*2)
     req=request()
@@ -569,7 +739,7 @@ async def test_explanation_failed_summary_section_never_survives_final_fallback(
 @pytest.mark.parametrize('field',['detail_reason','detail_caution','detail_watchpoint'])
 @pytest.mark.parametrize('bad_kind',['forbidden','conflict'])
 async def test_explanation_bad_additive_detail_is_replaced_and_verification_reflects_failure(field,bad_kind):
-    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    bad=json.loads(qualitative_response())
     first=bad['details'][0];code=first['indicator']
     first[field]='금지된 매수 문장' if bad_kind=='forbidden' else ('부정 약세' if '긍정' in first['detail'] else '강한 긍정')
     raw=json.dumps(bad,ensure_ascii=False);llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK,raw,raw]);req=request()
@@ -587,7 +757,7 @@ async def test_explanation_bad_additive_detail_is_replaced_and_verification_refl
 @pytest.mark.parametrize('field',['indicator','detail','detail_reason','detail_caution','detail_watchpoint'])
 @pytest.mark.parametrize('value',[123,True,{'unsafe':'not a string'},['not a string']])
 def test_explanation_detail_fields_are_never_coerced_from_other_types(field,value):
-    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY));bad['details'][0][field]=value
+    bad=json.loads(qualitative_response());bad['details'][0][field]=value
     with pytest.raises(st.interp.LlmOutputParseError):st.interp.parse_llm_output(json.dumps(bad))
 
 
@@ -611,7 +781,7 @@ def test_explanation_fallback_does_not_describe_positive_signals_as_a_downturn_i
 @pytest.mark.parametrize('regenerate',[False,True])
 @pytest.mark.parametrize('optional',['text',None,''])
 async def test_explanation_safe_additive_fields_and_successful_regeneration_keep_LLM(regenerate,optional):
-    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    good=json.loads(qualitative_response())
     good['one_line_summary']='확정된 기술적 상태를 참고합니다.'
     for entry in good['details']:
         entry.update(detail_reason='확정된 지표 수치를 기준으로 설명합니다.',
@@ -635,7 +805,7 @@ async def test_explanation_safe_additive_fields_and_successful_regeneration_keep
 
 @pytest.mark.parametrize('case',['call_error','parse_error','both_failed'])
 async def test_explanation_existing_full_fallback_and_combined_failure_keep_original_limits(case):
-    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY));sentinel='cf055-synthetic-exception-never-serialized'
+    good=json.loads(qualitative_response());sentinel='cf055-synthetic-exception-never-serialized'
     if case=='call_error':responses=[RuntimeError(sentinel)]
     elif case=='parse_error':responses=['{','{']
     else:

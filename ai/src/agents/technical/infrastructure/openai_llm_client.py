@@ -38,6 +38,7 @@ import re
 import threading
 from typing import Any
 from uuid import UUID
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 
 import openai
 import httpx
@@ -477,7 +478,7 @@ class OpenAiLlmClient:
         budget=self._request_budget
         if type(budget) is not TechnicalRequestLlmBudget:
             raise LlmCallError('TECHNICAL_LLM_POLICY_INVALID') from None
-        ordinal=None;received=False;usage=None;model=tier='unknown';phase='VALIDATION'
+        ordinal=None;received=False;usage=None;model=tier='unknown';phase='VALIDATION';bundle=None;scope=None
         started=time.perf_counter()
         try:
             if type(prompt) is not str:
@@ -502,7 +503,7 @@ class OpenAiLlmClient:
             if bundle is None:
                 count=budget._count(ordinal,self,request,prompt_sha,projection_sha,request_sha,dispatch)
             else:
-                with bundle.phase(ordinal,'count',self,request,dispatch):
+                with bundle.phase(ordinal,'count',self,request,dispatch) as scope:
                     count=budget._count(ordinal,self,request,prompt_sha,projection_sha,request_sha,dispatch)
             phase='VALIDATION'
             if bundle is None:
@@ -510,7 +511,7 @@ class OpenAiLlmClient:
                 phase='SDK'
                 response=create(**request,timeout=timeout)
             else:
-                with bundle.phase(ordinal,'generation',self,request,dispatch):
+                with bundle.phase(ordinal,'generation',self,request,dispatch) as scope:
                     timeout=budget._timeout_for(self)
                     bundle._local.scope.timeout=timeout
                     phase='SDK'
@@ -553,7 +554,12 @@ class OpenAiLlmClient:
             return text
         except BaseException as error:
             supplied=str(error) if type(error) is _StrictLlmFailure else None
-            reason=supplied if supplied in _STRICT_REASONS else 'SDK_UNKNOWN' if phase=='SDK' else 'COUNT_FAILED' if phase=='COUNT' else 'POLICY_INVALID'
+            # Only this owned phase may preserve a fixed transport failure
+            # through an SDK wrapper. Never inspect provider exception text.
+            owned_reason=(scope.failure_reason if type(scope) is _TechnicalPhase and scope.bundle is bundle
+                and bundle is budget._official_bundle and scope.ordinal==ordinal else None)
+            reason=(supplied if supplied in _STRICT_REASONS else owned_reason if owned_reason in _STRICT_REASONS
+                else 'SDK_UNKNOWN' if phase=='SDK' else 'COUNT_FAILED' if phase=='COUNT' else 'POLICY_INVALID')
             budget._finish(ordinal,response_received=received,usage=usage,model=model,tier=tier,reason=reason,
                 elapsed_ms=int((time.perf_counter()-started)*1000))
             if isinstance(error,asyncio.CancelledError):raise asyncio.CancelledError() from None
@@ -599,7 +605,10 @@ class _TechnicalResponseStream(httpx.SyncByteStream):
                 yield part
             self._bundle.remaining(self._scope)
             if self._length is not None and size!=self._length:raise _StrictLlmFailure('RESPONSE_LIMIT')
-        except BaseException:
+        except BaseException as error:
+            if type(error) is _StrictLlmFailure and len(error.args)==1:
+                value=error.args[0]
+                self._scope.failure_reason=value if type(value) is str and value in _STRICT_REASONS else 'HTTP_INVALID'
             try:self.close()
             except BaseException:pass
             raise
@@ -609,14 +618,16 @@ class _TechnicalResponseStream(httpx.SyncByteStream):
         if not self._closed:
             self._closed=True
             try:self._response.close()
-            except Exception:raise _StrictLlmFailure('HTTP_INVALID') from None
+            except Exception:
+                self._scope.failure_reason='HTTP_INVALID'
+                raise _StrictLlmFailure('HTTP_INVALID') from None
 
 
 class _TechnicalPhase:
     def __init__(self,bundle,ordinal,phase,adapter,request,dispatch):
         self.bundle=bundle;self.ordinal=ordinal;self.phase=phase;self.adapter=adapter
         self.request=json.loads(_strict_json(request));self.dispatch=dispatch
-        self.request_sha=bundle.budget._request_sha(request);self.forwarded=False;self.timeout=None
+        self.request_sha=bundle.budget._request_sha(request);self.forwarded=False;self.timeout=None;self.failure_reason=None
 
     def __enter__(self):
         b=self.bundle
@@ -644,6 +655,14 @@ class _TechnicalOwnedTransport(httpx.BaseTransport):
 
     def handle_request(self,request):
         b=self.bundle;scope=None if b is None else getattr(b._local,'scope',None)
+        try:return self._handle_request(request,b,scope)
+        except _StrictLlmFailure as error:
+            if type(scope) is _TechnicalPhase and scope.bundle is b:
+                value=error.args[0] if len(error.args)==1 else None
+                scope.failure_reason=value if type(value) is str and value in _STRICT_REASONS else 'HTTP_INVALID'
+            raise
+
+    def _handle_request(self,request,b,scope):
         if scope is None:raise _StrictLlmFailure('SDK_POLICY_INVALID')
         b.check();b.remaining(scope)
         if self._inner is not self._original:raise _StrictLlmFailure('SDK_POLICY_INVALID')
@@ -792,7 +811,7 @@ class _TechnicalOwnedBundle:
         s=self.sdk;c=self.client
         if (s is None or s._client is not c or c._transport is not self.transport
                 or c._trust_env is not False or c.follow_redirects is not False or c._mounts
-                or any(c._event_hooks.values()) or self.transport._inner is not self.inner
+                or any(c._event_hooks.values()) or bool(c.cookies) or self.transport._inner is not self.inner
                 or type(s.max_retries) is not int or s.max_retries!=0
                 or str(s.base_url)!='https://api.openai.com/v1/' or s.api_key!=self._credential
                 or s.responses is not self.responses
@@ -860,7 +879,8 @@ def official_count_openai_client(*,request_budget,api_key,request_wire_cap,count
         bundle.inner=httpx.HTTPTransport(verify=True,trust_env=False,proxy=None,retries=0)
         bundle.transport=_TechnicalOwnedTransport(bundle.inner);bundle.transport.bundle=bundle
         bundle.client=httpx.Client(transport=bundle.transport,trust_env=False,follow_redirects=False,
-            proxy=None,mounts=None,event_hooks=None,timeout=timeout)
+            proxy=None,mounts=None,event_hooks=None,timeout=timeout,
+            cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])))
         bundle.sdk=openai.OpenAI(api_key=api_key,admin_api_key='',organization='',project='',webhook_secret='',
             base_url='https://api.openai.com/v1/',max_retries=0,timeout=timeout,http_client=bundle.client,
             default_headers={'Accept-Encoding':'identity','OpenAI-Organization':openai.omit,'OpenAI-Project':openai.omit},

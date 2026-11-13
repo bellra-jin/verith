@@ -526,6 +526,11 @@ def _fetch_ohlcv_range(
         if not bars:  # 자연 종료 ②: 빈 청크(더 과거 데이터 없음)
             break
         for bar in bars:
+            previous = by_date.get(bar.date)
+            if previous is not None and previous != bar:
+                # An overlapping page may repeat an identical candle, but a
+                # conflicting price/volume cannot silently replace its source.
+                raise KisFieldError("KIS_MARKET_CONFLICTING_BAR")
             by_date[bar.date] = bar
 
         chunk_oldest = min(bar.date for bar in bars)

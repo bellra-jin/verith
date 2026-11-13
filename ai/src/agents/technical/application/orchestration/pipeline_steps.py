@@ -36,7 +36,7 @@ from ...infrastructure.observability.trace_logger import TraceLogger, hash_query
 from ...domain.regime.multiframe import MultiframeRegimeResult
 from .....shared.runtime.deadline import Deadline, check_deadline
 from ...domain.models.contracts import ChartPayload, InterpretationResult, RegimeResult, RiskItem, SignalSummary, TechnicalAgentInput, TechnicalAgentOutput, TechnicalSignal, VerificationResult
-from ...domain.models.enums import AlignmentFlag, DataStatus, GenerationSource, Regime, Trend, VerificationOutcome
+from ...domain.models.enums import AlignmentFlag, DataStatus, GenerationSource, IndicatorType, Regime, Trend, VerificationOutcome
 from ...domain.models.intraday import IntradayCandle, IntradayContext
 from ...domain.models.ohlcv import OHLCV
 from ...infrastructure.cache_service import OhlcvCache, as_of_identity
@@ -371,6 +371,11 @@ def _interpret(
         for i, name in enumerate(prompt_seq):
             if i > 0:  # 직전 검증 실패로 재생성 시도 → retry 이벤트(§12)
                 check_deadline(deadline, "interpret_regeneration")  # 재생성 시도 전 예산 확인
+                # Reuse the same confirmed facts and bounded machine codes;
+                # never echo the rejected candidate or its arbitrary info.
+                payload = dict(payload, validation_feedback=(
+                    trajectory_eval.diagnostic_codes(last.result) if last is not None and last.result is not None
+                    else [{"target": "output", "reason": "parse_failed"}]))
                 trace.emit("retry", node="interpret_report",
                            output_summary={"attempt": i, "reason": "verification_failed"})
             attempt = _attempt(client, name, payload,
@@ -405,9 +410,10 @@ def _emit_validation(trace: TraceLogger, attempt: _Attempt, attempt_idx: int) ->
     if ev is None:  # 파싱 실패 → 검증 자체 불가
         trace.emit("validation", "failed", node="interpret_report",
                    output_summary={"attempt": attempt_idx, "validation_result": "parse_failed"})
-        logger.warning("interpret_validation_failed",
+        logger.warning("interpret_validation_failed parse_failed",
                        extra={"attempt": attempt_idx, "reason": "parse_failed"})
         return
+    failed_indicators = sorted(ev.failed_indicators & {i.value for i in IndicatorType})
     trace.emit(
         "validation", "success" if ev.passed else "failed", node="interpret_report",
         output_summary={
@@ -416,18 +422,19 @@ def _emit_validation(trace: TraceLogger, attempt: _Attempt, attempt_idx: int) ->
             "label_matched": ev.passed,
             "interpretation_failed": ev.interpretation_failed,
             "details_structure_failed": ev.details_structure_failed,
-            "failed_indicators": sorted(ev.failed_indicators),  # 지표명만(원문 없음)
+            "failed_indicators": failed_indicators,
+            "failures": trajectory_eval.diagnostic_codes(ev),
         },
     )
     if not ev.passed:  # 운영 진단성(§C) — trace sink 없어도 실패 사유가 로그에 남는다.
         logger.warning(
-            "interpret_validation_failed",
+            "interpret_validation_failed %s", trajectory_eval.diagnostic_codes(ev),
             extra={
                 "attempt": attempt_idx,
                 "interpretation_failed": ev.interpretation_failed,
                 "details_structure_failed": ev.details_structure_failed,
-                "failed_indicators": sorted(ev.failed_indicators),
-                "reasons": sorted({f"{f.target}:{f.reason}" for f in ev.failures})[:12],
+                "failed_indicators": failed_indicators,
+                "reasons": trajectory_eval.diagnostic_codes(ev),
             },
         )
 

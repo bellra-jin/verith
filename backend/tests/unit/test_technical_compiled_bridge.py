@@ -138,6 +138,35 @@ async def test_real_compiled_graph_through_thread_bridge_and_strict_completion(c
             assert not worker.is_alive()
         assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
 
+async def test_narrow_range_support_and_resistance_remain_neutral_in_compiled_result():
+    from src.agents.technical.domain.models.ohlcv import OHLCV
+    from src.agents.technical.domain.synthesis.signal_score import compute_signal_score
+    daily=[OHLCV(date=bar.date,open=100,high=101,low=99,close=100,
+                 volume=bar.volume,trading_value=bar.trading_value) for bar in st.DAILY]
+    expected=compute_signal_score(daily)
+    row=next(r for r in expected.technical_signals if r.indicator.value=='support_resistance')
+    assert row.signal.value=='neutral' and row.metrics==['지지 99.0','저항 101.0']
+    llm=st.ScriptedLlm(list(graph_fixtures._HAPPY))
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kwargs:dict(D=daily,W=st.WEEKLY,M=st.MONTHLY),
+        cache=None,trace_sink=None,enabled=True)
+    req=request()
+    try:
+        result=await runtime.BoundaryRuntime(bridge).run(req)
+        contract.validate_response(result,req)
+        actual=result['data']['result']
+        stored=next(r for r in actual['technical_signals'] if r['indicator']=='support_resistance')
+        assert actual['data_status']=='normal' and stored['signal']=='neutral'
+        assert stored['metrics']==row.metrics and stored['weight']==row.weight and stored['value']==100
+        assert actual['signal']['signal_score']==expected.signal_score
+        assert actual['signal']['consensus']==expected.consensus.value
+        assert len(llm.prompts)<=4 and not ATTEMPTS
+    finally:
+        await asyncio.sleep(0)
+        assert runtime._ACTIVE_TASK is None
+        assert not any(t.name=='verith-technical-bridge' and t.is_alive() for t in threading.enumerate())
+
+
 # CF053: the actual graph/bridge/runtime plus selected CF051 definitions; SDK
 # constructors and OHLCV are synthetic. This is not a SQL or provider test.
 import json

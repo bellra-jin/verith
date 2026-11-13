@@ -79,9 +79,13 @@ def volume_signal(prev_close: float | None, latest_close: float, volume_ratio: f
 def support_resistance_signal(close: float, support: float | None, resistance: float | None) -> Signal | None:
     if support is None and resistance is None:
         return None  # 제외
-    if support is not None and support != 0 and abs(close - support) / support <= NEAR_SUPPORT_THRESHOLD_PCT:
+    near_support = support is not None and support != 0 and abs(close - support) / support <= NEAR_SUPPORT_THRESHOLD_PCT
+    near_resistance = resistance is not None and resistance != 0 and abs(close - resistance) / resistance <= NEAR_RESISTANCE_THRESHOLD_PCT
+    if near_support and near_resistance:
+        return Signal.NEUTRAL  # 양쪽에 동시에 근접하면 방향을 단정하지 않는다
+    if near_support:
         return Signal.POSITIVE  # 지지 근처
-    if resistance is not None and resistance != 0 and abs(close - resistance) / resistance <= NEAR_RESISTANCE_THRESHOLD_PCT:
+    if near_resistance:
         return Signal.NEGATIVE  # 저항 근처
     return Signal.NEUTRAL
 

@@ -95,7 +95,7 @@ SIGNAL_WEAK = 0.3              # 0.3 <= |score| < 0.5 → 약한 (긍정/부정)
 | `moving_average` | `close > 20MA` AND `5MA > 20MA` | `close < 20MA` AND `5MA < 20MA` | 그 외 |
 | `rsi` | `50 < RSI < RSI_OVERBOUGHT` | `RSI_OVERSOLD < RSI < 50` | `RSI ≥ RSI_OVERBOUGHT` 또는 `RSI ≤ RSI_OVERSOLD` 또는 `RSI == 50` |
 | `volume` | 최신봉 상승 AND `volume_ratio ≥ 1` | 최신봉 하락 AND `volume_ratio ≥ 1` | `volume_ratio < 1` 또는 계산 불가 |
-| `support_resistance` | 지지 근처(±`NEAR_SUPPORT_THRESHOLD_PCT`) | 저항 근처(±`NEAR_RESISTANCE_THRESHOLD_PCT`) | 그 외 |
+| `support_resistance` | 지지에만 근접(±`NEAR_SUPPORT_THRESHOLD_PCT`) | 저항에만 근접(±`NEAR_RESISTANCE_THRESHOLD_PCT`) | 양쪽 동시 근접 또는 그 외 |
 | `pattern` | `is_bullish` | `is_bearish` | 도지 또는 판단 불가 |
 
 - **RSI 극단은 방향 신호로 쓰지 않는다** — `RSI ≥ RSI_OVERBOUGHT`는 risk `overheated_momentum`/regime `overheated`, `RSI ≤ RSI_OVERSOLD`는 regime `oversold_rebound_watch`에서 다룬다.

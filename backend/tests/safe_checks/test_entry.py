@@ -1322,6 +1322,45 @@ class CF040Boundary(unittest.TestCase):
 import hashlib
 
 class TechnicalGraphBoundary(unittest.TestCase):
+    def test_support_resistance_simultaneous_proximity_has_no_direction_bias(self):
+        import ast
+        from enum import Enum
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        path='ai/src/agents/technical/domain/synthesis/signal_score.py'
+        raw=c.regular_bytes(root,path)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),c.GRAPH_INPUTS[path])
+        fn=next(n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef) and n.name=='support_resistance_signal')
+        allowed=(ast.FunctionDef,ast.arguments,ast.arg,ast.If,ast.Return,ast.Assign,
+                 ast.Name,ast.Load,ast.Store,ast.Constant,ast.Attribute,ast.BoolOp,ast.And,
+                 ast.Compare,ast.Is,ast.IsNot,ast.NotEq,ast.LtE,ast.BinOp,ast.Div,ast.Sub,
+                 ast.BitOr,ast.Call)
+        self.assertTrue(all(isinstance(n,allowed) for n in ast.walk(fn)))
+        self.assertFalse(fn.decorator_list or fn.args.defaults or fn.args.kw_defaults)
+        self.assertTrue(all(isinstance(n.func,ast.Name) and n.func.id=='abs' and len(n.args)==1 and not n.keywords
+                            for n in ast.walk(fn) if isinstance(n,ast.Call)))
+        self.assertTrue(all(isinstance(n.value,ast.Name) and n.value.id=='Signal' and n.attr in {'POSITIVE','NEGATIVE','NEUTRAL'}
+                            for n in ast.walk(fn) if isinstance(n,ast.Attribute)))
+        class Signal(Enum):
+            POSITIVE='positive';NEGATIVE='negative';NEUTRAL='neutral'
+        settings=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/config.py'))
+        thresholds={n.targets[0].id:ast.literal_eval(n.value) for n in settings.body
+                    if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)
+                    and n.targets[0].id in {'NEAR_SUPPORT_THRESHOLD_PCT','NEAR_RESISTANCE_THRESHOLD_PCT'}}
+        self.assertEqual(thresholds,{'NEAR_SUPPORT_THRESHOLD_PCT':.02,'NEAR_RESISTANCE_THRESHOLD_PCT':.02})
+        env={'__builtins__':{'abs':abs,'float':float},'Signal':Signal,**thresholds}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'<pinned-proximity>','exec'),env)
+        signal=env[fn.name]
+        for close,support,resistance,expected in ((100,99,101,Signal.NEUTRAL),
+                (100,100,100,Signal.NEUTRAL),(100,99,150,Signal.POSITIVE),
+                (100,50,101,Signal.NEGATIVE),(100,99,None,Signal.POSITIVE),
+                (100,None,101,Signal.NEGATIVE),(100,50,150,Signal.NEUTRAL),(100,None,None,None),
+                (100,0,0,Signal.NEUTRAL),(102,100,None,Signal.POSITIVE),
+                (102.0001,100,None,Signal.NEUTRAL),(98,None,100,Signal.NEGATIVE),
+                (97.9999,None,100,Signal.NEUTRAL)):
+            with self.subTest(close=close,support=support,resistance=resistance):
+                self.assertIs(signal(close,support,resistance),expected)
+
     def test_exact_sources_and_modes_do_not_expand_cf021(self):
         from scripts import check_safe as c
         from unittest.mock import patch

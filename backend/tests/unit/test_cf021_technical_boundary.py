@@ -131,6 +131,44 @@ def result():
     return copy.deepcopy(FIXTURE['result'])
 
 
+@pytest.mark.parametrize('model',[
+    sys.modules['src.agents.technical.domain.models.ohlcv'].OHLCV,
+    sys.modules['src.agents.technical.domain.models.intraday'].IntradayCandle,
+    sys.modules['src.modules.technical.domain.chart_contracts'].OHLCV,
+    sys.modules['src.modules.technical.domain.chart_contracts'].IntradayCandle,
+])
+@pytest.mark.parametrize('field,value',[('open',89),('open',111),('close',89),('close',111)])
+def test_candle_open_and_close_outside_range_are_rejected_on_both_boundaries(model,field,value):
+    data=dict(open=100,high=110,low=90,close=100,volume=0,trading_value=0)
+    data.update(timestamp='2026-06-30T09:00:00',interval='1min') if model.__name__=='IntradayCandle' else data.update(date='2026-06-30')
+    data[field]=value;before=copy.deepcopy(data)
+    with pytest.raises(ValueError,match=field+' must be within'):
+        model.model_validate(data)
+    assert data==before  # no clamping or silent repair
+
+
+@pytest.mark.parametrize('model',[
+    sys.modules['src.agents.technical.domain.models.ohlcv'].OHLCV,
+    sys.modules['src.agents.technical.domain.models.intraday'].IntradayCandle,
+    sys.modules['src.modules.technical.domain.chart_contracts'].OHLCV,
+    sys.modules['src.modules.technical.domain.chart_contracts'].IntradayCandle,
+])
+@pytest.mark.parametrize('prices',[(90,110,90,110),(110,110,90,90),(0,0,0,0),(100.25,100.5,100.0,100.5)])
+def test_candle_inclusive_edges_zero_and_fractional_values_are_preserved(model,prices):
+    data=dict(zip(('open','high','low','close'),prices),volume=0,trading_value=0)
+    if model.__name__=='IntradayCandle':data.update(timestamp='2026-06-30T09:00:00',interval='1min',trading_value=None)
+    else:data.update(date='2026-06-30')
+    assert model.model_validate(data).model_dump()==data
+
+
+@pytest.mark.parametrize('module',[A,B])
+@pytest.mark.parametrize('field',['open','close'])
+def test_invalid_range_candle_cannot_cross_complete_result_boundary(module,field):
+    output=result();candle=output['charts'][0]['chart_data']['candles'][0]
+    candle[field]=candle['high']+1
+    with pytest.raises(ValueError):module.validate_result(output,request())
+
+
 def binding(value=None):
     value = value or request()
     data = value['data']; ids = data['context']
@@ -706,18 +744,20 @@ async def test_waiter_cancellation_is_immediate_without_releasing_running_thread
 
 
 async def test_repeated_inner_task_cancellation_cannot_complete_before_physical_worker():
-    probe=ThreadProbe();runtime=RUN.BoundaryRuntime(probe.bridge(),timeout=.01)
+    probe=ThreadProbe();runtime=RUN.BoundaryRuntime(probe.bridge())
     try:
-        with pytest.raises(RUN.BoundaryTimeout):await runtime.run(request())
+        # Only the first waiter is deliberately short; slot recovery is not a 10ms performance test.
+        with pytest.raises(RUN.BoundaryTimeout):await runtime.run(request(),remaining=.01)
         await wait_thread(probe)
         active=RUN._ACTIVE_TASK;assert active is not None and probe.entered.is_set()
         for _ in range(2):
             active.cancel();await asyncio.sleep(0)
             assert not active.done() and probe.threads[0].is_alive()
-            with pytest.raises(RUN.BoundaryBusy):await runtime.run(request())
+            with pytest.raises(RUN.BoundaryBusy):await runtime.run(request(),remaining=.01)
         assert len(probe.calls)==1
         await finish_thread(probe,active)
         assert active.cancelled()
+        assert runtime.timeout==A.WAIT_SECONDS
         assert (await runtime.run(request()))['data']['result']==result()
     finally:await finish_thread(probe)
 

@@ -21,3 +21,5 @@
 합성 ASGI/가짜 엔진과 실제 발급 SQL 세션/Verith 소유 격리 PG는 실제 OpenAI/KIS, 실제 compiled graph, Google 로그인·브라우저·TLS/운영 배포 수용과 구분한다. 이전 실행/once/원본 자료와 $1.30 보수 hold는 변경하지 않는다.
 
 기존 PG 요약의 synthetic_provider_execution_runs=3/mock_provider_HTTP_requests=6은 앞선 CF053 baseline 그룹의 수치이며 전체 조합/API 누적 호출 수가 아니다. 이번 네 공개 API 그룹은 선택 관점별 가짜 엔진 증분과 관측 요청의 증분 0을 별도로 assert한다. 실제 공급자 호출과 compiled graph dispatch는 0이다.
+
+PG 최종 회차 뒤 새 endpoint의 16KiB 초과 청크를 버퍼에 합치기 전에 거절하도록 순서만 보완했고, core 156/guard0을 다시 확인했다. 정상 요청/SQL·실행·복원 계약은 그대로다. 이 최종 크기 검사 delta와 PG 실행 바이트는 구분한다.

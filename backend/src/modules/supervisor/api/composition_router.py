@@ -60,8 +60,9 @@ async def boundary(app, scope, receive, send):
                 while True:
                     message=await receive()
                     if message['type']!='http.request':raise ValueError()
-                    raw.extend(message.get('body',b''))
-                    if len(raw)>16384:raise ValueError()
+                    chunk=message.get('body',b'')
+                    if len(raw)+len(chunk)>16384:raise ValueError()
+                    raw.extend(chunk)
                     if not message.get('more_body',False):break
             if cl and len(raw)!=int(cl[0]):raise ValueError()
             (Draft if path.endswith('/prepare') else C.Confirm).model_validate(decode(raw))

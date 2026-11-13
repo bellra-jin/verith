@@ -1339,6 +1339,86 @@ class TechnicalGraphBoundary(unittest.TestCase):
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
             self.assertFalse(c.source_allowed(name+'.adjacent'))
 
+    def test_quality_failures_include_sections_and_every_detail_field(self):
+        import importlib.util
+        import importlib.machinery
+        from types import ModuleType
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        prefix='_technical_quality_self'
+        names=[prefix,prefix+'.domain',prefix+'.domain.models',prefix+'.domain.interpretation']
+        loaded=[]
+        try:
+            for name in names:
+                module=ModuleType(name);module.__path__=[]
+                module.__spec__=importlib.machinery.ModuleSpec(name,None,is_package=True)
+                sys.modules[name]=module;loaded.append(name)
+            modules={}
+            for suffix,relative in (
+                ('domain.models.enums','ai/src/agents/technical/domain/models/enums.py'),
+                ('domain.interpretation.keyword_rules','ai/src/agents/technical/domain/interpretation/keyword_rules.py'),
+                ('domain.interpretation.trajectory_eval','ai/src/agents/technical/domain/interpretation/trajectory_eval.py')):
+                self.assertEqual(hashlib.sha256(c.regular_bytes(root,relative)).hexdigest(),c.GRAPH_INPUTS[relative])
+                name=prefix+'.'+suffix;spec=importlib.util.spec_from_file_location(name,root/relative)
+                module=importlib.util.module_from_spec(spec);sys.modules[name]=module;loaded.append(name)
+                spec.loader.exec_module(module);modules[suffix]=module
+            e=modules['domain.models.enums'];v=modules['domain.interpretation.trajectory_eval']
+            for field in ('one_line_summary','trend_interpretation','signal_interpretation','risk_interpretation',
+                          'timeframe_alignment','what_to_watch_next','invalidation_or_caution','key_drivers','warning_points'):
+                bad=['매수'] if field in {'key_drivers','warning_points'} else '매수'
+                failures=v._evaluate_sections({field:bad})
+                self.assertTrue(failures)
+                self.assertTrue(v.EvalResult(False,tuple(failures)).interpretation_failed)
+            for field in ('detail_reason','detail_caution','detail_watchpoint'):
+                for text in ('매수','부정 약세'):
+                    result=v.evaluate_details([{'indicator':'moving_average','detail':'긍정 신호',field:text}],
+                        signals=[(e.IndicatorType.MOVING_AVERAGE,e.Signal.POSITIVE)])
+                    self.assertTrue(result)
+                    self.assertTrue(all(f.target==f'technical_signals[moving_average].{field}' and f.info=='moving_average' for f in result))
+                    self.assertEqual(v.EvalResult(False,tuple(result)).failed_indicators,frozenset({'moving_average'}))
+                for optional in ('추가 관찰이 필요합니다.',None,''):
+                    good=v.evaluate_details([{'indicator':'moving_average','detail':'긍정 신호',field:optional}],
+                        signals=[(e.IndicatorType.MOVING_AVERAGE,e.Signal.POSITIVE)])
+                    self.assertEqual(good,[])
+        finally:
+            for name in reversed(loaded):sys.modules.pop(name,None)
+
+    def test_quality_granular_fallback_routes_section_and_detail_failure(self):
+        import ast
+        import __future__
+        from types import SimpleNamespace
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        relative='ai/src/agents/technical/application/orchestration/pipeline_steps.py'
+        raw=c.regular_bytes(root,relative)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),c.GRAPH_INPUTS[relative])
+        node=next(n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef) and n.name=='_granular_fallback')
+        calls={'_full_fallback','any','VerificationResult','_Interpretation',
+               'interp.fallback_interpretation','interp.interpretation_from_llm','interp.details_from_llm'}
+        for item in ast.walk(node):
+            if isinstance(item,ast.Call):self.assertIn(ast.unparse(item.func),calls)
+            self.assertNotIsInstance(item,(ast.Import,ast.ImportFrom,ast.Global,ast.Nonlocal))
+        for summary_failed in (True,False):
+            seen=[]
+            def fallback(**kw):seen.append('fallback');return 'safe summary'
+            def kept(*args,**kw):seen.append('kept');return 'valid summary'
+            def details(*args,**kw):seen.append(kw['failed_indicators']);return ['safe detail']
+            ev=SimpleNamespace(details_structure_failed=False,failures=(SimpleNamespace(reason='forbidden_term'),),
+                interpretation_failed=summary_failed,failed_indicators=frozenset() if summary_failed else frozenset({'moving_average'}),passed=False)
+            scope={'__builtins__':{'any':any},'interp':SimpleNamespace(fallback_interpretation=fallback,
+                interpretation_from_llm=kept,details_from_llm=details),
+                '_full_fallback':lambda *a,**k:self.fail('Unexpected full fallback'),
+                'GenerationSource':SimpleNamespace(LLM='llm',LLM_REGENERATED='llm_regenerated'),
+                'VerificationResult':SimpleNamespace,'VerificationOutcome':SimpleNamespace(TEMPLATE_FALLBACK='template_fallback'),
+                '_Interpretation':lambda i,d,v:SimpleNamespace(interpretation=i,details=d,verification=v)}
+            exec(compile(ast.Module(body=[node],type_ignores=[]),'<fixed-quality-granular>','exec',
+                flags=__future__.annotations.compiler_flag,dont_inherit=True),scope)
+            result=scope['_granular_fallback'](SimpleNamespace(parsed={},result=ev),None,None,[],[],regen_count=1)
+            self.assertEqual(seen[0],'fallback' if summary_failed else 'kept')
+            self.assertEqual(seen[1],ev.failed_indicators)
+            self.assertFalse(result.verification.label_matched)
+            self.assertEqual(result.verification.outcome,'template_fallback')
+
     def test_dependency_change_and_escape_rejected(self):
         from scripts import check_safe as c
         from unittest.mock import patch

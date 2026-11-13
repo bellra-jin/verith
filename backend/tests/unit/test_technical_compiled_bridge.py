@@ -360,6 +360,120 @@ async def test_CF053_start_DB_remaining_only_narrows_original_monotonic_deadline
     assert len(h.events)==8 and len(h.observations)==1
 
 
+@pytest.mark.parametrize('field',['one_line_summary','trend_interpretation','signal_interpretation',
+    'risk_interpretation','timeframe_alignment','what_to_watch_next','invalidation_or_caution',
+    'key_drivers','warning_points'])
+async def test_explanation_failed_summary_section_never_survives_final_fallback(field):
+    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    bad[field]=['금지된 매수 문장'] if field in {'key_drivers','warning_points'} else '금지된 매수 문장'
+    llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK]+[json.dumps(bad,ensure_ascii=False)]*2)
+    req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req)
+    contract.validate_response(result,req);out=result['data']['result']
+    assert '금지된 매수 문장' not in json.dumps(out,ensure_ascii=False)
+    assert out['interpretation']['source']=='template_fallback'
+    assert out['verification']['outcome']=='template_fallback' and out['verification']['label_matched'] is False
+    assert out['verification']['regen_count']==1 and len(llm.prompts)==4
+    assert all(item['detail_source']=='llm_regenerated' for item in out['technical_signals'])
+    confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
+    assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+
+
+@pytest.mark.parametrize('field',['detail_reason','detail_caution','detail_watchpoint'])
+@pytest.mark.parametrize('bad_kind',['forbidden','conflict'])
+async def test_explanation_bad_additive_detail_is_replaced_and_verification_reflects_failure(field,bad_kind):
+    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    first=bad['details'][0];code=first['indicator']
+    first[field]='금지된 매수 문장' if bad_kind=='forbidden' else ('부정 약세' if '긍정' in first['detail'] else '강한 긍정')
+    raw=json.dumps(bad,ensure_ascii=False);llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK,raw,raw]);req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req);out=result['data']['result']
+    selected=next(item for item in out['technical_signals'] if item['indicator']==code)
+    assert selected['detail_source']=='template_fallback' and selected[field]!=first[field]
+    assert out['interpretation']['source']=='llm_regenerated'
+    assert out['verification']['label_matched'] is False and out['verification']['outcome']=='template_fallback'
+    confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
+    assert len(llm.prompts)==4 and runtime._ACTIVE_TASK is None
+
+
+@pytest.mark.parametrize('field',['indicator','detail','detail_reason','detail_caution','detail_watchpoint'])
+@pytest.mark.parametrize('value',[123,True,{'unsafe':'not a string'},['not a string']])
+def test_explanation_detail_fields_are_never_coerced_from_other_types(field,value):
+    bad=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY));bad['details'][0][field]=value
+    with pytest.raises(st.interp.LlmOutputParseError):st.interp.parse_llm_output(json.dumps(bad))
+
+
+@pytest.mark.parametrize('direction',['positive','negative'])
+def test_explanation_fallback_does_not_describe_positive_signals_as_a_downturn_in_every_regime(direction):
+    from src.agents.technical.domain.models.contracts import RegimeResult,SignalSummary
+    from src.agents.technical.domain.models.enums import Regime,Trend,AlignmentFlag,Consensus,ConfidenceLevel,Signal,IndicatorType
+    from src.agents.technical.domain.synthesis.signal_score import IndicatorSignalResult
+    signal=SignalSummary(consensus=Consensus.WEAK_POSITIVE,signal_score=.3,confidence=.42,confidence_level=ConfidenceLevel.MEDIUM,confidence_basis='synthetic')
+    chosen=Signal(direction)
+    signals=[IndicatorSignalResult(IndicatorType.MOVING_AVERAGE,chosen,100.0,['5MA 100.0'],.3)]
+    for final in Regime:
+        if final==Regime.UNAVAILABLE:continue
+        regime=RegimeResult(final_regime=final,daily_regime=final,weekly_trend=Trend.UP,monthly_trend=Trend.UP,alignment_flag=AlignmentFlag.NEUTRAL,regime_context='synthetic')
+        text=st.interp.fallback_interpretation(regime=regime,signal=signal,signals=signals,risks=[]).text
+        assert '하락 압력을 다소 완화' not in text and '방향 전환 확정으로 보기엔 이른' not in text
+        assert '추세 복원 신호가 아직 충분하지' not in text
+        assert st.interp.SIGNAL_LABELS[chosen]+' 신호' in text and st.interp.REGIME_LABELS[final] in text
+
+
+@pytest.mark.parametrize('regenerate',[False,True])
+@pytest.mark.parametrize('optional',['text',None,''])
+async def test_explanation_safe_additive_fields_and_successful_regeneration_keep_LLM(regenerate,optional):
+    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY))
+    good['one_line_summary']='확정된 기술적 상태를 참고합니다.'
+    for entry in good['details']:
+        entry.update(detail_reason='확정된 지표 수치를 기준으로 설명합니다.',
+            detail_caution='한 지표로 방향을 단정하지 않습니다.',detail_watchpoint='거래량과 지표 변화를 관찰합니다.')
+        if optional!='text':entry.update(detail_reason=optional,detail_caution=optional,detail_watchpoint=optional)
+    raw=json.dumps(good,ensure_ascii=False);responses=[st.NORM_OK,st.FOCUS_OK]
+    if regenerate:
+        bad=dict(good,one_line_summary='금지된 매수 문장');responses.append(json.dumps(bad,ensure_ascii=False))
+    responses.append(raw);llm=st.ScriptedLlm(responses);req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req);out=result['data']['result']
+    assert out['interpretation']['source']==('llm_regenerated' if regenerate else 'llm')
+    assert out['interpretation']['one_line_summary']==good['one_line_summary']
+    assert all(item['detail_source']==out['interpretation']['source'] for item in out['technical_signals'])
+    assert out['verification']['outcome']=='passed' and out['verification']['label_matched'] is True
+    assert all(type(item[field]) is str and item[field] for item in out['technical_signals'] for field in ('detail_reason','detail_caution','detail_watchpoint'))
+    assert out['verification']['regen_count']==int(regenerate) and len(llm.prompts)==3+int(regenerate)
+    assert runtime._ACTIVE_TASK is None
+
+
+@pytest.mark.parametrize('case',['call_error','parse_error','both_failed'])
+async def test_explanation_existing_full_fallback_and_combined_failure_keep_original_limits(case):
+    good=json.loads(st._good_interp_response(st.DAILY,st.WEEKLY,st.MONTHLY));sentinel='cf055-synthetic-exception-never-serialized'
+    if case=='call_error':responses=[RuntimeError(sentinel)]
+    elif case=='parse_error':responses=['{','{']
+    else:
+        good['one_line_summary']='금지된 매수 문장';good['details'][0]['detail_reason']='금지된 매수 문장'
+        raw=json.dumps(good,ensure_ascii=False);responses=[raw,raw]
+    llm=st.ScriptedLlm([st.NORM_OK,st.FOCUS_OK]+responses);req=request()
+    bridge=TechnicalEngineBridge(sync_runner=run_technical_agent,llm_client=llm,
+        fetcher=lambda ticker,**kw:{'D':st.DAILY,'W':st.WEEKLY,'M':st.MONTHLY},cache=None,trace_sink=None,enabled=True)
+    result=await runtime.BoundaryRuntime(bridge).run(req);contract.validate_response(result,req);out=result['data']['result']
+    assert sentinel not in json.dumps(out,ensure_ascii=False) and '금지된 매수 문장' not in json.dumps(out,ensure_ascii=False)
+    assert out['interpretation']['source']=='template_fallback'
+    assert out['verification']['label_matched'] is False and out['verification']['outcome']=='template_fallback'
+    assert out['verification']['regen_count']==(0 if case=='call_error' else 1)
+    assert len(llm.prompts)==(3 if case=='call_error' else 4)
+    if case=='both_failed':
+        bad_code=good['details'][0]['indicator']
+        assert all(x['detail_source']==('template_fallback' if x['indicator']==bad_code else 'llm_regenerated') for x in out['technical_signals'])
+    else:assert all(x['detail_source']=='template_fallback' for x in out['technical_signals'])
+    confirmed=st.run_signal_aggregate(st.DAILY).technical_signals
+    assert [(x['indicator'],x['signal'],x['value'],x['metrics'],x['weight']) for x in out['technical_signals']]==[(x.indicator.value,x.signal.value,x.value,x.metrics,x.weight) for x in confirmed]
+    assert runtime._ACTIVE_TASK is None and not ATTEMPTS
+
+
 async def test_runtime_first_cancel_closes_same_KIS_event_before_physical_fetch_finishes():
     import httpx
     from types import SimpleNamespace

@@ -900,8 +900,13 @@ def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
     assert len(composition) == 1
     assert hashlib.sha256(ast.dump(composition[0], include_attributes=False).encode()).hexdigest() == '41f7ecf194a03f148a1450562b88389224d6f8981da0d999e84f457a3b3c9498'
     additions.extend(composition)
+    # CF061 changes only the exact Fundamental branch; keep all adjacent AST fixed.
+    fundamental = [n for n in fn.body if isinstance(n, ast.If) and ast.unparse(n.test) == "path == '/api/fundamental' or path.startswith('/api/fundamental/')"]
+    assert len(fundamental) == 1
+    assert hashlib.sha256(ast.dump(fundamental[0], include_attributes=False).encode()).hexdigest() == 'db18cea5adf4552fc314c61d06aaca07dbe6d6feb46798e583c259355c67812c'
+    additions.extend(fundamental)
     fn.body = [n for n in fn.body if n not in additions and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
-    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'
+    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '8e4fca1b8f3e79c2b932e92f5b7a69492be219e73e43f1aca166925a7c90aa96'
 
 
 # CF043: actual post/build/exchange/dispatch guard + actual Principal SQL construction.

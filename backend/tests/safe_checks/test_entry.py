@@ -595,6 +595,21 @@ class CF014Boundary(unittest.TestCase):
 
 
 class CF015Boundary(unittest.TestCase):
+    def test_fundamental_usage_classifier_is_exact_pure_source_only(self):
+        import ast
+        from scripts import check_safe as c
+        name='backend/src/modules/fundamental/domain/usage_evidence.py'
+        self.assertIn(name,c.CF015_SOURCES)
+        self.assertTrue(c.source_allowed(name))
+        self.assertFalse(c.source_allowed(name+'.adjacent'))
+        root=Path(__file__).resolve().parents[3]
+        tree=ast.parse(c.regular_bytes(root,name))
+        imports={n.module for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)} | {a.name for n in ast.walk(tree) if isinstance(n,ast.Import) for a in n.names}
+        self.assertEqual(imports,{'dataclasses','re','uuid','src.modules.analysis.domain.contracts'})
+        self.assertEqual(c.CF015_TESTS,('tests/unit/test_cf015_fundamental_analysis.py',))
+        control=(root/'backend/src/modules/fundamental/application/execution_limit_control.py').read_text()
+        self.assertNotIn('usage_evidence',control)
+
     def test_cf061_exact_boundary_pin_and_unrelated_branch_AST_preserved(self):
         import ast,hashlib
         from scripts import check_safe as c

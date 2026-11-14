@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     FLOW_RUN_ADMISSION_ENABLED: bool = False
     FLOW_SYNTHETIC_DEMO_ENABLED: bool = False
     FUNDAMENTAL_ANALYSIS_ENABLED: bool = False
+    FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT: Any = ""
+    FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT: Any = ""
     FUNDAMENTAL_SERVICE_TOKEN: str = ""
     FLOW_ANALYSIS_ENABLED: bool = False
     FLOW_SERVICE_TOKEN: str = Field(default="", repr=False)

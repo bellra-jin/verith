@@ -228,3 +228,83 @@ async def test_public_raw_limit_and_duplicate_headers_fail_closed_before_DB(monk
             response=await client.post('/api/fundamental/analyses',content=content,headers=headers)
             assert response.status_code==422 and response.json()['error']['code']=='INPUT_INVALID'
         assert len(seen)==count==3
+
+
+def admission_settings(**values):
+    return SimpleNamespace(**(dict(FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT='2',FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT='5')|values))
+
+
+@pytest.mark.parametrize('field,value',[(name,value) for name in ('FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT','FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT') for value in ('0','-1','01','1.0',' 1','１',True,False,0,-1,1.5,None,'','9223372036854775808',9223372036854775808)])
+def test_fundamental_admission_count_limit_strict_values(field,value):
+    from src.modules.fundamental.domain.execution_limits import policy,AdmissionPolicyUnavailable
+    settings=admission_settings();setattr(settings,field,value)
+    with pytest.raises(AdmissionPolicyUnavailable):policy(settings)
+
+
+def test_fundamental_admission_limits_and_KST_period_boundaries_are_pure():
+    from src.modules.fundamental.domain.execution_limits import policy,period,AdmissionPolicy,AdmissionPolicyUnavailable
+    assert policy(admission_settings())==AdmissionPolicy(2,5)
+    assert policy(admission_settings(FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT=7,FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT=3))==AdmissionPolicy(7,3)
+    with pytest.raises(AdmissionPolicyUnavailable):policy(SimpleNamespace())
+    before=datetime(2026,11,13,14,59,59,tzinfo=UTC);after=before+timedelta(seconds=1)
+    assert period(before)==(datetime(2026,11,12,15,tzinfo=UTC),datetime(2026,11,13,15,tzinfo=UTC))
+    assert period(after)==(datetime(2026,11,13,15,tzinfo=UTC),datetime(2026,11,14,15,tzinfo=UTC))
+    with pytest.raises(AdmissionPolicyUnavailable):period(before.replace(tzinfo=None))
+
+
+@pytest.mark.parametrize('service_count,owner_count,code',[(5,2,None),(6,2,'USAGE_LIMIT_EXCEEDED'),(5,3,'USAGE_LIMIT_EXCEEDED'),(0,0,'SERVICE_UNAVAILABLE')])
+async def test_fundamental_limiter_counts_insert_and_preserves_captured_policy(service_count,owner_count,code):
+    from src.modules.fundamental.application.execution_limit_control import FundamentalExecutionLimitControl
+    events=[]
+    async def scalar(statement):
+        events.append(str(statement))
+        return 'read committed' if len(events)==1 else True
+    async def execute(statement):
+        events.append(str(statement));return SimpleNamespace(one=lambda:(service_count,owner_count))
+    session=SimpleNamespace(scalar=scalar,execute=execute,commit=AsyncMock(),rollback=AsyncMock())
+    settings=admission_settings();control=FundamentalExecutionLimitControl(session,FundamentalAnalysisError,settings)
+    assert control.new_values(None,{'id':uuid4()})=={}
+    settings.FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT='100';settings.FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT='100'
+    value=row()
+    if code:
+        with pytest.raises(FundamentalAnalysisError) as error:await control.reserve(value,value.started_at)
+        assert error.value.code.value==code
+    else:await control.reserve(value,value.started_at)
+    assert len(events)==3 and 'current_setting' in events[0] and 'pg_try_advisory_xact_lock' in events[1]
+    assert 'count(*)' in events[2] and 'state' not in events[2] and 'fundamental_analysis_runs' in events[2]
+    await control.observe(value,b'?',{'private':'ignored'})
+    assert len(events)==3 and session.commit.await_count==session.rollback.await_count==0
+
+
+@pytest.mark.parametrize('isolation,locked',[('repeatable read',True),('serializable',True),(None,True),('read committed',False),('read committed',None)])
+async def test_fundamental_limiter_rejects_unfresh_isolation_or_busy_without_count_retry(isolation,locked):
+    from src.modules.fundamental.infrastructure.analysis_repository import admission_counts,AdmissionCountUnavailable,ADMISSION_LOCK_KEY
+    seen=[]
+    async def scalar(statement):seen.append(statement);return isolation if len(seen)==1 else locked
+    session=SimpleNamespace(scalar=scalar,execute=AsyncMock())
+    with pytest.raises(AdmissionCountUnavailable):await admission_counts(session,uuid4(),datetime.now(UTC))
+    assert len(seen)==(2 if isolation=='read committed' else 1) and session.execute.await_count==0
+    assert ADMISSION_LOCK_KEY==0x466E644C696D6974
+    if len(seen)==2:assert ADMISSION_LOCK_KEY in seen[1].compile().params.values()
+
+
+async def test_fundamental_existing_key_observation_skips_missing_limits_and_new_dispatch(monkeypatch):
+    value=row();session=SimpleNamespace(commit=AsyncMock(),rollback=AsyncMock())
+    service=FundamentalAnalysisService(session,principal=None,client=SimpleNamespace(analyze_fundamental=AsyncMock()),limit_settings=SimpleNamespace())
+    service._authorize=AsyncMock();service.principal=SimpleNamespace(user_id=value.owner_user_id)
+    monkeypatch.setattr(service.profile.repository,'by_key',AsyncMock(return_value=value))
+    monkeypatch.setattr(service.profile.repository,'expire',AsyncMock())
+    service.usage_control.new_values=lambda *args:(_ for _ in ()).throw(AssertionError('Replay must not parse policy'))
+    result=await service.post(dict(ticker='005930',question='합성 재무 질문',idempotency_key='same-key',allow_analysis=True),uuid4())
+    assert result.analysis_id==value.id and service.client.analyze_fundamental.await_count==0
+
+
+async def test_fundamental_new_missing_stock_is_explicit_eligibility_error(monkeypatch):
+    session=SimpleNamespace(scalar=AsyncMock(return_value=None),commit=AsyncMock(),rollback=AsyncMock())
+    service=FundamentalAnalysisService(session,principal=None,client=None,limit_settings=admission_settings())
+    service._authorize=AsyncMock()
+    service.principal=SimpleNamespace(user_id=uuid4())
+    monkeypatch.setattr(service.profile.repository,'by_key',AsyncMock(return_value=None))
+    with pytest.raises(FundamentalAnalysisError) as error:
+        await service.post(dict(ticker='005930',question='질문',idempotency_key='key',allow_analysis=True),uuid4())
+    assert error.value.code.value=='FEATURE_UNAVAILABLE' and session.commit.await_count==0

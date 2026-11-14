@@ -671,3 +671,191 @@ async def test_cf061_late_synchronous_parser_is_not_accepted_as_result_or_input_
         return SimpleNamespace()
     monkeypatch.setattr(FundamentalAnalysisRequest,'model_validate',parse)
     await h.run();cf061_reply(h,503,'SERVICE_UNAVAILABLE');inner.assert_not_awaited()
+
+
+# Fundamental usage classification: explicit synthetic caller inventory only.
+def usage_contract(*, closed=True):
+    from src.modules.analysis.domain.contracts import AnalysisContext,canonical_json
+    from src.modules.fundamental.domain import usage_evidence as u
+    value=row()
+    context=AnalysisContext(value.id,value.admission_request_id,value.attempt_id,value.owner_user_id,
+        domain.OPERATION,value.input_fingerprint,value.as_of,value.deadline_at)
+    specs=[dict(call_id=str(UUID(int=i)),provider='synthetic-provider',model='synthetic-model',
+        service_tier='default',request_sha256=hex(i)[2:]*32,input_token_cap=1000,output_token_cap=500) for i in (17,18)]
+    expected=u.UsageExpectation(context,'a'*64,canonical_json(specs),closed)
+    calls=[{k:v for k,v in spec.items() if k not in {'input_token_cap','output_token_cap'}} |
+        dict(input_tokens=10,cached_tokens=2,output_tokens=5,total_tokens=15) for spec in specs]
+    wire=dict(schema_version=u.SCHEMA,expectation_sha256=expected.fingerprint,calls=calls)
+    return u,expected,wire
+
+
+def classify_fixture(u,expected,*values,trusted=True):
+    from src.modules.analysis.domain.contracts import canonical_json
+    return u.classify_usage(expected,tuple(None if v is None else canonical_json(v) for v in values),usage_trusted=trusted)
+
+
+def test_fundamental_usage_complete_requires_every_call_not_a_subtotal():
+    u,expected,wire=usage_contract()
+    complete=classify_fixture(u,expected,wire)
+    assert complete.state=='complete_usage' and complete.reason=='ALL_CALLS_OBSERVED'
+    assert (complete.input_tokens,complete.cached_tokens,complete.output_tokens,complete.total_tokens)==(20,4,10,30)
+    partial=copy.deepcopy(wire);partial['calls'].pop()
+    missing=classify_fixture(u,expected,partial)
+    assert missing.state=='unknown' and missing.reason=='USAGE_MISSING'
+    subtotal=classify_fixture(u,expected,{'cost_summary':dict(llm_calls=2,prompt_tokens=10,completion_tokens=5)})
+    assert subtotal.state=='unknown' and subtotal.reason=='AGGREGATE_ONLY'
+    for result in (complete,missing,subtotal):
+        assert result.keep_reservation is True
+        if result.state!='complete_usage':
+            assert (result.input_tokens,result.cached_tokens,result.output_tokens,result.total_tokens)==(None,None,None,None)
+
+
+@pytest.mark.parametrize('field',['input_tokens','cached_tokens','output_tokens','total_tokens'])
+async def test_fundamental_usage_one_missing_token_never_totals_or_releases(field):
+    u,expected,wire=usage_contract();wire['calls'][1][field]=None
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='unknown' and result.reason=='USAGE_MISSING' and result.keep_reservation
+    assert result.input_tokens is result.output_tokens is result.total_tokens is None
+    assert len(domain.decode(result.calls_json))==2  # Independent known fields preserved.
+
+
+@pytest.mark.parametrize('closed,empty,trusted,reason',[(False,False,True,'CALL_INVENTORY_UNPROVEN'),(True,True,True,'CALL_INVENTORY_UNPROVEN'),(True,False,False,'PROVENANCE_UNPROVEN')])
+def test_fundamental_usage_inventory_and_provenance_cannot_be_inferred(closed,empty,trusted,reason):
+    from dataclasses import replace
+    u,expected,wire=usage_contract(closed=closed)
+    if empty:
+        expected=replace(expected,calls_json='[]');wire.update(expectation_sha256=expected.fingerprint,calls=[])
+    result=classify_fixture(u,expected,wire,trusted=trusted)
+    assert result.state=='unknown' and result.reason==reason and result.keep_reservation
+    assert u.classify_usage(expected,(domain.canonical(wire),)).state=='unknown'  # trust default is closed.
+
+
+def test_fundamental_usage_complete_flag_and_count_are_never_inventory_authority():
+    u,expected,wire=usage_contract();wire.update(complete=True,llm_calls=2)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='rejected' and result.reason=='EVIDENCE_INVALID' and result.keep_reservation
+    for receipts in ((),(None,),(domain.canonical({'cost_summary':{'llm_calls':0,'prompt_tokens':0}}),)):
+        result=u.classify_usage(expected,receipts,usage_trusted=True)
+        assert result.state=='unknown' and result.input_tokens is None and result.keep_reservation
+
+
+def test_fundamental_usage_exact_duplicate_and_order_are_idempotent():
+    u,expected,wire=usage_contract();first=copy.deepcopy(wire);second=copy.deepcopy(wire)
+    first['calls']=wire['calls'][:1];second['calls']=wire['calls'][1:]
+    baseline=classify_fixture(u,expected,wire)
+    assert baseline==classify_fixture(u,expected,wire,wire)
+    assert baseline==classify_fixture(u,expected,second,first,second,first)
+    repeated=copy.deepcopy(wire);repeated['calls']*=2
+    assert baseline==classify_fixture(u,expected,repeated)
+    assert baseline.total_tokens==30
+
+
+def test_fundamental_usage_conflicting_duplicate_is_not_last_write_wins():
+    u,expected,wire=usage_contract();changed=copy.deepcopy(wire)
+    changed['calls'][0].update(input_tokens=11,total_tokens=16)
+    a=classify_fixture(u,expected,wire,changed)
+    b=classify_fixture(u,expected,changed,wire)
+    assert a==b and a.state=='rejected' and a.reason=='CALL_CONFLICT'
+    assert a.keep_reservation and a.input_tokens is a.total_tokens is None
+    assert len(domain.decode(a.calls_json))==3  # Both conflicting observations retained.
+
+
+@pytest.mark.parametrize('field,value',[(field,value) for field in ('input_tokens','cached_tokens','output_tokens','total_tokens') for value in (True,False,1.0,-1,'10',2**63)])
+def test_fundamental_usage_invalid_integer_range_is_closed(field,value):
+    u,expected,wire=usage_contract();wire['calls'][0][field]=value
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='rejected' and result.keep_reservation and result.total_tokens is None
+
+
+@pytest.mark.parametrize('change,reason',[
+    ({'input_tokens':1001,'total_tokens':1006},'POLICY_CAP_EXCEEDED'),
+    ({'output_tokens':501,'total_tokens':511},'POLICY_CAP_EXCEEDED'),
+    ({'cached_tokens':11},'USAGE_INVALID'),({'total_tokens':16},'USAGE_INVALID'),
+    ({'call_id':str(UUID(int=99))},'CALL_NOT_EXPECTED'),
+    ({'provider':'different-provider'},'CALL_BINDING_MISMATCH'),
+    ({'model':'different-model'},'CALL_BINDING_MISMATCH'),
+    ({'service_tier':'different-tier'},'CALL_BINDING_MISMATCH'),
+    ({'request_sha256':'d'*64},'CALL_BINDING_MISMATCH')])
+def test_fundamental_usage_call_binding_caps_and_consistency(change,reason):
+    u,expected,wire=usage_contract();wire['calls'][0].update(change)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='rejected' and result.reason==reason and result.keep_reservation
+
+
+def test_fundamental_usage_different_run_attempt_owner_policy_and_request_cannot_rebind():
+    from dataclasses import replace
+    u,expected,wire=usage_contract()
+    changed=[replace(expected,policy_sha256='e'*64)]
+    for key,value in [('analysis_id',uuid4()),('attempt_id',uuid4()),('admission_request_id',uuid4()),('owner_user_id',uuid4()),('input_fingerprint','e'*64)]:
+        changed.append(replace(expected,context=replace(expected.context,**{key:value})))
+    for other in changed:
+        result=classify_fixture(u,other,wire)
+        assert result.state=='rejected' and result.reason=='BINDING_MISMATCH' and result.keep_reservation
+
+
+def test_fundamental_usage_expectation_is_immutable_and_validated():
+    from dataclasses import replace,FrozenInstanceError
+    u,expected,wire=usage_contract()
+    with pytest.raises(FrozenInstanceError):expected.policy_sha256='b'*64
+    specs=domain.decode(expected.calls_json)
+    for changes in ({'calls_json':domain.canonical(specs+specs[:1])},{'inventory_closed':1},{'policy_sha256':'secret-sentinel'},
+                    {'context':replace(expected.context,operation='flow.analysis.v1')},
+                    {'calls_json':domain.canonical([specs[0]|{'input_token_cap':True}])}):
+        with pytest.raises(u.UsageEvidenceInvalid) as caught:replace(expected,**changes)
+        assert str(caught.value)=='Fundamental usage evidence contract is invalid' and caught.value.__cause__ is None
+    specs[0]['model']='changed-after-freeze'
+    assert expected.fingerprint==wire['expectation_sha256']
+
+
+def test_fundamental_usage_duplicate_JSON_keys_and_raw_errors_never_leak():
+    u,expected,wire=usage_contract()
+    for receipt in ('{"calls":[],"calls":[]}', '{"secret-sentinel":', '"secret-sentinel"', 'x'*(u.MAX_DOCUMENT_BYTES+1)):
+        result=u.classify_usage(expected,(receipt,),usage_trusted=True)
+        assert result.state=='rejected' and result.keep_reservation
+        assert 'secret-sentinel' not in repr(result) and result.calls_json=='[]'
+
+
+def test_fundamental_usage_aggregate_overflow_retains_hold_without_a_partial_sum():
+    from dataclasses import replace
+    u,expected,wire=usage_contract();specs=domain.decode(expected.calls_json)
+    for spec in specs:spec['input_token_cap']=2**63-1
+    expected=replace(expected,calls_json=domain.canonical(specs));wire['expectation_sha256']=expected.fingerprint
+    for call in wire['calls']:call.update(input_tokens=2**62,cached_tokens=0,output_tokens=0,total_tokens=2**62)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='unknown' and result.reason=='USAGE_OVERFLOW' and result.keep_reservation
+    assert result.input_tokens is result.total_tokens is None
+
+
+def test_fundamental_usage_classification_does_not_activate_observe_or_mutate_output():
+    u,expected,wire=usage_contract();before=copy.deepcopy(wire)
+    classify_fixture(u,expected,wire)
+    assert wire==before
+    from src.modules.fundamental.application.execution_limit_control import FundamentalExecutionLimitControl
+    source=inspect.getsource(FundamentalExecutionLimitControl.observe)
+    assert 'return None' in source and 'classify_usage' not in source and 'self.session' not in source
+
+
+def test_fundamental_usage_known_zero_is_not_missing_or_proof_of_zero_calls():
+    u,expected,wire=usage_contract()
+    for call in wire['calls']:call.update(input_tokens=0,cached_tokens=0,output_tokens=0,total_tokens=0)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='complete_usage' and result.input_tokens==result.output_tokens==result.total_tokens==0
+    assert result.keep_reservation  # No money/pricing/release inferred even from known zero.
+
+
+def test_fundamental_usage_collection_count_and_nulls_share_document_budget(monkeypatch):
+    u,expected,wire=usage_contract()
+    # Small protocol budget, unrelated to provider/cost policy or actual traffic.
+    monkeypatch.setattr(u,'MAX_DOCUMENT_BYTES',1024)
+    original=u._document;reads=[]
+    def read(text):
+        reads.append(text);return original(text)
+    monkeypatch.setattr(u,'_document',read)
+    result=u.classify_usage(expected,(None,)*342,usage_trusted=True)
+    assert result.state=='rejected' and result.reason=='EVIDENCE_INVALID'
+    assert reads==[expected.calls_json,expected.calls_json]  # No receipt traversal/parse.
+    result=u.classify_usage(expected,(None,)*205,usage_trusted=True)
+    assert result.state=='rejected' and result.keep_reservation and result.calls_json=='[]'
+    # Exact null collection fits: [null,...,null] = 5*N+1 bytes.
+    result=u.classify_usage(expected,(None,)*204,usage_trusted=True)
+    assert result.state=='unknown' and result.reason=='USAGE_MISSING' and result.keep_reservation

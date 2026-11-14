@@ -595,6 +595,22 @@ class CF014Boundary(unittest.TestCase):
 
 
 class CF015Boundary(unittest.TestCase):
+    def test_cf061_exact_boundary_pin_and_unrelated_branch_AST_preserved(self):
+        import ast,hashlib
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        name='backend/src/shared/http/access_boundary.py'
+        data=c.regular_bytes(root,name)
+        self.assertEqual(hashlib.sha256(data).hexdigest(),c.CF036_INPUTS[name])
+        self.assertNotEqual(hashlib.sha256(data+b'\n# synthetic drift').hexdigest(),c.CF036_INPUTS[name])
+        tree=ast.parse(data)
+        fn=next(n for n in next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='AccessBoundary').body if isinstance(n,ast.AsyncFunctionDef) and n.name=='__call__')
+        branches=[n for n in fn.body if isinstance(n,ast.If) and ast.unparse(n.test)=="path == '/api/fundamental' or path.startswith('/api/fundamental/')"]
+        self.assertEqual(len(branches),1)
+        self.assertEqual(hashlib.sha256(ast.dump(branches[0],include_attributes=False).encode()).hexdigest(),'db18cea5adf4552fc314c61d06aaca07dbe6d6feb46798e583c259355c67812c')
+        fn.body.remove(branches[0])
+        self.assertEqual(hashlib.sha256(ast.dump(tree,include_attributes=False).encode()).hexdigest(),'00618ef085233993602ec4044a0afcf0204a0580b344ce73708ce749ed60ecb5')
+
     def test_count_control_adds_only_two_backend_sources_and_keeps_AI_allowset(self):
         from scripts import check_safe as c
         from unittest.mock import patch

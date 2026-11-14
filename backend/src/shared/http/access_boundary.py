@@ -77,65 +77,124 @@ class AccessBoundary:
             await self.app(scope,receive,technical_private_send)
             return
         if path == '/api/fundamental' or path.startswith('/api/fundamental/'):
-            from uuid import UUID
-            from urllib.parse import parse_qsl
-            from starlette.datastructures import Headers
-            from src.shared.config import settings
-            from src.modules.auth.api.router import configured
-            from src.modules.flow.api.run_schemas import error_response,http_request_id
+            import asyncio
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            body_deadline, processing_deadline, error_deadline = started + 15, started + 65, started + 70
+            from src.modules.flow.api.run_schemas import error_response, http_request_id
             from src.modules.flow.domain.execution import ErrorCode
-            from src.modules.flow.api.synthetic_demo_schemas import json_media
-            from src.modules.fundamental.api.analysis_schemas import FundamentalAnalysisRequest
-            from src.modules.fundamental.domain.analysis import decode
-            http_request_id(scope)
-            async def reject(code):await error_response(scope,code)(scope,receive,send)
-            if not settings.FUNDAMENTAL_ANALYSIS_ENABLED:
-                await reject(ErrorCode.FEATURE_UNAVAILABLE);return
-            if not configured():
-                await reject(ErrorCode.AUTH_REQUIRED);return
-            analyses='/api/fundamental/analyses';reports='/api/fundamental/reports';raw=None
-            try:
-                query=scope.get('query_string',b'')
-                if path==analyses and method=='POST':
-                    if query:raise ValueError()
-                    headers=Headers(scope=scope)
-                    if len(headers.getlist('content-type'))!=1 or not json_media(headers) or headers.getlist('content-encoding') or len(headers.getlist('content-length'))>1:raise ValueError()
-                    length=headers.get('content-length')
-                    if length is not None and (not length.isascii() or not length.isdigit() or int(length)>4096):raise ValueError()
-                    raw=bytearray()
-                    while True:
-                        message=await receive()
-                        if message['type']!='http.request':raise ValueError()
-                        raw.extend(message.get('body',b''))
-                        if len(raw)>4096:raise ValueError()
-                        if not message.get('more_body',False):break
-                    FundamentalAnalysisRequest.model_validate(decode(bytes(raw).decode('utf8')))
-                elif path==reports and method=='GET':
-                    pairs=parse_qsl(query.decode('ascii'),keep_blank_values=True,strict_parsing=True)
-                    if len({k for k,v in pairs})!=len(pairs) or any(k not in {'stock_code','limit','offset'} for k,v in pairs):raise ValueError()
-                elif method=='GET' and path.startswith(analyses+'/') or method in {'GET','DELETE'} and path.startswith(reports+'/'):
-                    if query:raise ValueError()
-                    segment=path.rsplit('/',1)[1]
-                    prefix=analyses if path.startswith(analyses+'/') else reports
-                    if path!=prefix+'/'+segment:
-                        await reject(ErrorCode.FEATURE_UNAVAILABLE);return
-                    if str(UUID(segment))!=segment.lower():raise ValueError()
-                else:
-                    await reject(ErrorCode.FEATURE_UNAVAILABLE);return
-            except (ValueError,TypeError,UnicodeError,RecursionError):
-                await reject(ErrorCode.INPUT_INVALID);return
-            delivered=False
-            async def fundamental_receive():
-                nonlocal delivered
-                if raw is not None and not delivered:
-                    delivered=True;return {'type':'http.request','body':bytes(raw),'more_body':False}
-                return await receive()
+            # Locally fixed ingress times; client headers/scope cannot extend them.
+            scope.setdefault('state', {}).update(fundamental_started_at=started,
+                fundamental_body_deadline=body_deadline, fundamental_deadline=processing_deadline)
+            response_started = False
+            send_deadline = processing_deadline
+            own_waiter_deadline = None
+            body_timer = None
+
+            def check_deadline(limit):
+                nonlocal own_waiter_deadline
+                if loop.time() >= limit:
+                    own_waiter_deadline = limit
+                    raise TimeoutError()
+
             async def fundamental_send(message):
-                if message['type']=='http.response.start':
-                    headers=[(k,v) for k,v in message.get('headers',[]) if k.lower() not in {b'cache-control',b'vary'}]
-                    message={**message,'headers':headers+[(b'cache-control',b'private, no-store'),(b'vary',b'Cookie, Origin')]}
+                nonlocal response_started
+                check_deadline(send_deadline)
+                if message['type'] == 'http.response.start':
+                    headers = [(k, v) for k, v in message.get('headers', []) if k.lower() not in {b'cache-control', b'vary'}]
+                    message = {**message, 'headers': headers + [(b'cache-control', b'private, no-store'), (b'vary', b'Cookie, Origin')]}
+                    # An attempted send may have reached the peer even when it raises.
+                    response_started = True
                 await send(message)
-            await self.app(scope,fundamental_receive,fundamental_send);return
+                check_deadline(send_deadline)
+
+            async def reject(code):
+                await error_response(scope, code)(scope, receive, fundamental_send)
+
+            async def handle():
+                nonlocal body_timer
+                from uuid import UUID
+                from urllib.parse import parse_qsl
+                from starlette.datastructures import Headers
+                from src.shared.config import settings
+                from src.modules.auth.api.router import configured
+                from src.modules.flow.api.synthetic_demo_schemas import json_media
+                from src.modules.fundamental.api.analysis_schemas import FundamentalAnalysisRequest
+                from src.modules.fundamental.domain.analysis import decode
+                http_request_id(scope)
+                if not settings.FUNDAMENTAL_ANALYSIS_ENABLED:
+                    await reject(ErrorCode.FEATURE_UNAVAILABLE);return
+                if not configured():
+                    await reject(ErrorCode.AUTH_REQUIRED);return
+                analyses='/api/fundamental/analyses';reports='/api/fundamental/reports';raw=None
+                try:
+                    query=scope.get('query_string',b'')
+                    if path==analyses and method=='POST':
+                        if query:raise ValueError()
+                        headers=Headers(scope=scope)
+                        if len(headers.getlist('content-type'))!=1 or not json_media(headers) or headers.getlist('content-encoding') or len(headers.getlist('content-length'))>1:raise ValueError()
+                        length=headers.get('content-length')
+                        if length is not None and (not length.isascii() or not length.isdigit() or int(length)>4096):raise ValueError()
+                        raw=bytearray()
+                        body_timer=asyncio.timeout_at(body_deadline)
+                        async with body_timer:
+                            while True:
+                                message=await receive()
+                                if message['type']=='http.disconnect':raise asyncio.CancelledError()
+                                if message['type']!='http.request':raise ValueError()
+                                chunk=message.get('body',b'')
+                                if type(chunk) is not bytes or len(chunk)>4096-len(raw):raise ValueError()
+                                raw.extend(chunk)
+                                if not message.get('more_body',False):break
+                            FundamentalAnalysisRequest.model_validate(decode(bytes(raw).decode('utf8')))
+                            check_deadline(body_deadline)
+                    elif path==reports and method=='GET':
+                        pairs=parse_qsl(query.decode('ascii'),keep_blank_values=True,strict_parsing=True)
+                        if len({k for k,v in pairs})!=len(pairs) or any(k not in {'stock_code','limit','offset'} for k,v in pairs):raise ValueError()
+                    elif method=='GET' and path.startswith(analyses+'/') or method in {'GET','DELETE'} and path.startswith(reports+'/'):
+                        if query:raise ValueError()
+                        segment=path.rsplit('/',1)[1]
+                        prefix=analyses if path.startswith(analyses+'/') else reports
+                        if path!=prefix+'/'+segment:
+                            await reject(ErrorCode.FEATURE_UNAVAILABLE);return
+                        if str(UUID(segment))!=segment.lower():raise ValueError()
+                    else:
+                        await reject(ErrorCode.FEATURE_UNAVAILABLE);return
+                except (ValueError,TypeError,UnicodeError,RecursionError):
+                    if response_started:
+                        raise  # A failed error send is not an input-validation error.
+                    if body_timer is not None:
+                        check_deadline(body_deadline)
+                    await reject(ErrorCode.INPUT_INVALID);return
+                check_deadline(processing_deadline)
+                delivered=False
+                async def fundamental_receive():
+                    nonlocal delivered
+                    if raw is not None and not delivered:
+                        delivered=True;return {'type':'http.request','body':bytes(raw),'more_body':False}
+                    message=await receive()
+                    if message['type']=='http.disconnect':raise asyncio.CancelledError()
+                    return message
+                await self.app(scope,fundamental_receive,fundamental_send)
+                check_deadline(processing_deadline)
+            processing_timer = asyncio.timeout_at(processing_deadline)
+            try:
+                async with processing_timer:
+                    await handle()
+            except TimeoutError:
+                body_expired = (body_timer is not None and body_timer.expired()) or own_waiter_deadline == body_deadline
+                if not (processing_timer.expired() or body_expired or own_waiter_deadline is not None):
+                    raise  # A downstream TimeoutError is not our deadline.
+                if response_started:
+                    raise
+                # Body timeout has no extra processing budget. Only total timeout
+                # gets the original response-only five-second window, after cleanup.
+                send_deadline = processing_deadline if body_expired else error_deadline
+                if loop.time() >= send_deadline:
+                    raise
+                async with asyncio.timeout_at(send_deadline):
+                    await reject(ErrorCode.SERVICE_UNAVAILABLE)
+            return
         if path == '/api/supervisor/core/composition' or path.startswith('/api/supervisor/core/composition/'):
             from src.modules.supervisor.api.composition_router import boundary
             await boundary(self.app,scope,receive,send);return

@@ -10,7 +10,7 @@ export function AnalysisEntry({analysisId}:{analysisId:string|null}){
   void fetchSession(abort.signal).then(value=>{if(active){setUserId(value.user_id);setError('');}}).catch(()=>{if(active){setUserId(null);setError('로그인 상태를 확인할 수 없습니다.');}});
   return()=>{active=false;clearTimeout(timeout);abort.abort();};
  },[analysisId]);
- if(!userId)return <main><h1>재무 분석</h1><p>{error||'로그인 후 이용하세요.'}</p><Link href="/api/auth/login">로그인</Link><Link href="/">홈</Link></main>;
+ if(!userId)return <main className="workspace-page"><h1>재무 분석</h1><p>{error||'로그인 후 이용하세요.'}</p><Link href="/api/auth/login">로그인</Link><Link href="/">홈</Link></main>;
  return <AnalysisRequest key={userId+':'+(analysisId??'new')} userId={userId} analysisId={analysisId} initialView={null} onAccountChange={setUserId}/>;
 }
 
@@ -75,7 +75,7 @@ export function AnalysisRequest({userId,analysisId,initialView,onAccountChange}:
  }
  function startNew(){invalidate();pending.current=null;try{sessionStorage.removeItem(pendingKey(userId));window.location.assign('/fundamental');}catch{setBlocked(true);setError('요청 기록을 변경할 수 없습니다.');}}
  const terminal=view&&['stored','failed','unknown'].includes(view.state);
- return <main><h1>재무 분석</h1><p>현재 시점의 재무 분석 요청입니다. 과거 시점 분석은 지원하지 않습니다. 실제 공급자 연동과 재무 품질은 미검증입니다.</p>
+ return <main className="workspace-page"><h1>재무 분석</h1><p>현재 시점의 재무 분석 요청입니다. 과거 시점 분석은 지원하지 않습니다. 실제 공급자 연동과 재무 품질은 미검증입니다.</p>
   <label>종목코드<input value={ticker} maxLength={6} inputMode="numeric" disabled={!verified||busy} readOnly={hasPending||Boolean(analysisId)} onChange={e=>setTicker(e.target.value)}/></label>
   <label>질문<textarea value={question} maxLength={2000} disabled={!verified||busy} readOnly={hasPending||Boolean(analysisId)} onChange={e=>setQuestion(e.target.value)}/></label>
   <label><input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)}/>분석 실행에 동의합니다.</label>

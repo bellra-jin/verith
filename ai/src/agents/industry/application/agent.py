@@ -40,12 +40,17 @@ from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from ..domain.companies import COMPANIES
+from ..domain.answer_verification import AnswerVerification
+from ..domain.cypher_guard import UnsupportedCypher, validate_generated_cypher
+from ..domain.result_scope import limit_query_rows
 from ..config import get_chat_llm, get_neo4j_graph
-from ..infrastructure.entity_normalization import normalize_lookup_key
 from .retrieval import MAX_CONTEXT_ROWS, generate_answer, generate_cypher
 from ..domain.schema import CYPHER_SCHEMA
-from ..infrastructure.graph.vector_retrieve import vector_search
+from ..domain.company_scope import CompanyScope
+from .company_retrieval import (
+    _build_company_surfaces, _COMPANY_SURFACES, _mentioned_company,
+    requires_company_scope, retrieve_company_chunks,
+)
 
 # Up to this many Cypher generations per question (1 initial + retries). Small on
 # purpose: if two re-queries with failure hints still return nothing, the honest
@@ -60,12 +65,16 @@ class AgentState(TypedDict, total=False):
     question: str      # the user's Korean question (immutable input)
     label: str         # classify output: "relational" | "factual" (observability)
     cypher: str        # latest generated Cypher
-    rows: list[dict]   # latest query result
+    cypher_rejected: bool  # unsupported generation; route to existing vector fallback
+    rows: list[dict]   # retained query result, not the complete DB result
+    query_rows_truncated: bool  # bounded AI view, not a DB execution budget
     chunks: list[dict] # vector-retrieved source chunks for qualitative/fallback answers
+    company_scope: CompanyScope | None  # observed metadata identity, not corpus readiness
     error: str         # execute_cypher failure message, "" on success (retry hint)
     attempts: int      # Cypher generations so far (retry counter)
     stalled: bool      # regeneration converged to the same Cypher -> stop retrying
     answer: str        # final grounded Korean answer
+    answer_verification: AnswerVerification | None  # internal same-result observation only
 
 
 # --- classify ----------------------------------------------------------------
@@ -116,6 +125,8 @@ def _is_hub_question(question: str) -> bool:
 
 def _route_after_classify(state: AgentState) -> str:
     """A global/whole-structure question skips NL->Cypher for the fixed overview."""
+    if requires_company_scope(state["question"]):
+        return "vector"
     if state.get("label") == "global" or _is_hub_question(state["question"]):
         return "overview"
     if state.get("label") == "qualitative":
@@ -157,7 +168,8 @@ def _structural_overview(state: AgentState, *, graph) -> AgentState:
     ``generate_answer`` and ``--trace`` work unchanged."""
     overview = {view: graph.query(q) for view, q in _OVERVIEW_QUERIES.items()}
     combined_cypher = "\n".join(f"// {view}\n{q}" for view, q in _OVERVIEW_QUERIES.items())
-    return {"rows": [overview], "cypher": combined_cypher, "error": "", "attempts": 1}
+    return {"rows": [overview], "query_rows_truncated": False,
+            "cypher": combined_cypher, "error": "", "attempts": 1}
 
 
 # --- generate_cypher ---------------------------------------------------------
@@ -181,28 +193,39 @@ def _augmented_question(state: AgentState) -> str:
 
 
 def _generate_cypher(state: AgentState, *, schema: str, llm) -> AgentState:
-    cypher = generate_cypher(_augmented_question(state), schema=schema, llm=llm)
+    try:
+        cypher = generate_cypher(_augmented_question(state), schema=schema, llm=llm)
+    except UnsupportedCypher as exc:
+        # Do not retain unsafe source text or retry it as if it were missing data.
+        return {"cypher": "", "error": str(exc), "cypher_rejected": True,
+                "attempts": state.get("attempts", 0) + 1, "stalled": False}
     # If a retry regenerates the exact same query, the model has converged and
     # more retries can't help — flag it so _should_retry stops (an empty result
     # then means the data genuinely isn't there, not a fixable bad query).
     prev = state.get("cypher")
     stalled = bool(state.get("attempts")) and cypher == prev
-    return {"cypher": cypher, "attempts": state.get("attempts", 0) + 1, "stalled": stalled}
+    return {"cypher": cypher, "cypher_rejected": False,
+            "attempts": state.get("attempts", 0) + 1, "stalled": stalled}
 
 
 # --- execute_cypher ----------------------------------------------------------
 # Pure DB step, isolated from the LLM. Records rows on success, or the error
 # message (and empties rows) on failure — either way the retry edge reads state.
 def _execute_cypher(state: AgentState, *, graph) -> AgentState:
+    if state.get("cypher_rejected"):
+        return {"rows": [], "query_rows_truncated": False, "error": str(UnsupportedCypher())}
     try:
-        rows = graph.query(state["cypher"])
-        return {"rows": rows, "error": ""}
+        validate_generated_cypher(state["cypher"])
+        rows, clipped = limit_query_rows(graph.query(state["cypher"]))
+        return {"rows": rows, "query_rows_truncated": clipped, "error": ""}
     except Exception as exc:  # invalid Cypher, syntax, etc. -> feed back as hint
-        return {"rows": [], "error": str(exc).splitlines()[0][:200]}
+        return {"rows": [], "query_rows_truncated": False, "error": str(exc).splitlines()[0][:200]}
 
 
 def _should_retry(state: AgentState) -> str:
     """Route after execution: retry the Cypher, or go answer."""
+    if state.get("cypher_rejected"):
+        return "vector"  # Existing read-only fallback, no repeated unsafe generation.
     if state.get("stalled"):  # regeneration converged; retrying is futile
         return "vector"
     failed = bool(state.get("error")) or len(state.get("rows", [])) == 0
@@ -214,54 +237,23 @@ def _should_retry(state: AgentState) -> str:
 
 
 # --- retrieve_chunks ---------------------------------------------------------
-# Surface priority for tie-breaking equal-length matches (lower wins).
-_SURFACE_PRIORITY = {"canonical": 0, "alias": 1, "stock_code": 2}
-
-
-def _build_company_surfaces() -> list[tuple[str, str, str]]:
-    """(normalized_key, canonical, surface_type) for every canonical/alias/stock_code."""
-    surfaces: list[tuple[str, str, str]] = []
-    for company in COMPANIES:
-        surfaces.append((normalize_lookup_key(company.canonical), company.canonical, "canonical"))
-        for alias in company.aliases:
-            surfaces.append((normalize_lookup_key(alias), company.canonical, "alias"))
-        if company.stock_code:
-            surfaces.append((normalize_lookup_key(company.stock_code), company.canonical, "stock_code"))
-    return surfaces
-
-
-_COMPANY_SURFACES = _build_company_surfaces()
-
-
-def _mentioned_company(question: str) -> str | None:
-    """Deterministic entity link: longest matching surface wins (avoids e.g.
-    '에코프로' shadowing '에코프로비엠' just because it comes first in COMPANIES)."""
-    qkey = normalize_lookup_key(question)
-    matches = [
-        (len(key), -_SURFACE_PRIORITY[kind], canonical)
-        for key, canonical, kind in _COMPANY_SURFACES
-        if key and key in qkey
-    ]
-    if not matches:
-        return None
-    return max(matches)[2]
-
-
 def _retrieve_chunks(state: AgentState, *, graph) -> AgentState:
-    company = _mentioned_company(state["question"])
-    chunks = vector_search(state["question"], k=5, company=company, graph=graph)
-    return {"chunks": chunks, "error": state.get("error", "")}
+    return retrieve_company_chunks(state, graph=graph)
 
 
 # --- generate_answer ---------------------------------------------------------
 def _generate_answer(state: AgentState, *, llm) -> AgentState:
+    records: list[AnswerVerification] = []
     answer = generate_answer(
         state["question"],
         state.get("rows", []),
         state.get("chunks", []),
         llm=llm,
+        verification_records=records,
+        query_rows_truncated=state.get("query_rows_truncated", False),
+        company_scope=state.get("company_scope"),
     )
-    return {"answer": answer}
+    return {"answer": answer, "answer_verification": records[-1] if records else None}
 
 
 def build_agent(graph, *, classify_llm=None, cypher_llm=None, qa_llm=None):

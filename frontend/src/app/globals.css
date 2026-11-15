@@ -1,8 +1,14 @@
 @import "tailwindcss";
+@import "../shared/ui/report-frame.css";
+@import "../shared/ui/workspace-page.css";
+@import "../features/fundamental/components/fundamental-report-view.css";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f4f6f8;
+  --foreground: #191f28;
+  --brand: #2563eb;
+  --brand-hover: #1d4ed8;
+  --card-shadow: 0 2px 16px rgba(25, 31, 40, 0.035);
 }
 
 @theme inline {
@@ -25,10 +31,12 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+  line-height: 1.65;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 a {
-  color: inherit;
   text-decoration: none;
 }
 
@@ -36,8 +44,12 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+}
+
 ::selection {
-  background: rgba(79, 70, 229, 0.18);
+  background: rgba(37, 99, 235, 0.16);
 }
 
 .recharts-default-tooltip {
@@ -57,5 +69,21 @@ button {
 @media print {
   .no-print {
     display: none !important;
+  }
+}
+
+/* 키보드 탐색과 작은 화면에서도 조작 위치를 잃지 않도록 한다. */
+:where(a, button, input, textarea, select, summary):focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 4px;
+}
+
+.app-shell {
+  background: var(--background);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
   }
 }

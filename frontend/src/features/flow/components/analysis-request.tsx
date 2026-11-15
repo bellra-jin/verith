@@ -14,7 +14,7 @@ export function AnalysisEntry({analysisId}:{analysisId:string|null}){
   return()=>{active=false;clearTimeout(timeout);abort.abort();};
  },[analysisId,retry]);
  function retrySession(){if(checkingRef.current)return;checkingRef.current=true;setChecking(true);setRetry(value=>value+1);}
- if(!userId)return <main><h1>Flow 분석</h1><p>{error||'로그인 후 이용하세요.'}</p><button disabled={checking} onClick={retrySession}>로그인 상태 다시 확인</button><Link href="/api/auth/login">로그인</Link><Link href="/">홈</Link></main>;
+ if(!userId)return <main className="workspace-page"><h1>Flow 분석</h1><p>{error||'로그인 후 이용하세요.'}</p><button disabled={checking} onClick={retrySession}>로그인 상태 다시 확인</button><Link href="/api/auth/login">로그인</Link><Link href="/">홈</Link></main>;
  return <AnalysisRequest key={userId+':'+(analysisId??'new')} userId={userId} analysisId={analysisId} initialView={null} onAccountChange={setUserId}/>;
 }
 
@@ -114,7 +114,7 @@ export function AnalysisRequest({userId,analysisId,initialView,onAccountChange}:
  }
  function startNew(){invalidate();pending.current=null;try{sessionStorage.removeItem(pendingKey(userId));window.location.assign('/research');}catch{setBlocked(true);setError('요청 기록을 변경할 수 없습니다.');}}
  const terminal=view&&['stored','failed','unknown'].includes(view.state);
- return <main><h1>Flow 분석</h1><p>수급 자료를 분석하고 본인 리포트로 저장합니다.</p>
+ return <main className="workspace-page"><h1>Flow 분석</h1><p>수급 자료를 분석하고 본인 리포트로 저장합니다.</p>
   {!hasPending&&!analysisId&&!knownId&&verified&&<QueryPreparation userId={userId} disabled={busy||reading!==null||blocked} onPrepared={acceptPreparation} onClear={clearPreparation} onAccountChange={()=>{invalidate();onAccountChange(null);}}/>}
   {(hasPending||analysisId||knownId)&&<><label>종목코드<input value={ticker} maxLength={6} inputMode="numeric" disabled={!verified||busy} readOnly={hasPending||Boolean(analysisId)} onChange={e=>setTicker(e.target.value)}/></label>
   <label>질문<textarea value={question} maxLength={2000} disabled={!verified||busy} readOnly={hasPending||Boolean(analysisId)} onChange={e=>setQuestion(e.target.value)}/></label></>}

@@ -59,6 +59,8 @@ def collect_node(state: FundamentalAgentState) -> dict[str, Any]:
     risk_flags: list[str] = list(corp_code_resolution.risk_flags if corp_code_resolution else ())
     source_records: list[DartSourceRecord] = []
     yearly_metrics = {}
+    collected_bases: set[str] = set()
+    metric_currency_provenance: dict[str, dict[str, bool]] = {}
     dart_calls = 0
     fs_div = request.fs_div
     latest_live_year: str | None = None
@@ -101,28 +103,40 @@ def collect_node(state: FundamentalAgentState) -> dict[str, Any]:
             fs_div = "OFS"
             risk_flags.append("OFS_FALLBACK")
         _append_source_risk_flags(source_records, risk_flags)
-        yearly_metrics[year] = standardize_year_rows(rows, year)
+        year_provenance: dict[str, bool] = {}
+        yearly_metrics[year] = standardize_year_rows(rows, year, currency_provenance=year_provenance, reprt_code=reprt_code)
+        metric_currency_provenance[year] = year_provenance
+        if yearly_metrics[year]:
+            collected_bases.add(fs_div)
 
-    if not any(yearly_metrics.values()):
+    # 혼합 기준을 단일 fs_div로 표시하거나 비교하지 않는다. 기존 부족 응답으로 닫는다.
+    mixed_basis = len(collected_bases) > 1
+    if mixed_basis or not any(yearly_metrics.values()):
+        retrieval_summary = summarize_source_records(source_records)
+        retrieval_summary["probe_network_calls"] = sum(
+            record.source == "dart" and (record.reason or "").startswith("latest_report_probe")
+            for record in source_records)
         return {
             "corp_code": corp_code,
             "corp_name": corp_name,
             "corp_code_resolution": asdict(corp_code_resolution) if corp_code_resolution else {},
             "years": years,
-            "fs_div": fs_div,
+            "fs_div": "" if mixed_basis else fs_div,
             "reprt_code": reprt_code,
             "reprt_name": selection.reprt_name,
             "report_mode": selection.mode,
             "period_basis": period_basis(years[-1], reprt_code, selection.reprt_name),
             "dart_calls": dart_calls,
             "source_records": source_records,
-            "retrieval_summary": summarize_source_records(source_records),
-            "risk_flags": risk_flags + ["DART_EMPTY_DATA"],
-            "yearly_metrics": yearly_metrics,
+            "retrieval_summary": retrieval_summary,
+            "risk_flags": risk_flags + (["MIXED_ACCOUNTING_BASIS"] if mixed_basis else ["DART_EMPTY_DATA"]),
+            "yearly_metrics": {} if mixed_basis else yearly_metrics,
+            "metric_currency_provenance": {} if mixed_basis else metric_currency_provenance,
             "share_count": None,
             "insights": {},
             "data_status": "empty_data",
-            "data_status_reason": "DART에서 계산 가능한 재무제표 행을 찾지 못했습니다.",
+            "data_status_reason": ("연도별 연결(CFS)·별도(OFS) 회계 기준이 혼합되어 비교 가능한 재무자료가 부족합니다. 수치·성장률·추세를 계산하지 않았습니다."
+                if mixed_basis else "DART에서 계산 가능한 재무제표 행을 찾지 못했습니다."),
         }
 
     share_count = None
@@ -185,6 +199,7 @@ def collect_node(state: FundamentalAgentState) -> dict[str, Any]:
         "retrieval_summary": summarize_source_records(source_records),
         "risk_flags": risk_flags,
         "yearly_metrics": yearly_metrics,
+        "metric_currency_provenance": metric_currency_provenance,
         "share_count": share_count,
         "insights": insights,
         "data_status": "normal",

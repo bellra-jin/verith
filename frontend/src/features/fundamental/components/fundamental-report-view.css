@@ -1,0 +1,152 @@
+/* 저장 원문·경고의 의미는 유지하고 재무 결과의 읽기 흐름만 정돈한다. */
+.fundamental-report {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+  padding: 48px 24px 72px;
+  color: var(--foreground);
+  line-height: 1.8;
+}
+
+.fundamental-report > h1 {
+  margin: 0 0 24px;
+  font-size: clamp(26px, 4vw, 36px);
+  font-weight: 750;
+  line-height: 1.35;
+  letter-spacing: -0.035em;
+}
+
+.fundamental-report > h2 {
+  margin: 40px 0 16px;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: -0.025em;
+}
+
+.fundamental-report > p {
+  margin: 16px 0;
+  color: #475569;
+  font-size: 14px;
+}
+
+.fundamental-report > nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.fundamental-report a {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.fundamental-report > nav a,
+.fundamental-report > nav button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 14px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fundamental-report > nav a {
+  background: #fff;
+  text-decoration: none;
+}
+
+.fundamental-report > nav button {
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.fundamental-report > nav button:disabled {
+  opacity: 0.65;
+}
+
+.fundamental-report > nav > p {
+  flex-basis: 100%;
+}
+
+.fundamental-report > dl {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr);
+  gap: 14px 24px;
+  margin: 24px 0;
+  border-radius: 24px;
+  background: #fff;
+  padding: 28px;
+  box-shadow: var(--card-shadow);
+}
+
+.fundamental-report dt {
+  color: #475569;
+  font-size: 14px;
+}
+
+.fundamental-report dd {
+  min-width: 0;
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fundamental-report > ul {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fundamental-report > ul > li,
+.fundamental-report > h2 + p {
+  min-width: 0;
+  border-radius: 20px;
+  background: #fff;
+  padding: 24px;
+  box-shadow: var(--card-shadow);
+  font-size: 15px;
+}
+
+.fundamental-report [role='status'],
+.fundamental-report [role='alert'],
+.fundamental-report > nav + p {
+  border-radius: 16px;
+  background: #fff8e6;
+  padding: 16px 20px;
+  color: #854d0e;
+  font-size: 14px;
+}
+
+.fundamental-report [role='alert'] {
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+@media (max-width: 540px) {
+  .fundamental-report {
+    padding: 32px 20px 48px;
+  }
+
+  .fundamental-report > dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 24px;
+  }
+
+  .fundamental-report dd:not(:last-child) {
+    margin-bottom: 16px;
+  }
+
+  .fundamental-report > ul > li,
+  .fundamental-report > h2 + p {
+    padding: 20px;
+  }
+}

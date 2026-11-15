@@ -350,13 +350,13 @@ export function IndustryReportView({ payload }: { payload: IndustryPayload }) {
   const hasGraph = view.nodes.length > 0;
 
   return (
-    <div className="overflow-hidden rounded-[26px] border border-[rgba(20,26,40,0.07)] bg-white text-[#1b1e26] shadow-[0_24px_60px_rgba(20,30,60,0.09),0_2px_6px_rgba(20,30,60,0.04)]">
+    <div className="industry-report overflow-hidden rounded-[26px] border border-[rgba(20,26,40,0.07)] bg-white text-[#1b1e26] shadow-[0_24px_60px_rgba(20,30,60,0.09),0_2px_6px_rgba(20,30,60,0.04)]">
       {/* HERO */}
       <div
         className="border-b border-[rgba(20,26,40,0.07)] px-6 pb-8 pt-9 sm:px-11"
         style={{
           background:
-            "radial-gradient(900px 380px at 6% -30%, rgba(63,110,222,0.14), transparent 60%), linear-gradient(180deg, #eef3ff 0%, #ffffff 62%)",
+            "var(--report-hero-background)",
         }}
       >
         <div className="mb-4 flex flex-wrap items-center gap-2.5">

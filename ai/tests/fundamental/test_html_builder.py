@@ -270,3 +270,15 @@ def test_metric_value_tone_keeps_debt_ratio_102_neutral():
 def test_growth_metric_tone_uses_korean_market_colors():
     assert _value_tone_class("revenue_growth", {"value": 3.2, "unit": "%", "status": "available"}) == "vfr-tone-up"
     assert _value_tone_class("revenue_growth", {"value": -10.4, "unit": "%", "status": "available"}) == "vfr-tone-down"
+
+
+def test_verified_badge_requires_every_explicit_boolean_check():
+    fields = ('binding_passed', 'consistency_passed', 'guard_passed', 'verdict_stable')
+    complete = dict.fromkeys(fields, True) | {'outcome': 'passed'}
+    assert '검증됨' in _html(verification_summary=complete)
+    for key in fields:
+        partial = dict(complete)
+        partial.pop(key)
+        assert '검증됨' not in _html(verification_summary=partial)
+        for value in (None, False, 0, 1, 'true', 'false'):
+            assert '검증됨' not in _html(verification_summary=dict(complete, **{key: value}))

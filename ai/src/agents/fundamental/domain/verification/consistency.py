@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..normalization.standardize import MetricValue
+from ..normalization.standardize import MetricValue, currency_unproven
 
 BALANCE_IDENTITY_FAILED_PREFIX = "VERIFY_BALANCE_IDENTITY_FAILED_"
 EPS_MISMATCH_FLAG = "CONSISTENCY_EPS_MISMATCH"
@@ -10,10 +10,10 @@ EPS_SKIPPED_PERIOD_MISMATCH = "CONSISTENCY_EPS_SKIPPED_PERIOD_MISMATCH"
 
 
 def is_consistency_flag(flag: str) -> bool:
-    return flag.startswith(BALANCE_IDENTITY_FAILED_PREFIX) or flag == EPS_MISMATCH_FLAG
+    return flag.startswith((BALANCE_IDENTITY_FAILED_PREFIX, "CURRENCY_", "TREND_CURRENCY_", "TREND_UNIT_UNSUPPORTED_")) or flag == EPS_MISMATCH_FLAG
 
 
-def validate_balance_identity(yearly_metrics: dict[str, dict[str, MetricValue]]) -> list[str]:
+def validate_balance_identity(yearly_metrics: dict[str, dict[str, MetricValue]], *, currency_provenance=None) -> list[str]:
     """Check assets ~= liabilities + equity when the required rows exist."""
     flags: list[str] = []
     for year, metrics in yearly_metrics.items():
@@ -21,6 +21,13 @@ def validate_balance_identity(yearly_metrics: dict[str, dict[str, MetricValue]])
         liabilities = metrics.get("liabilities")
         equity = metrics.get("equity")
         if not (assets and liabilities and equity):
+            continue
+        asset_key = "assets" if metrics.get("assets") else "equity_and_liabilities"
+        if any(currency_unproven(currency_provenance, year, key) for key in (asset_key, "liabilities", "equity")):
+            flags.append(f"CURRENCY_UNPROVEN_BALANCE_{year}")
+            continue
+        if len({assets.currency, liabilities.currency, equity.currency}) > 1:
+            flags.append(f"CURRENCY_MISMATCH_BALANCE_{year}")
             continue
         tolerance = max(abs(assets.value) * 0.0001, 1_000_000)
         if abs(assets.value - (liabilities.value + equity.value)) > tolerance:

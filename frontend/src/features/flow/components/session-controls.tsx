@@ -53,7 +53,7 @@ function ReportControls({reportId,userId,returnTo,children}:{reportId:string;use
   finally{if(sameContext()){if(!current())setVisible(null);setPending(false);}}
  }
  const ready=sameReportObservation(visible,identity,typeof window==='undefined'?'':window.location.href);
- return <section aria-label="본인 결과 확인">
+ return <section className="report-controls" aria-label="본인 결과 확인">
   {error&&<p role="alert">{error}</p>}
   {pending&&<p role="status">요청 확인 중…</p>}
   {!ready&&<button type="button" disabled={pending} onClick={()=>void observe()}>결과 상태 다시 확인</button>}
@@ -71,5 +71,5 @@ export function SessionControls({csrfToken,reportId,userId,returnTo='/',children
  const [error,setError]=useState('');
  async function logout(){try{const response=await fetch('/api/auth/logout',{method:'POST',headers:{'X-CSRF-Token':csrfToken},cache:'no-store'});if(!response.ok){setError('요청을 처리할 수 없습니다. 다시 로그인해 주세요.');return;}window.location.assign('/');}catch{setError('요청을 처리할 수 없습니다.');}}
  if(reportId)return <ReportControls reportId={reportId} userId={userId??''} returnTo={returnTo}>{children}</ReportControls>;
- return <div><button type="button" onClick={()=>void logout()}>로그아웃</button>{error&&<p role="alert">{error}</p>}</div>;
+ return <div className="session-controls"><button type="button" onClick={()=>void logout()}>로그아웃</button>{error&&<p role="alert">{error}</p>}</div>;
 }

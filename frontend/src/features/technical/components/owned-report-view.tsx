@@ -5,7 +5,7 @@ import {OwnedReadAction,type OwnedReadState,matchesOwnedReadUrl} from '../lib/ow
 
 export function OwnedReadContent({state,onRetry}:{state:OwnedReadState;onRetry:()=>void}){
   const pending=state.kind==='pending';
-  return <section aria-label="본인 저장 차트 · 조회 전용" aria-busy={pending} className="min-w-0 space-y-4 break-words">
+  return <section aria-label="본인 저장 차트 · 조회 전용" aria-busy={pending} className="technical-owned min-w-0 space-y-4 break-words">
     <header className="space-y-2"><h1 className="text-xl font-semibold">본인 저장 차트 · 조회 전용</h1>
       <p className="text-sm text-slate-600">저장된 결과만 조회합니다. 새 분석을 실행하지 않습니다.</p>
       <a href="/research" className="inline-block rounded-lg underline focus-visible:outline-2">리서치 대화로 돌아가기</a></header>

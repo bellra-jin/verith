@@ -24,6 +24,7 @@ import os
 import time
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pandas as pd
@@ -89,6 +90,28 @@ class KisError(RuntimeError):
     """KIS 호출 실패. 메시지에 비밀·토큰을 담지 않는다."""
 
 
+class KisConfigurationError(KisError):
+    """Real-only market endpoints cannot use a paper or arbitrary origin."""
+    code = "KIS_CONFIGURATION_INVALID"
+
+    def __init__(self):
+        super().__init__("KIS 실전 조회 서버 설정이 올바르지 않습니다.")
+
+
+def _production_base_url(value: str) -> str:
+    try:
+        if type(value) is not str or not value.isascii() or any(ord(c) <= 32 or ord(c) == 127 for c in value):
+            raise ValueError()
+        url = urlsplit(value)
+        if (url.scheme != 'https' or url.hostname != 'openapi.koreainvestment.com'
+                or url.port != 9443 or url.username is not None or url.password is not None
+                or url.path not in {'', '/'} or '?' in value or '#' in value):
+            raise ValueError()
+    except ValueError:
+        raise KisConfigurationError() from None
+    return value.rstrip('/')
+
+
 def _load_credentials() -> tuple[str, str, str]:
     """.env에서 KIS 자격정보를 읽는다. 값은 반환만 하고 절대 출력하지 않는다."""
     load_dotenv(dotenv_path=_ENV_FILE, override=False)  # AI 서비스 루트 .env만 사용; process env 우선
@@ -103,7 +126,7 @@ def _load_credentials() -> tuple[str, str, str]:
     if missing:
         # 설정 값과 누락 항목은 오류 문구에 포함하지 않는다.
         raise KisError("KIS 설정이 없습니다.")
-    return app_key, app_secret, base_url.rstrip("/")
+    return app_key, app_secret, _production_base_url(base_url)
 
 
 def _issue_token(client: httpx.Client, app_key: str, app_secret: str, *, execution_context=None) -> dict:

@@ -50,6 +50,19 @@ def engine_result(request,*,report_id=None):
             report_verification=dict(id=str(uuid4()),report_id=rid,binding_passed=True,consistency_passed=True,verdict_stable=False,outcome='insufficient',regen_count=0),report_insights=[],report_filing_snippets=[])))
 
 
+def call_usage_fixture():
+    """Synthetic #89 wire, never a trusted caller inventory or provider receipt."""
+    first=dict(call_id=str(UUID(int=201)),parent_call_id=None,stage='interpret',
+        attempt_kind='initial',provider='synthetic',model='synthetic-model',
+        response_model='synthetic-model',service_tier=None,requested_service_tier=None,
+        request_sha256='a'*64,policy_sha256='b'*64,outcome='unknown',
+        input_tokens=None,cached_tokens=None,output_tokens=None,total_tokens=None)
+    second=dict(first,call_id=str(UUID(int=202)),parent_call_id=first['call_id'],
+        attempt_kind='schema_retry',outcome='validated',input_tokens=10,
+        cached_tokens=2,output_tokens=5,total_tokens=15)
+    return dict(schema_version='fundamental.call-attempts.v1',calls=[first,second])
+
+
 async def verify_fundamental(proof):
     with isolated_application(proof) as observed:
         try:result=await _verify(proof)
@@ -86,7 +99,7 @@ async def _verify(proof):
     from src.modules.fundamental.api import analysis_router
     from src.modules.fundamental.application.analysis_adapter import FundamentalAnalysisAdapter
     from src.modules.fundamental.infrastructure import analysis_repository as repo
-    from src.modules.fundamental.domain.analysis import canonical,sha,stored_response
+    from src.modules.fundamental.domain.analysis import canonical,sha,stored_response,decode
     groups=[];calls={};mode='normal';chosen=None;commit_mode=None;fail_stage=False;rejections=0;quota_trace=[]
     barrier_count=0;barrier=asyncio.Event();first_dispatch=asyncio.Event();held=asyncio.Event();release=asyncio.Event();dispatch_lock=asyncio.Lock()
     TOKEN='cf015-public-synthetic-service-token-32bytes'
@@ -119,6 +132,7 @@ async def _verify(proof):
         if mode=='engine_failure':raise RuntimeError('synthetic engine failure')
         if mode=='invalid_output':return {'invalid':'synthetic'}
         result=engine_result(request,report_id=chosen)
+        if mode=='usage_observation':result['meta']['call_usage']=call_usage_fixture()
         if mode=='cross_reference':result['meta']['erd_payload']['report_evidence']=[dict(id=str(uuid4()),report_id=result['meta']['erd_payload']['fundamental_report']['id'],ratio_id=str(uuid4()))]
         if mode=='omitted_lists':
             for name in ('report_ratios','report_evidence','report_insights','report_filing_snippets'):result['meta']['erd_payload'].pop(name,None)
@@ -407,6 +421,32 @@ async def _verify(proof):
             nonlocal mode
             mode=value
         await _verify_execution_limits(proof,settings,call,body,response,mark,sql,calls,(ta,pa),(tb,pb),first_body,first,ledger,set_commit,set_stage,set_mode,held,release)
+        mode='usage_observation'
+        try:
+            request=body();observed=response(await call('POST',value=request),200)
+            check(observed['state']=='stored','Usage observations real route stored')
+            seen=sum(calls.values());saved=await ledger(request['idempotency_key'])
+            original=(saved.input_json,saved.result_json,saved.result_sha256)
+            from src.modules.fundamental.application.report_service import FundamentalReportService
+            from src.modules.auth.application.session_service import AuthenticationRequired
+            async with owned_session(proof) as session:
+                one=await FundamentalReportService(session,principal=pa).get_usage_observation(saved.adopted_report_id)
+                check(one.state=='unknown' and one.keep_reservation and 'USAGE_MISSING' in one.reasons,'Producer observations untrusted and partial')
+                check(len(decode(one.calls_json))==2,'Both initial missing and successful retry preserved')
+            async with owned_session(proof) as session:
+                two=await FundamentalReportService(session,principal=pa).get_usage_observation(saved.adopted_report_id)
+                raw=await FundamentalReportService(session,principal=pa).get_report(saved.adopted_report_id)
+                check(one==two and raw.report['meta']['call_usage']==call_usage_fixture(),'Fresh SQL read identical; raw producer bytes preserved')
+            async with owned_session(proof) as session:
+                check(await FundamentalReportService(session,principal=pb).get_usage_observation(saved.adopted_report_id) is None,'Other owner no usage observation')
+            async with owned_session(proof) as session:
+                try:await FundamentalReportService(session,principal=pr).get_usage_observation(saved.adopted_report_id)
+                except AuthenticationRequired:pass
+                else:check(False,'Revoked session cannot read usage observations')
+            again=await ledger(request['idempotency_key'])
+            check((again.input_json,again.result_json,again.result_sha256)==original and sum(calls.values())==seen,'Usage read adds no dispatch or snapshot write')
+            mark('native_producer_observation_snapshot_fresh_SQL_owner_read_unknown_no_redispatch')
+        finally:mode='normal'
         previous_tags={};count_pids=set()
         for pid,tag in quota_trace:
             if tag=='count':

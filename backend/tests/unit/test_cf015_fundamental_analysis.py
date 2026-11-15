@@ -859,3 +859,118 @@ def test_fundamental_usage_collection_count_and_nulls_share_document_budget(monk
     # Exact null collection fits: [null,...,null] = 5*N+1 bytes.
     result=u.classify_usage(expected,(None,)*204,usage_trusted=True)
     assert result.state=='unknown' and result.reason=='USAGE_MISSING' and result.keep_reservation
+
+
+async def producer_snapshot(change=None):
+    from scripts.cf015_fundamental_check import call_usage_fixture
+    value=row()
+    def engine(request):
+        raw=engine_result(request);raw['meta']['call_usage']=call_usage_fixture()
+        if change:change(raw)
+        return raw
+    response=await envelope(value,engine)
+    adapter=FundamentalAnalysisAdapter(value,owner_user_id=value.owner_user_id)
+    frozen=adapter.validate_and_freeze(response)
+    return value,adapter,frozen,response
+
+
+async def test_producer_observation_reuses_raw_snapshot_but_never_infers_trust_or_totals():
+    from src.modules.fundamental.domain.usage_observation import observe_snapshot
+    value,adapter,frozen,response=await producer_snapshot();before=copy.deepcopy(response)
+    result=observe_snapshot(frozen)
+    assert result.context==adapter.context and result.report_id==frozen.report_id
+    assert result.source_binding_sha256==frozen.binding_sha256 and result.source_result_sha256==frozen.result_sha256
+    assert result.state=='unknown' and result.keep_reservation and 'USAGE_MISSING' in result.reasons
+    assert {'CALL_INVENTORY_UNPROVEN','PROVENANCE_UNPROVEN','POLICY_UNBOUND','CALL_EXECUTION_IDENTITY_UNPROVEN'}<=set(result.reasons)
+    calls=domain.decode(result.calls_json)
+    assert calls[0]['input_tokens'] is None and calls[1]['input_tokens']==10
+    assert 'call_usage' in domain.decode(frozen.result_json)['meta'] and response==before
+    assert not hasattr(result,'total_tokens')  # No misleading subtotal from successful retry.
+
+
+@pytest.mark.parametrize('kind',['full','missing','empty','failure'])
+async def test_producer_observation_full_or_partial_never_becomes_complete(kind):
+    from src.modules.fundamental.domain.usage_observation import observe_snapshot
+    def change(raw):
+        usage=raw['meta']['call_usage']
+        if kind=='full':usage['calls'][0].update(input_tokens=0,cached_tokens=0,output_tokens=0,total_tokens=0,outcome='validated')
+        elif kind=='missing':raw['meta'].pop('call_usage')
+        elif kind=='empty':usage['calls']=[]
+        else:usage['calls'][1].update(outcome='http_error',input_tokens=None,cached_tokens=None,output_tokens=None,total_tokens=None)
+    _,_,frozen,_=await producer_snapshot(change)
+    result=observe_snapshot(frozen)
+    assert result.state=='unknown' and result.keep_reservation and 'CALL_INVENTORY_UNPROVEN' in result.reasons
+    assert observe_snapshot(frozen)==result and observe_snapshot(frozen).fingerprint==result.fingerprint
+
+
+@pytest.mark.parametrize('kind',['duplicate','conflict','bad_parent','cycle','bad_integer','bad_total','extra_identity','oversize'])
+async def test_producer_observation_shape_parent_and_conflict_boundaries(kind):
+    from src.modules.fundamental.domain.usage_observation import observe_snapshot
+    def change(raw):
+        usage=raw['meta']['call_usage'];calls=usage['calls']
+        if kind=='duplicate':calls.append(copy.deepcopy(calls[1]))
+        elif kind=='conflict':calls.append(calls[1]|dict(input_tokens=11,total_tokens=16))
+        elif kind=='bad_parent':calls[1]['parent_call_id']=str(uuid4())
+        elif kind=='cycle':calls[0]['parent_call_id']=calls[1]['call_id']
+        elif kind=='bad_integer':calls[1]['input_tokens']=True
+        elif kind=='bad_total':calls[1]['total_tokens']=16
+        elif kind=='extra_identity':calls[1]['owner_user_id']=str(uuid4())
+        else:usage['padding']='synthetic-sentinel'*5000
+    _,_,frozen,_=await producer_snapshot(change);result=observe_snapshot(frozen)
+    if kind=='duplicate':
+        assert result.state=='unknown' and len(domain.decode(result.calls_json))==2
+    else:
+        assert result.state=='rejected' and result.keep_reservation
+        if kind=='conflict':assert 'CALL_CONFLICT' in result.reasons and len(domain.decode(result.calls_json))==3
+        else:assert 'OBSERVATION_INVALID' in result.reasons and result.calls_json=='[]'
+    assert 'synthetic-sentinel' not in result.calls_json
+
+
+async def stored_observation_service(monkeypatch):
+    from src.modules.fundamental.application import report_service as services
+    from src.modules.fundamental.infrastructure import report_repository as repo
+    value,adapter,frozen,response=await producer_snapshot()
+    for key in ('input_json','input_sha256','result_json','result_sha256'):setattr(value,key,getattr(frozen,key))
+    value.adopted_report_id=frozen.report_id;value.state='stored'
+    principal=Principal(value.owner_user_id,uuid4(),datetime.now(UTC)+timedelta(hours=1),b'x'*32)
+    projection=services._projection(response['output'],principal,'합성 재무 질문',value.stock_name,datetime.now(UTC))
+    root,ratios,evidence,interp,verify,insights,snippets,index=projection
+    # Use the same normalized question that was frozen on native admission.
+    index.question=domain.decode(value.request_json)['question']
+    session=SimpleNamespace(scalar=AsyncMock(return_value=value),flush=AsyncMock(),commit=AsyncMock(),rollback=AsyncMock(),new=(),dirty=(),deleted=())
+    monkeypatch.setattr(services,'validate_principal',AsyncMock())
+    for name,result in [('get_owned_report',root),('get_agent_indexes',[index]),('list_ratios',ratios),('list_evidence',evidence),('get_interpretation',interp),('get_verification',verify),('list_insights',insights),('list_filing_snippets',snippets)]:
+        monkeypatch.setattr(repo,name,AsyncMock(return_value=result))
+    return services,repo,services.FundamentalReportService(session,principal=principal),session,value,frozen,response,index
+
+
+async def test_owned_usage_read_uses_full_existing_snapshot_checks_and_no_write(monkeypatch):
+    services,repo,reader,session,value,frozen,response,index=await stored_observation_service(monkeypatch)
+    from src.modules.fundamental.domain.usage_observation import observe_snapshot
+    original=copy.deepcopy(response);first=await reader.get_usage_observation(frozen.report_id)
+    assert first==observe_snapshot(frozen) and (await reader.get_report(frozen.report_id)).report==original['output']
+    # A valid new owner session reads while the saved index retains its original session.
+    old=index.owner_session_id
+    reader._principal=Principal(value.owner_user_id,uuid4(),reader._principal.expires_at,b'y'*32)
+    assert await reader.get_usage_observation(frozen.report_id)==first and index.owner_session_id==old
+    session.commit.assert_not_awaited();session.flush.assert_not_awaited();session.rollback.assert_not_awaited()
+    assert response==original and value.result_json==frozen.result_json
+
+
+@pytest.mark.parametrize('kind',['missing','tamper','foreign','revoke','pending','sql','cancel'])
+async def test_owned_usage_read_denials_preserve_auth_transactions_and_redaction(monkeypatch,kind):
+    services,repo,reader,session,value,frozen,response,index=await stored_observation_service(monkeypatch)
+    if kind=='missing':repo.get_owned_report.return_value=None
+    elif kind=='tamper':value.result_sha256='f'*64
+    elif kind=='foreign':value.owner_user_id=uuid4()
+    elif kind=='revoke':services.validate_principal.side_effect=AuthenticationRequired()
+    elif kind=='pending':session.dirty=(object(),)
+    elif kind=='sql':session.scalar.side_effect=RuntimeError('private SQL sentinel')
+    else:session.scalar.side_effect=asyncio.CancelledError()
+    if kind=='missing':assert await reader.get_usage_observation(frozen.report_id) is None
+    else:
+        error=AuthenticationRequired if kind=='revoke' else asyncio.CancelledError if kind=='cancel' else services.FundamentalStoredPayloadError
+        with pytest.raises(error) as caught:await reader.get_usage_observation(frozen.report_id)
+        assert 'private SQL sentinel' not in str(caught.value)
+    if kind=='pending':session.scalar.assert_not_awaited()
+    session.commit.assert_not_awaited();session.flush.assert_not_awaited();session.rollback.assert_not_awaited()

@@ -344,6 +344,26 @@ class FundamentalReportService:
         return FundamentalReportEnvelope(report_id=rid,report=raw)
 
     async def get_report(self,report_id):
+        result=await self._read_report(report_id)
+        return None if result is None else result[1]
+
+    async def get_usage_observation(self,report_id):
+        """Internal owner-only view of claims already kept in result_json."""
+        # Never flush or overwrite caller-owned pending work for this observation.
+        if any(getattr(self._session,name,()) for name in ('new','dirty','deleted')):
+            raise FundamentalStoredPayloadError('Usage observation unavailable')
+        try:
+            result=await self._read_report(report_id)
+            if result is None:return None
+            row,_=result
+            from src.modules.fundamental.application.analysis_adapter import FundamentalAnalysisAdapter
+            from src.modules.fundamental.domain.usage_observation import observe_snapshot
+            frozen=FundamentalAnalysisAdapter(row,owner_user_id=self._principal.user_id).from_stored(row)
+            return observe_snapshot(frozen)
+        except (AuthenticationRequired,FundamentalStoredPayloadError):raise
+        except Exception:raise FundamentalStoredPayloadError('Usage observation unavailable') from None
+
+    async def _read_report(self,report_id):
         principal=await self._authorize()
         root=await fr_repo.get_owned_report(self._session,report_id,owner_user_id=principal.user_id)
         if root is None:return None
@@ -365,7 +385,7 @@ class FundamentalReportService:
                     if len(got_by_id)!=len(want):raise ValueError()
                     for item in want:self._check_projection(got_by_id.get(item.id),item)
                 else:self._check_projection(got,want)
-            return FundamentalReportEnvelope(report_id=report_id,report=raw)
+            return row,FundamentalReportEnvelope(report_id=report_id,report=raw)
         except (ValueError,TypeError,KeyError,AttributeError) as error:
             raise FundamentalStoredPayloadError('Stored result is inconsistent') from None
 

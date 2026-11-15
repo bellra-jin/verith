@@ -138,10 +138,11 @@ def build_erd_payload(
     # A missing observation is not a passed check. Keep the existing wire fields.
     verification = verification if isinstance(verification, dict) else {}
     checks = ('binding_passed', 'consistency_passed', 'guard_passed', 'verdict_stable')
-    complete_checks = all(type(verification.get(key)) is bool for key in checks)
+    # Storage and HTML agree: only four explicit successful checks can pass.
+    checks_passed = all(verification.get(key) is True for key in checks)
     verification_outcome = verification.get('outcome')
     if (not isinstance(verification_outcome, str) or not verification_outcome.strip()
-            or (verification_outcome == 'passed' and not complete_checks)):
+            or (verification_outcome == 'passed' and not checks_passed)):
         verification_outcome = 'guarded'
     created_at = datetime.now(timezone.utc).isoformat()
     report_id = _report_id(trace_id, ticker, bsns_year, reprt_code)

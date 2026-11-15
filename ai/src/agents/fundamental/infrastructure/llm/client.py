@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from ...core.config import settings
+from .usage import new_attempt, retain_attempt, transport_hooks
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -60,10 +61,29 @@ async def _call_provider(
     prompt: str,
     timeout: float,
     max_tokens: int,
+    attempt: dict[str, Any],
+    attempt_records: list[dict[str, Any]],
 ) -> tuple[str, dict[str, int | None]]:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+    kwargs = _request_kwargs(base_url, model, system, prompt, max_tokens)
+    # SDK retry 정책은 유지하되 모든 HTTP 재전송을 별도 call_id로 관측한다.
+    async with AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout,
+            http_client=DefaultAsyncHttpxClient(event_hooks=transport_hooks(attempt_records, attempt))) as client:
+        response = await client.chat.completions.create(**kwargs)
+    message = response.choices[0].message
+    content = message.content or getattr(message, "reasoning_content", "") or ""
+    usage = getattr(response, "usage", None)
+    details = getattr(usage, "prompt_tokens_details", None)
+    return content, {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "cached_tokens": getattr(details, "cached_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
+def _request_kwargs(base_url, model, system, prompt, max_tokens):
     kwargs = {
         "model": model,
         "temperature": 0.0,
@@ -75,14 +95,7 @@ async def _call_provider(
     else:
         kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
 
-    response = await client.chat.completions.create(**kwargs)
-    message = response.choices[0].message
-    content = message.content or getattr(message, "reasoning_content", "") or ""
-    usage = getattr(response, "usage", None)
-    return content, {
-        "prompt_tokens": getattr(usage, "prompt_tokens", None) if usage is not None else None,
-        "completion_tokens": getattr(usage, "completion_tokens", None) if usage is not None else None,
-    }
+    return kwargs
 
 
 def _retry_prompt(prompt: str, error: ValidationError) -> str:
@@ -105,25 +118,33 @@ async def _complete_with_provider(
     prompt: str,
     timeout: float,
     max_tokens: int,
+    attempt_records: list[dict[str, Any]],
+    stage: str,
+    fallback: bool = False,
 ) -> StructuredCompletion | None:
     started = time.perf_counter()
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     current_prompt = prompt
     for attempt in range(2):
+        row = new_attempt(provider=provider, model=model,
+            request=_request_kwargs(base_url, model, system, current_prompt, max_tokens),
+            timeout=timeout, stage=stage,
+            kind="schema_retry" if attempt else ("provider_fallback" if fallback else "initial"),
+            parent_call_id=attempt_records[-1]["call_id"] if attempt_records else None)
+        retain_attempt(attempt_records, row)
         content, usage = await _call_provider(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            system=system,
-            prompt=current_prompt,
-            timeout=timeout,
-            max_tokens=max_tokens,
+            base_url=base_url, api_key=api_key, model=model, system=system,
+            prompt=current_prompt, timeout=timeout, max_tokens=max_tokens,
+            attempt=row, attempt_records=attempt_records,
         )
+        row = attempt_records[-1]
+        # HTTP hooks retain raw evidence; SDK-coerced usage is summary-only.
         prompt_tokens = usage["prompt_tokens"]
         completion_tokens = usage["completion_tokens"]
         try:
             data = validate_json_output(schema, content)
+            row["outcome"] = "validated"
             return StructuredCompletion(
                 data=data,
                 provider=provider,
@@ -133,6 +154,7 @@ async def _complete_with_provider(
                 latency_ms=round((time.perf_counter() - started) * 1000),
             )
         except ValidationError as exc:
+            row["outcome"] = "invalid_output"
             if attempt == 1:
                 return None
             # structured output은 한 번만 재요청한다. 이후 fallback은 상위 노드가 결정한다.
@@ -147,8 +169,12 @@ async def complete_structured(
     prompt: str,
     timeout: float,
     max_tokens: int = 1024,
+    attempt_records: list[dict[str, Any]] | None = None,
+    stage: str = "unspecified",
 ) -> StructuredCompletion | None:
     global _qwen_failures, _qwen_skip_until
+    if attempt_records is None:
+        attempt_records = []
 
     if time.time() >= _qwen_skip_until:
         try:
@@ -162,6 +188,7 @@ async def complete_structured(
                 prompt=prompt,
                 timeout=timeout,
                 max_tokens=max_tokens,
+                attempt_records=attempt_records, stage=stage,
             )
             if result is not None:
                 _qwen_failures = 0
@@ -185,6 +212,7 @@ async def complete_structured(
                 prompt=prompt,
                 timeout=min(timeout, 15.0),
                 max_tokens=max_tokens,
+                attempt_records=attempt_records, stage=stage, fallback=True,
             )
         except Exception:
             return None

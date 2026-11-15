@@ -137,6 +137,9 @@ def report_node(state: FundamentalAgentState) -> dict[str, Any]:
         "retrieval_summary": state.get("retrieval_summary", {}),
         "verification_summary": state.get("verification_summary", {}),
         "cost_summary": state.get("cost_summary", {}),
+        # Producer 관측값이며 Backend complete_usage/trust/정산 ACK가 아니다.
+        "call_usage": {"schema_version": "fundamental.call-attempts.v1",
+                       "calls": state.get("llm_call_usage_records", [])},
         "corp_code": state["corp_code"],
         "corp_code_resolution": state.get("corp_code_resolution", {}),
         "input_interpretation": state.get("input_interpretation", {}),

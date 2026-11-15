@@ -24,6 +24,7 @@ async def interpret_node(state: FundamentalAgentState) -> dict[str, Any]:
     extend_unique(risk_flags, result.flags)
     call_count = int(state.get("llm_call_count", 0)) + (0 if result.provider == "template" else 1)
     return {
+        "llm_call_usage_records": list(state.get("llm_call_usage_records", [])) + result.call_usage_records,
         "interpretation_result": result,
         "risk_flags": risk_flags,
         "verdict": result.verdict,

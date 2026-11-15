@@ -25,6 +25,7 @@ async def verify_node(state: FundamentalAgentState) -> dict[str, Any]:
     llm_latency_ms = state["llm_latency_ms"]
     llm_verdict_label = state.get("llm_verdict_label")
     usage_records = list(state.get("llm_usage_records", [])) or [state.get("llm_usage", {})]
+    call_usage_records = list(state.get("llm_call_usage_records", []))
     llm_guard_violations: list[str] = []
     initial_provider = llm_provider
     initial_model = llm_model
@@ -60,7 +61,9 @@ async def verify_node(state: FundamentalAgentState) -> dict[str, Any]:
                     retrieval_context=state.get("retrieval_context", {}),
                     period_basis=state.get("period_basis", {}),
                     prompt_override=retry_prompt,
+                    usage_stage="verify_retry",
                 )
+                call_usage_records.extend(retry_result.call_usage_records)
                 llm_call_count += 0 if retry_result.provider == "template" else 1
                 extend_unique(risk_flags, retry_result.flags)
                 usage_records.append(
@@ -161,6 +164,7 @@ async def verify_node(state: FundamentalAgentState) -> dict[str, Any]:
         "confidence": confidence_from(state["ratios"], risk_flags),
         "agent_decisions": decisions,
         "failures": failures,
+        "llm_call_usage_records": call_usage_records,
         "llm_usage_records": usage_records,
         "llm_call_count": llm_call_count,
     }

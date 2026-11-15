@@ -95,17 +95,20 @@ async def plan_analysis(
         evidence_graph=evidence_graph,
         risk_flags=risk_flags,
     )
+    call_usage_records: list[dict[str, Any]] = []
     result = await complete_structured(
         AnalysisPlan,
         system=PLANNER_SYSTEM_PROMPT,
         prompt=prompt,
         timeout=max(settings.LLM_TIMEOUT / 2, 1.0),
         max_tokens=700,
+        attempt_records=call_usage_records, stage="planner",
     )
     if result is None:
         # planner 실패는 분석 중단 사유가 아니다. deterministic analyst_plan으로 안전하게 닫는다.
-        return fallback_plan(analyst_plan), {"provider": "template", "model": "rule-based", "latency_ms": 0}
+        return fallback_plan(analyst_plan), {"provider": "template", "model": "rule-based", "latency_ms": 0, "call_usage_records": call_usage_records}
     return result.data, {
+        "call_usage_records": call_usage_records,
         "provider": result.provider,
         "model": result.model,
         "latency_ms": result.latency_ms,

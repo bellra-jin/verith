@@ -21,7 +21,7 @@ for _name in ('input_sha256', 'result_sha256', 'binding_sha256'):
 for _name in ('input', 'result'):
     CHECKS[_name+'_hash'] = f"{_name}_sha256=encode(digest(convert_to({_name}_json,'UTF8'),'sha256'),'hex')"
 CHECKS['caller_hash'] = "caller_context_json::jsonb->>'input_fingerprint'=encode(digest(convert_to(caller_input_json,'UTF8'),'sha256'),'hex')"
-CHECKS['schemas'] = "input_schema='analysis.agent.v1' AND result_schema='technical.boundary.v1'"
+CHECKS['schemas'] = "((input_schema='analysis.agent.v1' AND result_schema='technical.boundary.v1' AND result_json::jsonb->>'schema_version'='analysis.agent.v1' AND result_json::jsonb->'data'->>'execution_mode'='synthetic') OR (input_schema='analysis.agent.v1' AND result_schema='technical.execution.v1' AND result_json::jsonb->>'schema_version'='technical.execution.v1' AND result_json::jsonb->'data'->>'execution_mode'='controlled')) IS TRUE"
 
 
 class TechnicalReportSnapshot(Base):

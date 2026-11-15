@@ -817,6 +817,10 @@ async def test_cf042_direct_absolute_service_still_caps_at75(monkeypatch):
 @pytest.mark.parametrize('kind', ['nonfinite', 'future_start', 'missing_start_expired_admission', 'bad_admission'])
 async def test_cf042_invalid_direct_route_context_cannot_grant_longer_time(monkeypatch, kind):
     h = await cf042_public(monkeypatch, middleware=False)
+    # Invalid-state rejection must not depend on the accelerated clock's 10ms
+    # real-time window between scope construction and the actual route guard.
+    # Keep a future start genuinely future; real timeout tests retain the clock.
+    monkeypatch.setattr(h.clock, 'time', lambda: h.clock.anchor)
     def state(clock):
         now = clock.time()
         if kind == 'nonfinite': return {'core_deadline': float('inf')}
@@ -876,11 +880,33 @@ def test_cf042_other_access_boundary_branches_are_unchanged_source_only():
     tree = ast.parse(Path(sys.modules[AccessBoundary.__module__].__file__).read_text())
     klass = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AccessBoundary')
     fn = next(n for n in klass.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '__call__')
-    # CF045 adds only these two internal endpoints; keep the old public digest.
-    additions=[n for n in fn.body if isinstance(n,ast.If) and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Name) and n.test.left.id=='path' and len(n.test.ops)==1 and isinstance(n.test.ops[0],ast.In) and isinstance(n.test.comparators[0],ast.Set) and {v.value for v in n.test.comparators[0].elts}=={'/internal/supervisor/meaning/authorize','/internal/supervisor/meaning/settle'}]
-    assert len(additions)==1
-    fn.body = [n for n in fn.body if n is not additions[0] and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
-    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '51234b692024b6b96a7ec99caa2ff731f5e90dd117da97cefe2c24201b81ca0a'
+    # Separate only the exact CF045/CF053 internal branches; retain the old public digest.
+    endpoints = (
+        {'/internal/supervisor/meaning/authorize', '/internal/supervisor/meaning/settle'},
+        {'/internal/technical/execution/start', '/internal/technical/execution/observe'},
+    )
+    additions = []
+    for paths in endpoints:
+        matches = [n for n in fn.body if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                   and isinstance(n.test.left, ast.Name) and n.test.left.id == 'path'
+                   and len(n.test.ops) == 1 and isinstance(n.test.ops[0], ast.In)
+                   and isinstance(n.test.comparators[0], ast.Set)
+                   and {v.value for v in n.test.comparators[0].elts} == paths]
+        assert len(matches) == 1
+        additions.append(matches[0])
+    # Pin the separately reviewed auth-before-body / fixed-five-second CF053 branch too.
+    assert hashlib.sha256(ast.dump(additions[1], include_attributes=False).encode()).hexdigest() == '7c86cf29015f2a5e8bc672bacec2bb402c33496e8b6d53edc12618ad5238a190'
+    composition = [n for n in fn.body if isinstance(n, ast.If) and ast.unparse(n.test) == "path == '/api/supervisor/core/composition' or path.startswith('/api/supervisor/core/composition/')"]
+    assert len(composition) == 1
+    assert hashlib.sha256(ast.dump(composition[0], include_attributes=False).encode()).hexdigest() == '41f7ecf194a03f148a1450562b88389224d6f8981da0d999e84f457a3b3c9498'
+    additions.extend(composition)
+    # CF061 changes only the exact Fundamental branch; keep all adjacent AST fixed.
+    fundamental = [n for n in fn.body if isinstance(n, ast.If) and ast.unparse(n.test) == "path == '/api/fundamental' or path.startswith('/api/fundamental/')"]
+    assert len(fundamental) == 1
+    assert hashlib.sha256(ast.dump(fundamental[0], include_attributes=False).encode()).hexdigest() == 'db18cea5adf4552fc314c61d06aaca07dbe6d6feb46798e583c259355c67812c'
+    additions.extend(fundamental)
+    fn.body = [n for n in fn.body if n not in additions and not (isinstance(n, ast.If) and ast.unparse(n.test) == "path.startswith('/api/supervisor/core')")]
+    assert hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest() == '8e4fca1b8f3e79c2b932e92f5b7a69492be219e73e43f1aca166925a7c90aa96'
 
 
 # CF043: actual post/build/exchange/dispatch guard + actual Principal SQL construction.

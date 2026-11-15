@@ -147,6 +147,10 @@ class OHLCV(BaseModel):
     def _high_ge_low(self) -> OHLCV:
         if self.high < self.low:
             raise ValueError(f'high({self.high}) must be >= low({self.low})')
+        if not self.low <= self.open <= self.high:
+            raise ValueError('open must be within [low, high]')
+        if not self.low <= self.close <= self.high:
+            raise ValueError('close must be within [low, high]')
         return self
 
 from typing import Any, Literal
@@ -261,6 +265,10 @@ class IntradayCandle(_StrictModel):
     def _high_ge_low(self) -> IntradayCandle:
         if self.high < self.low:
             raise ValueError(f'high({self.high}) must be >= low({self.low})')
+        if not self.low <= self.open <= self.high:
+            raise ValueError('open must be within [low, high]')
+        if not self.low <= self.close <= self.high:
+            raise ValueError('close must be within [low, high]')
         return self
 
 class IntradayPoint(_StrictModel):

@@ -31,7 +31,7 @@ class TechnicalReadBinding:
             TechnicalBoundaryBinding(
                 context=self.boundary.context, report_id=self.boundary.report_id,
                 request_id=self.boundary.request_id, trace_id=self.boundary.trace_id,
-                input_json=self.boundary.input_json,
+                input_json=self.boundary.input_json, execution_json=self.boundary.execution_json,
             )
             value = strict_json(self.caller_input_json)
             if (not isinstance(value, dict) or canonical_json(value) != self.caller_input_json

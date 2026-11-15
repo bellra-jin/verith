@@ -48,10 +48,17 @@ class Settings(BaseSettings):
     FLOW_RUN_ADMISSION_ENABLED: bool = False
     FLOW_SYNTHETIC_DEMO_ENABLED: bool = False
     FUNDAMENTAL_ANALYSIS_ENABLED: bool = False
+    FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT: Any = ""
+    FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT: Any = ""
     FUNDAMENTAL_SERVICE_TOKEN: str = ""
     FLOW_ANALYSIS_ENABLED: bool = False
     FLOW_SERVICE_TOKEN: str = Field(default="", repr=False)
+    TECHNICAL_EXECUTION_ENABLED: Any = False
+    TECHNICAL_EXECUTION_CONFIG: str = ""
+    TECHNICAL_EXECUTION_AI_SERVICE_TOKEN: str = Field(default="", repr=False)
+    TECHNICAL_EXECUTION_AUTHORITY_TOKEN: str = Field(default="", repr=False)
     SUPERVISOR_MEANING_ENABLED: Any = False  # Raw: invalid paid config cannot break free planning.
+    SUPERVISOR_COMPOSITION_ENABLED: Any = False  # New admission only; owner observation remains available.
     SUPERVISOR_MEANING_SERVICE_TOKEN: str = Field(default="", repr=False)
     SUPERVISOR_MEANING_ACCOUNT_BINDINGS: str = ""
     SUPERVISOR_MEANING_COUNTER_AGREEMENT: str = ""

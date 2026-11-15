@@ -412,27 +412,34 @@ def _reject_late_runtime() -> None:
         raise TechnicalRuntimeUnavailable()
 
 
-def initialize_runtime() -> RuntimeSettings:
+def initialize_runtime(*, settings: RuntimeSettings | None = None) -> RuntimeSettings:
     """Publish one immutable flag/path snapshot before runtime imports.
 
     Failure is latched. A process that loaded a default-state pipeline cannot be
     repaired by reloading modules or patching their copied flags.
     """
     global _runtime_state, _runtime_settings
+    if settings is not None and (type(settings) is not RuntimeSettings
+            or type(settings.intraday_fetch_enabled) is not bool or type(settings.trace_enabled) is not bool
+            or type(settings.trace_path) is not str or not settings.trace_path):
+        raise TechnicalRuntimeUnavailable()
     with _runtime_lock:
         if _runtime_state == 'ready':
+            if settings is not None and settings != _runtime_settings:
+                raise TechnicalRuntimeUnavailable()
             return _runtime_settings
         if _runtime_state != 'new':
             raise TechnicalRuntimeUnavailable()
         _runtime_state = 'initializing'
         try:
             _reject_late_runtime()
-            _load_env_file()
-            settings = RuntimeSettings(
-                intraday_fetch_enabled=_env_bool('INTRADAY_FETCH_ENABLED', default=False),
-                trace_enabled=_env_bool('TECHNICAL_TRACE_ENABLED', default=True),
-                trace_path=os.getenv('TECHNICAL_TRACE_PATH') or str(_DEFAULT_TRACE_PATH),
-            )
+            if settings is None:
+                _load_env_file()
+                settings = RuntimeSettings(
+                    intraday_fetch_enabled=_env_bool('INTRADAY_FETCH_ENABLED', default=False),
+                    trace_enabled=_env_bool('TECHNICAL_TRACE_ENABLED', default=True),
+                    trace_path=os.getenv('TECHNICAL_TRACE_PATH') or str(_DEFAULT_TRACE_PATH),
+                )
             if type(settings.trace_path) is not str:
                 raise TechnicalRuntimeUnavailable()
             _reject_late_runtime()

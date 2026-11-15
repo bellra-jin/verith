@@ -1,5 +1,7 @@
 """Pure engine and mocked transaction boundaries, separate from actual PG checks."""
 import asyncio
+import ast
+import copy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,10 +192,47 @@ async def test_exact_sql_owner_unique_fence_and_separate_deadline_predicates():
     assert 'finished >= flow_fake_executions.deadline_at' in sql[3]
 
 
+def checked_target_guard(guard):
+    expected=ast.parse('if target not in {"head", "c6001a7e0001", "c15001a7e0001"}:\n'
+                       '    raise ValueError("Unsupported owned migration target")').body[0]
+    # Full shape equality: no additional comparator, call, body or else can run.
+    assert ast.dump(guard)==ast.dump(expected)
+    return guard
+
+
+@pytest.mark.parametrize('mutation',['call','else','comparator'])
+def test_migration_gate_source_drift_rejected_before_execution(mutation):
+    source=(Path(__file__).resolve().parents[2]/'scripts/cf002_interactive_login.py').read_text()
+    tree=ast.parse(source)
+    migrate=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='migrate_owned')
+    guard=copy.deepcopy(migrate.body[0])
+    if mutation=='call':guard.body.append(ast.parse("open('unapproved')").body[0])
+    elif mutation=='else':guard.orelse=[ast.Pass()]
+    else:
+        guard.test.ops.append(ast.Eq());guard.test.comparators.append(ast.Constant(True))
+    with pytest.raises(AssertionError):checked_target_guard(guard)
+
+
 def test_migration_and_wiring_are_internal_only():
     root=Path(__file__).resolve().parents[2]
     source=(root/'scripts/cf002_interactive_login.py').read_text()
-    assert 'target not in {"head", "c6001a7e0001"}' in source
+    import ast
+    tree=ast.parse(source)
+    migrate=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='migrate_owned')
+    guard=checked_target_guard(migrate.body[0])
+    assert isinstance(guard,ast.If) and isinstance(guard.test,ast.Compare)
+    assert isinstance(guard.test.ops[0],ast.NotIn) and guard.test.left.id=='target'
+    assert ast.literal_eval(guard.test.comparators[0])=={'head','c6001a7e0001','c15001a7e0001'}
+    assert isinstance(guard.body[0],ast.Raise) and guard.body[0].exc.func.id=='ValueError'
+    assert ast.unparse(migrate.body[1])=='await proof.preflight()'
+    # Evaluate the actual closed target gate without importing/spawning the DB runner.
+    prefix=ast.FunctionDef(name='target_allowed',args=ast.arguments(posonlyargs=[],args=[ast.arg(arg='target')],
+        kwonlyargs=[],kw_defaults=[],defaults=[]),body=[guard,ast.Return(value=ast.Constant(True))],decorator_list=[])
+    env={'__builtins__':{'ValueError':ValueError}}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[prefix],type_ignores=[])),'<fixed-owned-target-gate>','exec'),env)
+    for target in ('head','c6001a7e0001','c15001a7e0001'):assert env['target_allowed'](target) is True
+    for target in ('base','c7001a7e0001','../alembic.ini','head; DROP TABLE flow_runs',None):
+        with pytest.raises(ValueError,match='^Unsupported owned migration target$'):env['target_allowed'](target)
     assert 'migrate_owned(second_proof, target="c6001a7e0001")' in source
     assert source.index('verify_fake_execution(proof)')<source.index('project = prepare_projects')
     migration=(root/'db/migrations/versions/20261108_c7001a7e0001_flow_fake_execution.py').read_text()

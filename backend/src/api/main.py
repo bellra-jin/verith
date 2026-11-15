@@ -130,3 +130,6 @@ app.include_router(supervisor_core_router)
 # Authenticated server-only meaning phases; excluded from the public schema.
 from src.modules.supervisor.api.meaning_phase_router import router as meaning_phase_router
 app.include_router(meaning_phase_router)
+
+from src.modules.technical.api.execution_authority_router import configured_router as technical_authority_router
+app.include_router(technical_authority_router())

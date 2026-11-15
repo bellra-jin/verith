@@ -88,7 +88,17 @@ class EntryBoundary(unittest.TestCase):
             self.assertFalse(controller.source_allowed(name + ".adjacent"))
         root = Path(__file__).resolve().parents[2]
         source = (root / "scripts/cf002_interactive_login.py").read_text()
-        self.assertIn('target not in {"head", "c6001a7e0001"}', source)
+        import ast
+        tree=ast.parse(source)
+        migrate=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='migrate_owned')
+        gate=migrate.body[0]
+        self.assertIsInstance(gate,ast.If)
+        self.assertIsInstance(gate.test.ops[0],ast.NotIn)
+        self.assertEqual(gate.test.left.id,'target')
+        self.assertEqual(ast.literal_eval(gate.test.comparators[0]),{'head','c6001a7e0001','c15001a7e0001'})
+        self.assertIsInstance(gate.body[0],ast.Raise)
+        self.assertEqual(gate.body[0].exc.func.id,'ValueError')
+        self.assertEqual(ast.unparse(migrate.body[1]),'await proof.preflight()')
         self.assertIn('migrate_owned(second_proof, target="c6001a7e0001")', source)
         self.assertLess(source.index("result = asyncio.run(asyncio.wait_for(verify_fake_execution(proof)"), source.index("project = prepare_projects"))
 
@@ -204,7 +214,14 @@ class EntryBoundary(unittest.TestCase):
             self.assertFalse(source_allowed(name))
         for name in FLOW_INPUTS:
             self.assertTrue(source_allowed(name))
-        for name in ("ai/src/agents/flow/config.py", "ai/src/agents/flow/__init__.py",
+        # CF014 now reviews this exact constants-only source. Adjacent sources
+        # and private files remain denied; this is not a config import permit.
+        from scripts.check_safe import CF014_INPUTS
+        import hashlib
+        config = "ai/src/agents/flow/config.py"
+        self.assertTrue(source_allowed(config))
+        self.assertEqual(hashlib.sha256(regular_bytes(Path(__file__).resolve().parents[3], config)).hexdigest(), CF014_INPUTS[config])
+        for name in ("ai/src/agents/flow/config.extra.py", "ai/src/agents/flow/__init__.py",
                      "ai/src/agents/flow/export/other.py", "ai/src/agents/flow/graph.py"):
             self.assertFalse(source_allowed(name))
         from scripts.safe_checks_bootstrap import valid_flow_origins
@@ -578,6 +595,53 @@ class CF014Boundary(unittest.TestCase):
 
 
 class CF015Boundary(unittest.TestCase):
+    def test_fundamental_usage_classifier_is_exact_pure_source_only(self):
+        import ast
+        from scripts import check_safe as c
+        name='backend/src/modules/fundamental/domain/usage_evidence.py'
+        self.assertIn(name,c.CF015_SOURCES)
+        self.assertTrue(c.source_allowed(name))
+        self.assertFalse(c.source_allowed(name+'.adjacent'))
+        root=Path(__file__).resolve().parents[3]
+        tree=ast.parse(c.regular_bytes(root,name))
+        imports={n.module for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)} | {a.name for n in ast.walk(tree) if isinstance(n,ast.Import) for a in n.names}
+        self.assertEqual(imports,{'dataclasses','re','uuid','src.modules.analysis.domain.contracts'})
+        self.assertEqual(c.CF015_TESTS,('tests/unit/test_cf015_fundamental_analysis.py',))
+        control=(root/'backend/src/modules/fundamental/application/execution_limit_control.py').read_text()
+        self.assertNotIn('usage_evidence',control)
+
+    def test_cf061_exact_boundary_pin_and_unrelated_branch_AST_preserved(self):
+        import ast,hashlib
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        name='backend/src/shared/http/access_boundary.py'
+        data=c.regular_bytes(root,name)
+        self.assertEqual(hashlib.sha256(data).hexdigest(),c.CF036_INPUTS[name])
+        self.assertNotEqual(hashlib.sha256(data+b'\n# synthetic drift').hexdigest(),c.CF036_INPUTS[name])
+        tree=ast.parse(data)
+        fn=next(n for n in next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='AccessBoundary').body if isinstance(n,ast.AsyncFunctionDef) and n.name=='__call__')
+        branches=[n for n in fn.body if isinstance(n,ast.If) and ast.unparse(n.test)=="path == '/api/fundamental' or path.startswith('/api/fundamental/')"]
+        self.assertEqual(len(branches),1)
+        self.assertEqual(hashlib.sha256(ast.dump(branches[0],include_attributes=False).encode()).hexdigest(),'db18cea5adf4552fc314c61d06aaca07dbe6d6feb46798e583c259355c67812c')
+        fn.body.remove(branches[0])
+        self.assertEqual(hashlib.sha256(ast.dump(tree,include_attributes=False).encode()).hexdigest(),'00618ef085233993602ec4044a0afcf0204a0580b344ce73708ce749ed60ecb5')
+
+    def test_count_control_adds_only_two_backend_sources_and_keeps_AI_allowset(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        additions={'backend/src/modules/fundamental/domain/execution_limits.py',
+                   'backend/src/modules/fundamental/application/execution_limit_control.py'}
+        self.assertTrue(additions<=c.CF015_SOURCES)
+        for name in additions:
+            self.assertTrue(c.source_allowed(name))
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+        indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):
+            copied=c.selected_sources(Path('/synthetic'),fundamental_only=True)
+        self.assertTrue(additions<=set(copied))
+        self.assertEqual({p for p in copied if p.startswith('ai/')},set(c.CF015_INPUTS))
+
     def test_exact_fourteen_AI_inputs_and_one_collection(self):
         import hashlib
         from scripts import check_safe as c
@@ -730,7 +794,7 @@ class CF022Boundary(unittest.TestCase):
     def test_exact_inputs_and_collection(self):
         import hashlib
         from scripts import check_safe as c
-        self.assertEqual(len(c.CF022_INPUTS),28);self.assertEqual(c.CF022_TESTS,('tests/unit/test_cf022_supervisor_core.py',))
+        self.assertEqual(len(c.CF022_INPUTS),33);self.assertEqual(c.CF022_TESTS,('tests/unit/test_cf022_supervisor_core.py',))
         self.assertEqual({k:v for k,v in c.CF022_INPUTS.items() if k in c.CF020_INPUTS},c.CF020_INPUTS)
         root=Path(__file__).resolve().parents[3]
         for name,h in c.CF022_INPUTS.items():self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),h)
@@ -787,7 +851,7 @@ class CF023Boundary(unittest.TestCase):
         import hashlib
         root=Path(__file__).resolve().parents[3]
         self.assertEqual(set(c.CF045_INPUTS),{'ai/src/supervisor/application/meaning_gateway_factory.py','ai/src/supervisor/infrastructure/backend/meaning_budget_client.py','ai/src/main.py','ai/src/supervisor/api/flow_app.py'})
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         for path,digest in c.CF045_INPUTS.items():
             self.assertTrue(c.source_allowed(path));self.assertFalse(c.source_allowed(path+'.adjacent'))
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,path)).hexdigest(),digest)
@@ -810,7 +874,7 @@ class CF023Boundary(unittest.TestCase):
     def test_exact_inputs_and_collection(self):
         import hashlib
         from scripts import check_safe as c
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         self.assertEqual(c.CF023_TESTS,('tests/unit/test_cf023_supervisor_meaning.py',))
         self.assertEqual({k:v for k,v in c.CF023_INPUTS.items() if k in c.CF022_INPUTS},c.CF022_INPUTS)
         root=Path(__file__).resolve().parents[3]
@@ -842,11 +906,105 @@ class CF023Boundary(unittest.TestCase):
         self.assertEqual(meaning.sha(proposals.semantic_spec()),contracts.MEANING_SPEC_SHA256)
         for name in ('src.api.dependencies','pandas','openai','redis','src.agents.flow.application.agent'):self.assertNotIn(name,sys.modules)
 
+class CF048Boundary(unittest.TestCase):
+    def test_CF052_exact_runtime_source_and_default_off_actual_body(self):
+        import asyncio
+        from scripts import check_safe as c
+        from tests.unit import test_cf048_technical_admission as unit
+        from src.modules.technical.application.execution_runtime import TechnicalExecutionRuntime
+        path='backend/src/modules/technical/application/execution_runtime.py'
+        self.assertIn(path,c.CF048_SOURCES)
+        session=unit.Session()
+        runtime=TechnicalExecutionRuntime(session,principal=unit.principal())
+        with self.assertRaises(unit.D.TechnicalCompletionError):
+            asyncio.run(runtime.execute_admitted_once(None,None))
+        session.commit.assert_not_awaited()
+        self.assertFalse(any('technical-execution' in name for name in c.MODES))
+
+    def test_CF050_receive_only_sources_and_exact_owned_completion_flag(self):
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        required={'backend/db/migrations/versions/20261112_c50001a7e0001_technical_result_completion.py',
+                  'backend/src/modules/technical/infrastructure/execution_completion_repository.py',
+                  'backend/src/modules/technical/application/execution_completion.py'}
+        self.assertTrue(required<=c.CF048_SOURCES)
+        self.assertEqual(c.CF048_INPUTS['frontend/tests/fixtures/cf031-technical-boundary-read.json'],
+                         '46380ea4c998e3130cf1c447c278b93ed32288c42af9d62f84b90b7acabce5e0')
+        source=(root/'backend/scripts/cf002_interactive_login.py').read_text()
+        self.assertIn('--verify-technical-completion-db',source)
+        self.assertIn('verify_technical_completion(proof)',source)
+        self.assertNotIn('technical-completion-unit',c.MODES)
+        from tests.unit.test_cf048_technical_admission import test_completion_bad_CLI_options_stop_before_Docker
+        test_completion_bad_CLI_options_stop_before_Docker(['--google-input','approved-file'])
+
+    def test_exact_Technical_collection_readonly_pins_and_existing_guard(self):
+        import hashlib
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        self.assertEqual(c.CF048_TESTS,('tests/unit/test_cf048_technical_admission.py',))
+        self.assertEqual(c.CF048_COMPAT,c.CF035_COMPAT)
+        self.assertEqual(len(c.CF048_INPUTS),4)
+        for path,digest in (c.CF048_INPUTS|c.CF048_COMPAT).items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,path)).hexdigest(),digest)
+        for path in c.CF048_SOURCES:
+            self.assertTrue(c.regular_bytes(root,path));self.assertFalse(c.source_allowed(path+'.adjacent'))
+        indexed=c.EXTRA|c.FLOW_INPUTS.keys()|c.CF004_INPUTS.keys()|c.CF005_INPUTS.keys()|{'backend/'+u for u in c.UNIT}
+        raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
+        with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_admission_only=True)
+        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF048_COMPAT)|{p for p in c.CF053_INPUTS if p.startswith('ai/')} )
+        self.assertEqual({p for p in selected if p.startswith('frontend/')},{'frontend/tests/fixtures/cf031-technical-boundary-read.json'})
+        self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/safe_checks_bootstrap.py')).hexdigest(),'2b4f706192b9ca20770b3005843d934bcdd44dace385168f84920904b9ca68a6')
+
+    def test_fixed_modes_and_two_CI_calls_use_existing_clean_launch(self):
+        from unittest.mock import patch
+        from scripts import check_safe as c
+        for mode in ('technical-admission-self','technical-admission-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertEqual(run.call_args.kwargs,{'technical_admission_only':True})
+                self.assertEqual(run.call_args.args[1],('self-test' if mode.endswith('self') else 'unit',))
+        text=(Path(__file__).resolve().parents[3]/'.github/workflows/pr-ci.yml').read_text()
+        for mode in ('technical-admission-self','technical-admission-unit'):
+            lines=[line for line in text.splitlines() if line.strip().endswith(' '+mode)]
+            self.assertEqual(len(lines),1)
+            self.assertIn('env -i LANG=en_US.UTF-8 TZ=UTC',lines[0])
+            self.assertIn(' -I -S -B ',lines[0])
+
+    def test_SQL_only_owned_flag_and_no_extra_execution_inputs(self):
+        import ast
+        root=Path(__file__).resolve().parents[3]
+        text=(root/'backend/scripts/cf002_interactive_login.py').read_text()
+        self.assertIn('--verify-technical-admission-db',text)
+        self.assertIn('verify_technical_admission(proof)',text)
+        tree=ast.parse((root/'backend/src/modules/technical/application/execution_admission_service.py').read_text())
+        imports={n.module for n in ast.walk(tree) if isinstance(n,ast.ImportFrom)}|{a.name for n in ast.walk(tree) if isinstance(n,ast.Import) for a in n.names}
+        self.assertFalse(any(name and name.split('.')[0] in {'httpx','openai','dotenv','redis','langgraph'} for name in imports))
+
+
 class CF024Boundary(unittest.TestCase):
+    def test_CF047_exact_readonly_bootstrap_inputs_and_tamper_rejection(self):
+        import ast,hashlib
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        expected={'backend/scripts/google_login_bootstrap.py':'5937d610c482b1a5e92671b7bad8f496f4c0e292a8d451fc34347381df7df48c',
+                  'backend/scripts/google_login_inputs.py':'4fddb30281357a58b259872bf6cc87542fb41c65928357aab045134d8f155c95'}
+        self.assertEqual(c.CF047_INPUTS,expected)
+        execute=next(n for n in ast.parse((root/'backend/scripts/check_safe.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        gate=next(n for n in ast.walk(execute) if isinstance(n,ast.If) and 'CF047_INPUTS' in ast.unparse(n.test))
+        code=compile(ast.fix_missing_locations(ast.Module(body=[gate],type_ignores=[])),'<actual-source-hash-gate>','exec')
+        for path,digest in expected.items():
+            raw=c.regular_bytes(root,path)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),digest)
+            self.assertTrue(c.source_allowed(path));self.assertFalse(c.source_allowed(path+'.adjacent'))
+            namespace=vars(c)|{'p':path,'data':raw}
+            exec(code,namespace)
+            with self.assertRaises(c.UnsafeCheck):exec(code,namespace|{'data':raw+b'\n# changed'})
+
     def test_exact_existing_inputs_new_single_collection(self):
         import hashlib
         from scripts import check_safe as c
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         self.assertEqual(c.CF024_TESTS,('tests/unit/test_cf024_supervisor_live_verifier.py',))
         root=Path(__file__).resolve().parents[3]
         for name,h in c.CF023_INPUTS.items():self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),h)
@@ -886,7 +1044,7 @@ class CF026Boundary(unittest.TestCase):
         from scripts import check_safe as c
         root=Path(__file__).resolve().parents[3]
         self.assertEqual(hashlib.sha256(c.regular_bytes(root,'backend/scripts/cf026_supervisor_live_controller.py')).hexdigest(),'c6a93f1de94e462306dce02aaad15319fc342dcd24e1c21f813b78fd6481ce08')
-        self.assertEqual(len(c.CF023_INPUTS),32)
+        self.assertEqual(len(c.CF023_INPUTS),35)
         self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/application/meaning_policy.py'],'f31ba42680ed4f6223fd215321cb427679d710e1456cc95d6b9a862e78b282b5')
         self.assertEqual(c.CF023_INPUTS['ai/src/supervisor/prompts/meaning.txt'],'cb9c7cb759cffc1dd626680b93e66b6dbb27cd6734f65e4394fe5bf41f147d35')
         self.assertFalse(c.source_allowed('backend/scripts/cf026_successor_extra.py'))
@@ -1128,7 +1286,32 @@ class CF036Boundary(unittest.TestCase):
             self.assertNotIn(name,sys.modules)
 
 class CF040Boundary(unittest.TestCase):
-    def test_exact_four_inputs_six_origins_and_single_collection(self):
+    def test_CF051_owned_transport_executes_selected_product_and_blocks_direct_send(self):
+        from tests.unit import test_cf040_technical_runtime_setup as unit
+        h=unit.official_adapter(calls=1)
+        try:
+            self.assertEqual(h.client.complete('synthetic'),'official result')
+            record,=h.budget.snapshot()
+            self.assertTrue(record.count_entered and record.count_response_received and record.count_validated and record.entered)
+            self.assertEqual(len(h.sent),2)
+            with self.assertRaises(h.a['_StrictLlmFailure']):
+                h.sdk.responses.create(model='synthetic-model',input='synthetic',timeout=1)
+            self.assertEqual(len(h.sent),2)
+        finally:h.client.close()
+        self.assertEqual(h.closed.count('transport'),1)
+
+    def test_opt_in_budget_uses_actual_selected_AST_and_stays_closed_without_counter(self):
+        import sys
+        from tests.unit import test_cf040_technical_runtime_setup as unit
+        h=unit.strict_adapter(counter=False)
+        with self.assertRaises(h.a['LlmCallError']):h.client.complete('synthetic')
+        self.assertFalse(h.dispatched)
+        self.assertEqual(h.budget.snapshot(),())
+        self.assertEqual(h.budget.closed_reason,'COUNT_UNAVAILABLE')
+        for name in ('openai','redis','langgraph','src.api.dependencies'):
+            self.assertNotIn(name,sys.modules)
+
+    def test_exact_five_inputs_six_origins_and_single_collection(self):
         import hashlib
         from unittest.mock import patch
         from scripts import check_safe as c
@@ -1138,7 +1321,9 @@ class CF040Boundary(unittest.TestCase):
         self.assertEqual(len(c.CF040_COMPAT),6)
         self.assertEqual(set(c.CF040_INPUTS),{
             'ai/src/agents/technical/config.py','ai/src/api/dependencies.py',
-            'ai/src/agents/technical/domain/intraday_limits.py','ai/src/shared/runtime/deadline.py'})
+            'ai/src/agents/technical/domain/intraday_limits.py','ai/src/shared/runtime/deadline.py',
+            'ai/src/agents/technical/infrastructure/openai_llm_client.py',
+            'ai/src/agents/technical/infrastructure/kis_client.py'})
         self.assertEqual(c.CF021_INPUTS['ai/src/agents/technical/config.py'],c.CF040_INPUTS['ai/src/agents/technical/config.py'])
         for name,digest in (c.CF040_COMPAT | c.CF040_INPUTS).items():
             self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
@@ -1146,7 +1331,7 @@ class CF040Boundary(unittest.TestCase):
         indexed=c.EXTRA | c.FLOW_INPUTS.keys() | c.CF004_INPUTS.keys() | c.CF005_INPUTS.keys() | {'backend/'+u for u in c.UNIT}
         raw=b''.join(('100644 '+'0'*40+' 0\t'+name+'\0').encode() for name in sorted(indexed))
         with patch.object(c.subprocess,'check_output',return_value=raw):selected=c.selected_sources(root,technical_runtime_only=True)
-        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF040_COMPAT | c.CF040_INPUTS))
+        self.assertEqual({p for p in selected if p.startswith('ai/')},set(c.CF040_COMPAT | c.CF040_INPUTS | c.CF053_INPUTS))
         self.assertFalse(any(p.startswith('frontend/') for p in selected))
         self.assertTrue(c.CF040_SOURCES <= set(selected))
         for name in ('backend/scripts/cf026_successor.py','backend/scripts/cf026_supervisor_live_controller.py',
@@ -1180,6 +1365,297 @@ class CF040Boundary(unittest.TestCase):
         self.assertNotIn('tests.unit.test_cf021_technical_boundary',sys.modules)
         for name in unit.LATE:self.assertNotIn(name,sys.modules)
 
+
+import hashlib
+
+class TechnicalGraphBoundary(unittest.TestCase):
+    def test_numeric_helper_exact_source_new_single_pin_drift_and_neighbor_rejection(self):
+        import ast
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        path='ai/src/agents/technical/domain/interpretation/numeric_claims.py'
+        raw=c.regular_bytes(root,path)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),c.GRAPH_INPUTS[path])
+        self.assertIn(path,c.selected_sources(root,technical_graph_only=True))
+        self.assertNotIn(path,c.CF021_INPUTS)
+        self.assertFalse(c.source_allowed(path+'.adjacent'))
+        self.assertFalse(c.source_allowed(path.replace('numeric_claims.py','numeric_claims_neighbor.py')))
+        fn=next(n for n in ast.parse(c.regular_bytes(root,'backend/scripts/check_safe.py')).body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        guard=next(n for n in ast.walk(fn) if isinstance(n,ast.If) and any(
+            isinstance(x,ast.Constant) and x.value=='reviewed graph source changed' for x in ast.walk(n)))
+        self.assertEqual({ast.unparse(n.func) for n in ast.walk(guard) if isinstance(n,ast.Call)},
+                         {'hashlib.sha256(data).hexdigest','hashlib.sha256','UnsafeCheck'})
+        self.assertFalse(any(isinstance(n,(ast.Import,ast.ImportFrom,ast.Global,ast.Nonlocal)) for n in ast.walk(guard)))
+        wrapper=ast.parse('def verify(p,data):\n pass').body[0];wrapper.body=[guard]
+        env={'__builtins__':{},'technical_graph_only':True,'GRAPH_INPUTS':c.GRAPH_INPUTS,'hashlib':hashlib,'UnsafeCheck':c.UnsafeCheck}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<actual-graph-pin-guard>','exec'),env)
+        self.assertIsNone(env['verify'](path,raw))
+        with self.assertRaises(c.UnsafeCheck):env['verify'](path,raw+b'\n# unreviewed drift\n')
+
+    def test_numeric_helper_roles_reject_value_borrowing_before_module_result_merge(self):
+        import importlib.util
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3];relative='ai/src/agents/technical/domain/interpretation/numeric_claims.py'
+        name='_technical_numeric_self';self.assertNotIn(name,sys.modules)
+        self.assertEqual(hashlib.sha256(c.regular_bytes(root,relative)).hexdigest(),c.GRAPH_INPUTS[relative])
+        spec=importlib.util.spec_from_file_location(name,root/relative);module=importlib.util.module_from_spec(spec)
+        sys.modules[name]=module
+        try:
+            spec.loader.exec_module(module)
+            self.assertEqual(Path(module.__spec__.origin).resolve(),(root/relative).resolve())
+            reference='RSI 기준선 돌파 여부와 50선 안착 여부를 확인하세요.'
+            roles=module.build_roles(ma_windows=(5,20,60),rsi_period=14,references=(('rsi',reference),))
+            self.assertFalse(module.unsupported('5MA와 20일선의 배열',indicators=('moving_average',),field='detail',roles=roles))
+            self.assertFalse(module.unsupported(reference,indicators=('rsi',),field='detail_watchpoint',roles=roles))
+            for indicator,text,field in (('rsi','RSI 현재값50','detail'),('volume','50배','detail'),
+                    ('moving_average','50원','detail'),('moving_average','15MA','detail'),
+                    ('moving_average','(5MA)%','detail'),('rsi','현재값 '+reference,'detail_watchpoint'),
+                    ('volume',reference,'detail_watchpoint'),('rsi',reference,'detail_reason')):
+                self.assertTrue(module.unsupported(text,indicators=(indicator,),field=field,roles=roles))
+            failures=module.evaluate({'details':[{'indicator':'rsi','detail_reason':'50원'}],
+                'key_drivers':['50배']},indicators=('rsi',),roles=roles)
+            self.assertEqual({f.target for f in failures},{'technical_signals[rsi].detail_reason','interpretation.key_drivers[0]'})
+            self.assertEqual([f.indicator for f in failures if f.target.startswith('technical_signals')],['rsi'])
+        finally:sys.modules.pop(name,None)
+
+    def test_confidence_math_unchanged_and_actual_basis_summary_preserve_score_meaning(self):
+        import ast
+        import __future__
+        from types import SimpleNamespace
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        tree=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/domain/synthesis/confidence.py'))
+        math_functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name!='_confidence_basis']
+        math_ast=ast.dump(ast.Module(body=math_functions,type_ignores=[]),include_attributes=False)
+        self.assertEqual(hashlib.sha256(math_ast.encode()).hexdigest(),'bd3b61764280de75d693e40380412f7f4c8f80ab8a0a0c16033455035200e4f0')
+        meaning=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign)
+                     and any(isinstance(t,ast.Name) and t.id=='CONFIDENCE_MEANING' for t in n.targets))
+        basis=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_confidence_basis')
+        report=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/application/nodes/interpret_report.py'))
+        functions=[basis]+[n for n in report.body if isinstance(n,ast.FunctionDef) and n.name in {'_one_line','_signal_text'}]
+        allowed=(ast.FunctionDef,ast.arguments,ast.arg,ast.Assign,ast.Name,ast.Load,ast.Store,ast.Call,
+                 ast.GeneratorExp,ast.comprehension,ast.Compare,ast.Eq,ast.Attribute,ast.Constant,
+                 ast.BinOp,ast.Add,ast.Return,ast.JoinedStr,ast.FormattedValue,ast.Subscript)
+        self.assertTrue(all(isinstance(n,allowed) for fn in functions for n in ast.walk(fn)))
+        self.assertTrue(all(isinstance(n.func,ast.Name) and n.func.id=='sum' and not n.keywords
+                            for fn in functions for n in ast.walk(fn) if isinstance(n,ast.Call)))
+        expected_attrs={('signal_result','technical_signals'),('r','signal'),('Signal','POSITIVE'),
+                        ('Signal','NEUTRAL'),('Signal','NEGATIVE'),('regime','final_regime'),
+                        ('signal','consensus'),('signal','confidence_level')}
+        self.assertTrue(all(isinstance(n.value,ast.Name) and (n.value.id,n.attr) in expected_attrs
+                            for fn in functions for n in ast.walk(fn) if isinstance(n,ast.Attribute)))
+        env={'__builtins__':{'sum':sum},'Signal':SimpleNamespace(POSITIVE='positive',NEUTRAL='neutral',NEGATIVE='negative'),
+             '_CONFIDENCE_LABEL':{'high':'높음'},'CONFIDENCE_LABELS':{'high':'높음'},
+             'CONFIDENCE_MEANING':meaning,'REGIME_LABELS':{'sideways':'횡보'},'CONSENSUS_LABELS':{'positive':'긍정'}}
+        code=compile(ast.Module(body=functions,type_ignores=[]),'<pinned-confidence-text>','exec',flags=__future__.annotations.compiler_flag,dont_inherit=True)
+        exec(code,env)
+        text=env['_confidence_basis'](SimpleNamespace(technical_signals=[SimpleNamespace(signal='positive')]),'high')
+        self.assertIn('지표 1개 중 긍정 1·중립 0·부정 0',text)
+        self.assertIn('현재 지표의 규칙 기반 근거 점수',text);self.assertIn('상승 확률·예측 정확도가 아닙니다',text)
+        signal=SimpleNamespace(consensus='positive',confidence_level='high')
+        short=env['_one_line'](SimpleNamespace(final_regime='sideways'),signal)
+        self.assertIn('근거 점수 높음',short);self.assertLessEqual(len(short),40)
+        self.assertIn(meaning,env['_signal_text'](signal))
+        for path in ('interpret_report.md','regenerate_report.md'):
+            prompt=c.regular_bytes(root,'ai/src/agents/technical/prompts/'+path).decode()
+            self.assertIn('현재 지표의 규칙 기반 근거 점수',prompt)
+            self.assertIn('상승 확률·예측 정확도가 아닙니다',prompt)
+            self.assertIn('개별 부정 기여:',prompt);self.assertIn('개별 긍정 기여:',prompt)
+            self.assertNotIn('검증(③) 대상이 아니지만',prompt)
+
+
+    def test_warmup_tail_preserves_prior_rules_and_distinguishes_unavailable_context(self):
+        import ast
+        from types import SimpleNamespace
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        rules=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/domain/regime/rules.py'))
+        fn=next(n for n in rules.body if isinstance(n,ast.FunctionDef) and n.name=='classify_daily_regime')
+        # Reviewed original priority 1~5 and every calculation remain byte-independent AST-equivalent.
+        prefix=ast.dump(ast.Module(body=fn.body[:-2],type_ignores=[]),include_attributes=False)
+        self.assertEqual(hashlib.sha256(prefix.encode()).hexdigest(),'15354cd82f7a508fa2c60cf4342987e05060d757c6b043acb5e91a5bc8a2e8a1')
+        tail=fn.body[-2:]
+        self.assertTrue(all(isinstance(n,(ast.If,ast.Compare,ast.Name,ast.Load,ast.Is,ast.Constant,ast.Return,ast.Attribute))
+                            for part in tail for n in ast.walk(part)))
+        self.assertTrue(all(isinstance(n.value,ast.Name) and n.value.id=='Regime' and n.attr in {'UNAVAILABLE','SIDEWAYS'}
+                            for part in tail for n in ast.walk(part) if isinstance(n,ast.Attribute)))
+        wrapper=ast.parse('def evaluate(slope60):\n pass').body[0];wrapper.body=tail
+        env={'__builtins__':{},'Regime':SimpleNamespace(UNAVAILABLE='unavailable',SIDEWAYS='sideways')}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<pinned-warmup-tail>','exec'),env)
+        for slope,expected in ((None,'unavailable'),(0,'sideways'),(-1,'sideways'),(1,'sideways')):
+            self.assertEqual(env['evaluate'](slope),expected)
+        context=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/domain/regime/multiframe.py'))
+        branch=next(n for n in context.body if isinstance(n,ast.FunctionDef) and n.name=='_alignment_and_context').body[1]
+        self.assertTrue(all(isinstance(n,(ast.If,ast.Compare,ast.Name,ast.Load,ast.Eq,ast.Constant,ast.Return,ast.Attribute,ast.Tuple)) for n in ast.walk(branch)))
+        self.assertTrue(all(isinstance(n.value,ast.Name) and (n.value.id,n.attr) in {('Regime','UNAVAILABLE'),('AlignmentFlag','NEUTRAL')}
+                            for n in ast.walk(branch) if isinstance(n,ast.Attribute)))
+        wrapper=ast.parse('def evaluate_context(daily_regime):\n pass').body[0];wrapper.body=[branch]
+        env['AlignmentFlag']=SimpleNamespace(NEUTRAL='neutral')
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<pinned-unavailable-context>','exec'),env)
+        flag,text=env['evaluate_context']('unavailable')
+        self.assertEqual(flag,'neutral');self.assertIn('데이터/지표 이력이 부족',text)
+        self.assertIsNone(env['evaluate_context']('sideways'))
+
+
+    def test_support_resistance_simultaneous_proximity_has_no_direction_bias(self):
+        import ast
+        from enum import Enum
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        path='ai/src/agents/technical/domain/synthesis/signal_score.py'
+        raw=c.regular_bytes(root,path)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),c.GRAPH_INPUTS[path])
+        fn=next(n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef) and n.name=='support_resistance_signal')
+        allowed=(ast.FunctionDef,ast.arguments,ast.arg,ast.If,ast.Return,ast.Assign,
+                 ast.Name,ast.Load,ast.Store,ast.Constant,ast.Attribute,ast.BoolOp,ast.And,
+                 ast.Compare,ast.Is,ast.IsNot,ast.NotEq,ast.LtE,ast.BinOp,ast.Div,ast.Sub,
+                 ast.BitOr,ast.Call)
+        self.assertTrue(all(isinstance(n,allowed) for n in ast.walk(fn)))
+        self.assertFalse(fn.decorator_list or fn.args.defaults or fn.args.kw_defaults)
+        self.assertTrue(all(isinstance(n.func,ast.Name) and n.func.id=='abs' and len(n.args)==1 and not n.keywords
+                            for n in ast.walk(fn) if isinstance(n,ast.Call)))
+        self.assertTrue(all(isinstance(n.value,ast.Name) and n.value.id=='Signal' and n.attr in {'POSITIVE','NEGATIVE','NEUTRAL'}
+                            for n in ast.walk(fn) if isinstance(n,ast.Attribute)))
+        class Signal(Enum):
+            POSITIVE='positive';NEGATIVE='negative';NEUTRAL='neutral'
+        settings=ast.parse(c.regular_bytes(root,'ai/src/agents/technical/config.py'))
+        thresholds={n.targets[0].id:ast.literal_eval(n.value) for n in settings.body
+                    if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)
+                    and n.targets[0].id in {'NEAR_SUPPORT_THRESHOLD_PCT','NEAR_RESISTANCE_THRESHOLD_PCT'}}
+        self.assertEqual(thresholds,{'NEAR_SUPPORT_THRESHOLD_PCT':.02,'NEAR_RESISTANCE_THRESHOLD_PCT':.02})
+        env={'__builtins__':{'abs':abs,'float':float},'Signal':Signal,**thresholds}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'<pinned-proximity>','exec'),env)
+        signal=env[fn.name]
+        for close,support,resistance,expected in ((100,99,101,Signal.NEUTRAL),
+                (100,100,100,Signal.NEUTRAL),(100,99,150,Signal.POSITIVE),
+                (100,50,101,Signal.NEGATIVE),(100,99,None,Signal.POSITIVE),
+                (100,None,101,Signal.NEGATIVE),(100,50,150,Signal.NEUTRAL),(100,None,None,None),
+                (100,0,0,Signal.NEUTRAL),(102,100,None,Signal.POSITIVE),
+                (102.0001,100,None,Signal.NEUTRAL),(98,None,100,Signal.NEGATIVE),
+                (97.9999,None,100,Signal.NEUTRAL)):
+            with self.subTest(close=close,support=support,resistance=resistance):
+                self.assertIs(signal(close,support,resistance),expected)
+
+    def test_exact_sources_and_modes_do_not_expand_cf021(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        root=Path(__file__).resolve().parents[3]
+        selected=c.selected_sources(root,technical_graph_only=True)
+        self.assertEqual(set(selected),set(c.GRAPH_INPUTS)|c.GRAPH_SOURCES)
+        self.assertEqual(c.GRAPH_TESTS,('tests/unit/test_technical_compiled_bridge.py',))
+        self.assertEqual(len(c.GRAPH_DISTRIBUTIONS),64)
+        self.assertNotIn('ai/src/agents/technical/application/orchestration/pipeline_steps.py',c.CF021_INPUTS)
+        for mode in ('technical-graph-self','technical-graph-unit'):
+            with patch.object(c,'execute') as run:
+                self.assertEqual(c.main([mode]),0)
+                self.assertEqual(run.call_args.kwargs,{'technical_graph_only':True})
+        for name,digest in c.GRAPH_INPUTS.items():
+            self.assertEqual(hashlib.sha256(c.regular_bytes(root,name)).hexdigest(),digest)
+            self.assertFalse(c.source_allowed(name+'.adjacent'))
+
+    def test_quality_failures_include_sections_and_every_detail_field(self):
+        import importlib.util
+        import importlib.machinery
+        from types import ModuleType
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        prefix='_technical_quality_self'
+        names=[prefix,prefix+'.domain',prefix+'.domain.models',prefix+'.domain.interpretation']
+        loaded=[]
+        try:
+            for name in names:
+                module=ModuleType(name);module.__path__=[]
+                module.__spec__=importlib.machinery.ModuleSpec(name,None,is_package=True)
+                sys.modules[name]=module;loaded.append(name)
+            modules={}
+            for suffix,relative in (
+                ('domain.models.enums','ai/src/agents/technical/domain/models/enums.py'),
+                ('domain.interpretation.keyword_rules','ai/src/agents/technical/domain/interpretation/keyword_rules.py'),
+                ('domain.interpretation.trajectory_eval','ai/src/agents/technical/domain/interpretation/trajectory_eval.py')):
+                self.assertEqual(hashlib.sha256(c.regular_bytes(root,relative)).hexdigest(),c.GRAPH_INPUTS[relative])
+                name=prefix+'.'+suffix;spec=importlib.util.spec_from_file_location(name,root/relative)
+                module=importlib.util.module_from_spec(spec);sys.modules[name]=module;loaded.append(name)
+                spec.loader.exec_module(module);modules[suffix]=module
+            e=modules['domain.models.enums'];v=modules['domain.interpretation.trajectory_eval']
+            for field in ('one_line_summary','trend_interpretation','signal_interpretation','risk_interpretation',
+                          'timeframe_alignment','what_to_watch_next','invalidation_or_caution','key_drivers','warning_points'):
+                bad=['매수'] if field in {'key_drivers','warning_points'} else '매수'
+                failures=v._evaluate_sections({field:bad})
+                self.assertTrue(failures)
+                self.assertTrue(v.EvalResult(False,tuple(failures)).interpretation_failed)
+            for field in ('detail_reason','detail_caution','detail_watchpoint'):
+                for text in ('매수','부정 약세'):
+                    result=v.evaluate_details([{'indicator':'moving_average','detail':'긍정 신호',field:text}],
+                        signals=[(e.IndicatorType.MOVING_AVERAGE,e.Signal.POSITIVE)])
+                    self.assertTrue(result)
+                    self.assertTrue(all(f.target==f'technical_signals[moving_average].{field}' and f.info=='moving_average' for f in result))
+                    self.assertEqual(v.EvalResult(False,tuple(result)).failed_indicators,frozenset({'moving_average'}))
+                for optional in ('추가 관찰이 필요합니다.',None,''):
+                    good=v.evaluate_details([{'indicator':'moving_average','detail':'긍정 신호',field:optional}],
+                        signals=[(e.IndicatorType.MOVING_AVERAGE,e.Signal.POSITIVE)])
+                    self.assertEqual(good,[])
+        finally:
+            for name in reversed(loaded):sys.modules.pop(name,None)
+
+    def test_quality_granular_fallback_routes_section_and_detail_failure(self):
+        import ast
+        import __future__
+        from types import SimpleNamespace
+        from scripts import check_safe as c
+        root=Path(__file__).resolve().parents[3]
+        relative='ai/src/agents/technical/application/orchestration/pipeline_steps.py'
+        raw=c.regular_bytes(root,relative)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),c.GRAPH_INPUTS[relative])
+        node=next(n for n in ast.parse(raw).body if isinstance(n,ast.FunctionDef) and n.name=='_granular_fallback')
+        calls={'_full_fallback','any','VerificationResult','_Interpretation',
+               'interp.fallback_interpretation','interp.interpretation_from_llm','interp.details_from_llm'}
+        for item in ast.walk(node):
+            if isinstance(item,ast.Call):self.assertIn(ast.unparse(item.func),calls)
+            self.assertNotIsInstance(item,(ast.Import,ast.ImportFrom,ast.Global,ast.Nonlocal))
+        for summary_failed in (True,False):
+            seen=[]
+            def fallback(**kw):seen.append('fallback');return 'safe summary'
+            def kept(*args,**kw):seen.append('kept');return 'valid summary'
+            def details(*args,**kw):seen.append(kw['failed_indicators']);return ['safe detail']
+            ev=SimpleNamespace(details_structure_failed=False,failures=(SimpleNamespace(reason='forbidden_term'),),
+                interpretation_failed=summary_failed,failed_indicators=frozenset() if summary_failed else frozenset({'moving_average'}),passed=False)
+            scope={'__builtins__':{'any':any},'interp':SimpleNamespace(fallback_interpretation=fallback,
+                interpretation_from_llm=kept,details_from_llm=details),
+                '_full_fallback':lambda *a,**k:self.fail('Unexpected full fallback'),
+                'GenerationSource':SimpleNamespace(LLM='llm',LLM_REGENERATED='llm_regenerated'),
+                'VerificationResult':SimpleNamespace,'VerificationOutcome':SimpleNamespace(TEMPLATE_FALLBACK='template_fallback'),
+                '_Interpretation':lambda i,d,v:SimpleNamespace(interpretation=i,details=d,verification=v)}
+            exec(compile(ast.Module(body=[node],type_ignores=[]),'<fixed-quality-granular>','exec',
+                flags=__future__.annotations.compiler_flag,dont_inherit=True),scope)
+            result=scope['_granular_fallback'](SimpleNamespace(parsed={},result=ev),None,None,[],[],regen_count=1)
+            self.assertEqual(seen[0],'fallback' if summary_failed else 'kept')
+            self.assertEqual(seen[1],ev.failed_indicators)
+            self.assertFalse(result.verification.label_matched)
+            self.assertEqual(result.verification.outcome,'template_fallback')
+
+    def test_dependency_change_and_escape_rejected(self):
+        from scripts import check_safe as c
+        from unittest.mock import patch
+        import tempfile
+        with tempfile.TemporaryDirectory() as name:
+            site=Path(name)
+            with patch.object(c,'GRAPH_DISTRIBUTIONS',{}):
+                (site/'module.py').write_text('one')
+                first=c.graph_dependency_snapshot(site)
+                (site/'module.py').write_text('two')
+                self.assertNotEqual(first,c.graph_dependency_snapshot(site))
+                (site/'module.pyc').write_bytes(b'cache-one')
+                previous=c.graph_dependency_snapshot(site)
+                (site/'module.pyc').write_bytes(b'cache-two')
+                self.assertNotEqual(previous,c.graph_dependency_snapshot(site))
+                metadata=site/'x.dist-info';metadata.mkdir()
+                (metadata/'METADATA').symlink_to('/unapproved-original')
+                with patch.object(c,'graph_dependency_bytes',side_effect=AssertionError('read before validation')):
+                    with self.assertRaises(c.UnsafeCheck):c.graph_dependency_snapshot(site)
+                (metadata/'METADATA').unlink();metadata.rmdir()
+                (site/'escape').symlink_to('/unapproved-original')
+                with self.assertRaises(c.UnsafeCheck):c.graph_dependency_snapshot(site)
+
 if __name__ == "__main__":
     import json, sys
     focused=json.loads(Path(sys.argv[1]).read_text()).get("cf012_self_only",False)
@@ -1199,6 +1675,8 @@ if __name__ == "__main__":
     technical_owned_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf035_self_only",False)
     technical_owned_read_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf036_self_only",False)
     technical_runtime_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf040_self_only",False)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
+    graph_focused=json.loads(Path(sys.argv[1]).read_text()).get("technical_graph_self_only",False)
+    admission_focused=json.loads(Path(sys.argv[1]).read_text()).get("cf048_self_only",False)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(CF048Boundary if admission_focused else TechnicalGraphBoundary if graph_focused else CF040Boundary if technical_runtime_focused else CF036Boundary if technical_owned_read_focused else CF035Boundary if technical_owned_focused else CF031Boundary if technical_read_focused else CF021Boundary if technical_boundary_focused else CF026Boundary if controller_focused else CF024Boundary if assembly_focused else CF023Boundary if meaning_focused else CF022Boundary if core_focused else CF020Boundary if supervisor_focused else CF019Boundary if display_focused else CF018Boundary if usage_focused else CF017Boundary if errors_focused else CF015Boundary if fundamental_focused else CF014Boundary if quality_focused else CF013Boundary if adapter_focused else CF012Boundary if focused else EntryBoundary)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful(): raise SystemExit(1)

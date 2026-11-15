@@ -35,6 +35,9 @@ class FlowProfile:
 
     def normalized(self,body):return canonical(body.normalized_input())
     def input_clock(self,body,stamp):return dict(as_of=body.as_of,candidate_date=candidate(body.as_of))
+    async def admit_before(self,session,values,before):
+        return await self.repository.admit(session,values,before=before)
+
     def spec_json(self):return canonical(SPEC)
     def adapter(self,row,owner):return FlowAnalysisAdapter(row,owner_user_id=owner)
     def from_stored(self,adapter,row):return adapter.from_stored(row)

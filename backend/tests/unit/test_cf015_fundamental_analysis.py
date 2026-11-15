@@ -228,3 +228,634 @@ async def test_public_raw_limit_and_duplicate_headers_fail_closed_before_DB(monk
             response=await client.post('/api/fundamental/analyses',content=content,headers=headers)
             assert response.status_code==422 and response.json()['error']['code']=='INPUT_INVALID'
         assert len(seen)==count==3
+
+
+def admission_settings(**values):
+    return SimpleNamespace(**(dict(FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT='2',FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT='5')|values))
+
+
+@pytest.mark.parametrize('field,value',[(name,value) for name in ('FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT','FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT') for value in ('0','-1','01','1.0',' 1','１',True,False,0,-1,1.5,None,'','9223372036854775808',9223372036854775808)])
+def test_fundamental_admission_count_limit_strict_values(field,value):
+    from src.modules.fundamental.domain.execution_limits import policy,AdmissionPolicyUnavailable
+    settings=admission_settings();setattr(settings,field,value)
+    with pytest.raises(AdmissionPolicyUnavailable):policy(settings)
+
+
+def test_fundamental_admission_limits_and_KST_period_boundaries_are_pure():
+    from src.modules.fundamental.domain.execution_limits import policy,period,AdmissionPolicy,AdmissionPolicyUnavailable
+    assert policy(admission_settings())==AdmissionPolicy(2,5)
+    assert policy(admission_settings(FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT=7,FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT=3))==AdmissionPolicy(7,3)
+    with pytest.raises(AdmissionPolicyUnavailable):policy(SimpleNamespace())
+    before=datetime(2026,11,13,14,59,59,tzinfo=UTC);after=before+timedelta(seconds=1)
+    assert period(before)==(datetime(2026,11,12,15,tzinfo=UTC),datetime(2026,11,13,15,tzinfo=UTC))
+    assert period(after)==(datetime(2026,11,13,15,tzinfo=UTC),datetime(2026,11,14,15,tzinfo=UTC))
+    with pytest.raises(AdmissionPolicyUnavailable):period(before.replace(tzinfo=None))
+
+
+@pytest.mark.parametrize('service_count,owner_count,code',[(5,2,None),(6,2,'USAGE_LIMIT_EXCEEDED'),(5,3,'USAGE_LIMIT_EXCEEDED'),(0,0,'SERVICE_UNAVAILABLE')])
+async def test_fundamental_limiter_counts_insert_and_preserves_captured_policy(service_count,owner_count,code):
+    from src.modules.fundamental.application.execution_limit_control import FundamentalExecutionLimitControl
+    events=[]
+    async def scalar(statement):
+        events.append(str(statement))
+        return 'read committed' if len(events)==1 else True
+    async def execute(statement):
+        events.append(str(statement));return SimpleNamespace(one=lambda:(service_count,owner_count))
+    session=SimpleNamespace(scalar=scalar,execute=execute,commit=AsyncMock(),rollback=AsyncMock())
+    settings=admission_settings();control=FundamentalExecutionLimitControl(session,FundamentalAnalysisError,settings)
+    assert control.new_values(None,{'id':uuid4()})=={}
+    settings.FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT='100';settings.FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT='100'
+    value=row()
+    if code:
+        with pytest.raises(FundamentalAnalysisError) as error:await control.reserve(value,value.started_at)
+        assert error.value.code.value==code
+    else:await control.reserve(value,value.started_at)
+    assert len(events)==3 and 'current_setting' in events[0] and 'pg_try_advisory_xact_lock' in events[1]
+    assert 'count(*)' in events[2] and 'state' not in events[2] and 'fundamental_analysis_runs' in events[2]
+    await control.observe(value,b'?',{'private':'ignored'})
+    assert len(events)==3 and session.commit.await_count==session.rollback.await_count==0
+
+
+@pytest.mark.parametrize('isolation,locked',[('repeatable read',True),('serializable',True),(None,True),('read committed',False),('read committed',None)])
+async def test_fundamental_limiter_rejects_unfresh_isolation_or_busy_without_count_retry(isolation,locked):
+    from src.modules.fundamental.infrastructure.analysis_repository import admission_counts,AdmissionCountUnavailable,ADMISSION_LOCK_KEY
+    seen=[]
+    async def scalar(statement):seen.append(statement);return isolation if len(seen)==1 else locked
+    session=SimpleNamespace(scalar=scalar,execute=AsyncMock())
+    with pytest.raises(AdmissionCountUnavailable):await admission_counts(session,uuid4(),datetime.now(UTC))
+    assert len(seen)==(2 if isolation=='read committed' else 1) and session.execute.await_count==0
+    assert ADMISSION_LOCK_KEY==0x466E644C696D6974
+    if len(seen)==2:assert ADMISSION_LOCK_KEY in seen[1].compile().params.values()
+
+
+async def test_fundamental_existing_key_observation_skips_missing_limits_and_new_dispatch(monkeypatch):
+    value=row();session=SimpleNamespace(commit=AsyncMock(),rollback=AsyncMock())
+    service=FundamentalAnalysisService(session,principal=None,client=SimpleNamespace(analyze_fundamental=AsyncMock()),limit_settings=SimpleNamespace())
+    service._authorize=AsyncMock();service.principal=SimpleNamespace(user_id=value.owner_user_id)
+    monkeypatch.setattr(service.profile.repository,'by_key',AsyncMock(return_value=value))
+    monkeypatch.setattr(service.profile.repository,'expire',AsyncMock())
+    service.usage_control.new_values=lambda *args:(_ for _ in ()).throw(AssertionError('Replay must not parse policy'))
+    result=await service.post(dict(ticker='005930',question='합성 재무 질문',idempotency_key='same-key',allow_analysis=True),uuid4())
+    assert result.analysis_id==value.id and service.client.analyze_fundamental.await_count==0
+
+
+async def test_fundamental_new_missing_stock_is_explicit_eligibility_error(monkeypatch):
+    session=SimpleNamespace(scalar=AsyncMock(return_value=None),commit=AsyncMock(),rollback=AsyncMock())
+    service=FundamentalAnalysisService(session,principal=None,client=None,limit_settings=admission_settings())
+    service._authorize=AsyncMock()
+    service.principal=SimpleNamespace(user_id=uuid4())
+    monkeypatch.setattr(service.profile.repository,'by_key',AsyncMock(return_value=None))
+    with pytest.raises(FundamentalAnalysisError) as error:
+        await service.post(dict(ticker='005930',question='질문',idempotency_key='key',allow_analysis=True),uuid4())
+    assert error.value.code.value=='FEATURE_UNAVAILABLE' and session.commit.await_count==0
+
+
+# CF061: actual middleware with controlled ASGI IO and deterministic timer delivery.
+# No network, database, wall-clock waits or production timer configuration.
+class CF061Clock:
+    def __init__(self, monkeypatch):
+        self.now = 1000.0
+        self.loop = asyncio.get_running_loop()
+        self.original = asyncio.timeout_at
+        self.timers, self.deadlines = [], []
+        monkeypatch.setattr(asyncio, 'get_running_loop', lambda: self)
+        monkeypatch.setattr(asyncio, 'timeout_at', self.timeout_at)
+
+    def __getattr__(self, name):
+        return getattr(self.loop, name)
+
+    def time(self):
+        return self.now
+
+    def timeout_at(self, deadline):
+        clock = self
+        self.deadlines.append(deadline)
+        class ControlledTimeout:
+            active = False
+            def __init__(self):
+                self.timer = clock.original(None)
+            async def __aenter__(self):
+                await self.timer.__aenter__()
+                self.active = True
+                clock.timers.append((deadline, self))
+                if deadline <= clock.now:
+                    self.timer.reschedule(clock.loop.time() - 1)
+                return self
+            async def __aexit__(self, *args):
+                self.active = False
+                return await self.timer.__aexit__(*args)
+            def expired(self):
+                return self.timer.expired()
+        return ControlledTimeout()
+
+    def jump(self, seconds):
+        self.now += seconds
+
+    async def elapse(self, seconds):
+        self.jump(seconds)
+        for deadline, context in self.timers:
+            if context.active and not context.expired() and deadline <= self.now:
+                context.timer.reschedule(self.loop.time() - 1)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+
+def cf061_boundary(monkeypatch, inner, *, method='POST', path='/api/fundamental/analyses'):
+    from src.shared.http.access_boundary import AccessBoundary
+    from src.shared.config import settings
+    from src.modules.auth.api import router as auth
+    monkeypatch.setattr(settings, 'FUNDAMENTAL_ANALYSIS_ENABLED', True)
+    monkeypatch.setattr(auth, 'configured', lambda: True)
+    h = SimpleNamespace(scope=dict(type='http', asgi={'version':'3.0'}, http_version='1.1',
+        method=method, path=path, raw_path=path.encode(), query_string=b'', scheme='http',
+        server=('synthetic.invalid',80), client=('127.0.0.1',1),
+        headers=[(b'content-type',b'application/json')]), sent=[])
+    h.raw = json.dumps(dict(ticker='005930', question='synthetic', idempotency_key='key', allow_analysis=True)).encode()
+    async def receive():
+        return dict(type='http.request', body=h.raw, more_body=False)
+    async def send(message):
+        h.sent.append(message)
+    h.receive, h.send = receive, send
+    async def run():
+        await AccessBoundary(inner)(h.scope, h.receive, h.send)
+    h.run = run
+    return h
+
+
+def cf061_reply(h, status, code=None):
+    starts = [m for m in h.sent if m['type']=='http.response.start']
+    assert len(starts)==1 and starts[0]['status']==status
+    headers = dict(starts[0]['headers'])
+    assert headers[b'cache-control']==b'private, no-store' and headers[b'vary']==b'Cookie, Origin'
+    if code:
+        body = json.loads(b''.join(m.get('body',b'') for m in h.sent if m['type']=='http.response.body'))
+        assert body['error']['code']==code and body['request_id']==str(h.scope['state']['cf003_request_id'])
+
+
+@pytest.mark.parametrize('trickle', [False, True])
+async def test_cf061_first_body_deadline_not_renewed_per_chunk(monkeypatch, trickle):
+    inner = AsyncMock()
+    h = cf061_boundary(monkeypatch, inner)
+    clock = CF061Clock(monkeypatch)
+    pieces = 0
+    async def receive():
+        nonlocal pieces
+        pieces += 1
+        await clock.elapse(8 if trickle else 16)
+        return dict(type='http.request', body=b' ', more_body=True)
+    h.receive = receive
+    await h.run()
+    cf061_reply(h, 503, 'SERVICE_UNAVAILABLE')
+    inner.assert_not_awaited()
+    assert pieces==(2 if trickle else 1)
+    assert clock.deadlines==[1065,1015,1065]
+
+
+@pytest.mark.parametrize('chunk', [b'x'*4097, bytearray(b'{}'), 'not bytes', None])
+async def test_cf061_bad_chunk_rejected_before_downstream(monkeypatch, chunk):
+    inner = AsyncMock()
+    h = cf061_boundary(monkeypatch, inner)
+    async def receive():
+        return dict(type='http.request', body=chunk)
+    h.receive=receive
+    await h.run()
+    cf061_reply(h,422,'INPUT_INVALID')
+    inner.assert_not_awaited()
+
+
+@pytest.mark.parametrize('size', [4096,4097])
+async def test_cf061_cumulative_boundary_and_exact_body_forwarded_once(monkeypatch,size):
+    from starlette.responses import JSONResponse
+    observed=[]
+    async def inner(scope,receive,send):
+        observed.append(await receive())
+        await JSONResponse({'ok':True})(scope,receive,send)
+    h=cf061_boundary(monkeypatch,inner)
+    raw=h.raw+b' '*(size-len(h.raw))
+    # Distinct position, rather than content, determines the final chunk.
+    count=0
+    async def chunks():
+        nonlocal count
+        count+=1
+        return dict(type='http.request',body=raw[:2048] if count==1 else raw[2048:],more_body=count==1)
+    h.receive=chunks
+    await h.run()
+    if size==4096:
+        cf061_reply(h,200)
+        assert observed==[dict(type='http.request',body=raw,more_body=False)]
+    else:
+        cf061_reply(h,422,'INPUT_INVALID');assert observed==[]
+
+
+@pytest.mark.parametrize('method,path', [('POST','/api/fundamental/analyses'),('GET','/api/fundamental/analyses/'+str(uuid4())),('DELETE','/api/fundamental/reports/'+str(uuid4()))])
+async def test_cf061_total_deadline_includes_body_and_downstream_cleanup(monkeypatch,method,path):
+    closed=[]
+    async def inner(scope,receive,send):
+        try:
+            await clock.elapse(54)
+            await asyncio.Event().wait()
+        finally:
+            closed.append('session_closed')
+    h=cf061_boundary(monkeypatch,inner,method=method,path=path)
+    clock=CF061Clock(monkeypatch)
+    if method=='POST':
+        original=h.receive
+        async def receive():
+            await clock.elapse(12)
+            return await original()
+        h.receive=receive
+    else:
+        clock.jump(12)  # The middleware still fixes a new first-ingress timestamp.
+    task=asyncio.create_task(h.run())
+    for _ in range(5):await asyncio.sleep(0)
+    if not task.done():await clock.elapse(12)
+    await task
+    cf061_reply(h,503,'SERVICE_UNAVAILABLE')
+    assert closed==['session_closed']
+    state=h.scope['state'];assert state['fundamental_deadline']==state['fundamental_started_at']+65
+    assert clock.deadlines[-1]==state['fundamental_started_at']+70
+
+
+async def test_cf061_real_route_dependency_session_unwinds_on_auth_wait(monkeypatch):
+    from fastapi import FastAPI
+    from src.modules.fundamental.api import analysis_router as routes
+    events=[]
+    async def session():
+        events.append('opened')
+        try:yield SimpleNamespace()
+        finally:events.append('rollback_and_close')
+    async def principal(*args,**kwargs):
+        await clock.elapse(66)
+        pytest.fail('auth must be cancelled before native service construction')
+    monkeypatch.setattr(routes,'request_principal',principal)
+    app=FastAPI();app.include_router(routes.router)
+    app.dependency_overrides[routes.get_session]=session
+    h=cf061_boundary(monkeypatch,app);clock=CF061Clock(monkeypatch)
+    await h.run()
+    cf061_reply(h,503,'SERVICE_UNAVAILABLE')
+    assert events==['opened','rollback_and_close']
+
+
+@pytest.mark.parametrize('started', [False,True])
+async def test_cf061_external_cancel_preserved_and_no_second_response(monkeypatch,started):
+    entered=asyncio.Event();closed=[]
+    async def inner(scope,receive,send):
+        try:
+            if started:await send(dict(type='http.response.start',status=200,headers=[]))
+            entered.set();await asyncio.Event().wait()
+        finally:closed.append(1)
+    h=cf061_boundary(monkeypatch,inner);task=asyncio.create_task(h.run())
+    await entered.wait();task.cancel()
+    with pytest.raises(asyncio.CancelledError):await task
+    assert closed==[1] and len(h.sent)==int(started)
+
+
+@pytest.mark.parametrize('point', ['body','downstream'])
+async def test_cf061_internal_timeouterror_is_not_own_timeout(monkeypatch,point):
+    sentinel=TimeoutError('synthetic internal failure')
+    async def fail(*args):raise sentinel
+    h=cf061_boundary(monkeypatch,fail)
+    if point=='body':h.receive=fail
+    with pytest.raises(TimeoutError) as caught:await h.run()
+    assert caught.value is sentinel and h.sent==[]
+
+
+async def test_cf061_disconnect_propagates_without_error_response(monkeypatch):
+    inner=AsyncMock();h=cf061_boundary(monkeypatch,inner)
+    async def receive():return {'type':'http.disconnect'}
+    h.receive=receive
+    with pytest.raises(asyncio.CancelledError):await h.run()
+    inner.assert_not_awaited();assert h.sent==[]
+
+
+@pytest.mark.parametrize('partial', [False,True])
+async def test_cf061_response_already_started_then_timeout_aborts(monkeypatch,partial):
+    closed=[]
+    async def inner(scope,receive,send):
+        try:
+            await send(dict(type='http.response.start',status=200,headers=[]))
+            if partial:await send(dict(type='http.response.body',body=b'partial',more_body=True))
+            await clock.elapse(66)
+        finally:closed.append(1)
+    h=cf061_boundary(monkeypatch,inner);clock=CF061Clock(monkeypatch)
+    with pytest.raises(TimeoutError):await h.run()
+    assert [m['type'] for m in h.sent]==['http.response.start']+(['http.response.body'] if partial else [])
+    assert closed==[1]
+
+
+@pytest.mark.parametrize('failure', [RuntimeError('synthetic send failure'),TimeoutError('synthetic transport timeout'),asyncio.CancelledError()])
+async def test_cf061_start_attempt_failure_is_never_retried(monkeypatch,failure):
+    async def inner(scope,receive,send):await send(dict(type='http.response.start',status=200,headers=[]))
+    h=cf061_boundary(monkeypatch,inner)
+    async def send(message):
+        h.sent.append(message)
+        raise failure
+    h.send=send
+    with pytest.raises(type(failure)) as caught:await h.run()
+    assert caught.value is failure and len(h.sent)==1
+
+
+async def test_cf061_cleanup_past_response_deadline_never_starts_error(monkeypatch):
+    closed=[]
+    async def inner(scope,receive,send):
+        try:await clock.elapse(66)
+        finally:
+            clock.jump(5);closed.append(1)
+    h=cf061_boundary(monkeypatch,inner);clock=CF061Clock(monkeypatch)
+    with pytest.raises(TimeoutError):await h.run()
+    assert h.sent==[] and closed==[1] and clock.deadlines==[1065,1015]
+
+
+async def test_cf061_error_send_bounded_by_original70_and_never_retried(monkeypatch):
+    async def inner(scope,receive,send):await clock.elapse(66)
+    h=cf061_boundary(monkeypatch,inner);clock=CF061Clock(monkeypatch)
+    async def send(message):
+        h.sent.append(message)
+        await clock.elapse(5)
+    h.send=send
+    with pytest.raises(TimeoutError):await h.run()
+    assert len(h.sent)==1 and h.sent[0]['status']==503 and clock.deadlines[-1]==1070
+
+
+@pytest.mark.parametrize('phase', ['body','processing','send'])
+async def test_cf061_late_waiter_cannot_accept_after_fixed_deadline(monkeypatch,phase):
+    from starlette.responses import JSONResponse
+    async def inner(scope,receive,send):
+        if phase=='processing':clock.jump(66)
+        await JSONResponse({'ok':True})(scope,receive,send)
+    h=cf061_boundary(monkeypatch,inner);clock=CF061Clock(monkeypatch)
+    if phase=='body':
+        original=h.receive
+        async def receive():
+            clock.jump(16);return await original()
+        h.receive=receive
+    if phase=='send':
+        async def send(message):
+            h.sent.append(message);clock.jump(66)
+        h.send=send
+        with pytest.raises(TimeoutError):await h.run()
+        assert len(h.sent)==1
+    else:
+        await h.run();cf061_reply(h,503,'SERVICE_UNAVAILABLE')
+
+
+async def test_cf061_untrusted_state_cannot_extend_deadlines_and_fast_path_unchanged(monkeypatch):
+    from starlette.responses import JSONResponse
+    async def inner(scope,receive,send):await JSONResponse({'ok':True})(scope,receive,send)
+    h=cf061_boundary(monkeypatch,inner);clock=CF061Clock(monkeypatch)
+    h.scope['state']={'fundamental_started_at':999999,'fundamental_deadline':999999}
+    await h.run();cf061_reply(h,200)
+    assert h.scope['state']['fundamental_started_at']==1000 and h.scope['state']['fundamental_deadline']==1065
+    assert clock.deadlines==[1065,1015]
+    assert domain.SPEC['deadline_seconds']==60 and domain.SPEC['http_timeout_seconds']==65 and domain.SPEC['bff_timeout_seconds']==70
+    assert domain.SPEC['dispatch_retries']==0
+
+
+async def test_cf061_oversized_chunk_never_reaches_accumulation_copy(monkeypatch):
+    from src.shared.http import access_boundary as boundary
+    copies=[]
+    class TrackedBuffer(bytearray):
+        def extend(self,chunk):
+            copies.append(len(chunk));return super().extend(chunk)
+    monkeypatch.setattr(boundary,'bytearray',TrackedBuffer,raising=False)
+    h=cf061_boundary(monkeypatch,AsyncMock());h.raw=b'x'*4097
+    await h.run();cf061_reply(h,422,'INPUT_INVALID')
+    assert copies==[]
+
+
+async def test_cf061_body_timeout_error_send_has_no_extra70_window(monkeypatch):
+    h=cf061_boundary(monkeypatch,AsyncMock());clock=CF061Clock(monkeypatch)
+    async def receive():await clock.elapse(16)
+    async def send(message):
+        h.sent.append(message);await clock.elapse(50)
+    h.receive,h.send=receive,send
+    with pytest.raises(TimeoutError):await h.run()
+    assert len(h.sent)==1 and clock.deadlines==[1065,1015,1065]
+
+
+@pytest.mark.parametrize('case,status,code', [('feature',403,'FEATURE_UNAVAILABLE'),('auth',401,'AUTH_REQUIRED'),('media',422,'INPUT_INVALID'),('json',422,'INPUT_INVALID'),('uuid',422,'INPUT_INVALID')])
+async def test_cf061_existing_early_errors_are_preserved(monkeypatch,case,status,code):
+    from src.shared.config import settings
+    from src.modules.auth.api import router as auth
+    inner=AsyncMock();h=cf061_boundary(monkeypatch,inner)
+    if case=='feature':monkeypatch.setattr(settings,'FUNDAMENTAL_ANALYSIS_ENABLED',False)
+    if case=='auth':monkeypatch.setattr(auth,'configured',lambda:False)
+    if case=='media':h.scope['headers']=[(b'content-type',b'text/plain')]
+    if case=='json':h.raw=b'[]'
+    if case=='uuid':h.scope.update(method='GET',path='/api/fundamental/analyses/not-uuid')
+    await h.run();cf061_reply(h,status,code);inner.assert_not_awaited()
+
+
+@pytest.mark.parametrize('failure_type',[ValueError,TypeError])
+@pytest.mark.parametrize('phase',['start','body'])
+async def test_cf061_unsupported_route_error_send_failure_never_retries(monkeypatch,failure_type,phase):
+    inner=AsyncMock();h=cf061_boundary(monkeypatch,inner,path='/api/fundamental/reports')
+    sentinel=failure_type('synthetic send failure')
+    async def send(message):
+        h.sent.append(message)
+        if message['type']=='http.response.'+phase:raise sentinel
+    h.send=send
+    with pytest.raises(failure_type) as caught:await h.run()
+    assert caught.value is sentinel
+    assert sum(m['type']=='http.response.start' for m in h.sent)==1
+    assert len(h.sent)==(1 if phase=='start' else 2)
+    inner.assert_not_awaited()
+
+
+@pytest.mark.parametrize('invalid',[False,True])
+async def test_cf061_late_synchronous_parser_is_not_accepted_as_result_or_input_error(monkeypatch,invalid):
+    inner=AsyncMock();h=cf061_boundary(monkeypatch,inner);clock=CF061Clock(monkeypatch)
+    def parse(value):
+        clock.jump(16)
+        if invalid:raise ValueError('synthetic parse failure')
+        return SimpleNamespace()
+    monkeypatch.setattr(FundamentalAnalysisRequest,'model_validate',parse)
+    await h.run();cf061_reply(h,503,'SERVICE_UNAVAILABLE');inner.assert_not_awaited()
+
+
+# Fundamental usage classification: explicit synthetic caller inventory only.
+def usage_contract(*, closed=True):
+    from src.modules.analysis.domain.contracts import AnalysisContext,canonical_json
+    from src.modules.fundamental.domain import usage_evidence as u
+    value=row()
+    context=AnalysisContext(value.id,value.admission_request_id,value.attempt_id,value.owner_user_id,
+        domain.OPERATION,value.input_fingerprint,value.as_of,value.deadline_at)
+    specs=[dict(call_id=str(UUID(int=i)),provider='synthetic-provider',model='synthetic-model',
+        service_tier='default',request_sha256=hex(i)[2:]*32,input_token_cap=1000,output_token_cap=500) for i in (17,18)]
+    expected=u.UsageExpectation(context,'a'*64,canonical_json(specs),closed)
+    calls=[{k:v for k,v in spec.items() if k not in {'input_token_cap','output_token_cap'}} |
+        dict(input_tokens=10,cached_tokens=2,output_tokens=5,total_tokens=15) for spec in specs]
+    wire=dict(schema_version=u.SCHEMA,expectation_sha256=expected.fingerprint,calls=calls)
+    return u,expected,wire
+
+
+def classify_fixture(u,expected,*values,trusted=True):
+    from src.modules.analysis.domain.contracts import canonical_json
+    return u.classify_usage(expected,tuple(None if v is None else canonical_json(v) for v in values),usage_trusted=trusted)
+
+
+def test_fundamental_usage_complete_requires_every_call_not_a_subtotal():
+    u,expected,wire=usage_contract()
+    complete=classify_fixture(u,expected,wire)
+    assert complete.state=='complete_usage' and complete.reason=='ALL_CALLS_OBSERVED'
+    assert (complete.input_tokens,complete.cached_tokens,complete.output_tokens,complete.total_tokens)==(20,4,10,30)
+    partial=copy.deepcopy(wire);partial['calls'].pop()
+    missing=classify_fixture(u,expected,partial)
+    assert missing.state=='unknown' and missing.reason=='USAGE_MISSING'
+    subtotal=classify_fixture(u,expected,{'cost_summary':dict(llm_calls=2,prompt_tokens=10,completion_tokens=5)})
+    assert subtotal.state=='unknown' and subtotal.reason=='AGGREGATE_ONLY'
+    for result in (complete,missing,subtotal):
+        assert result.keep_reservation is True
+        if result.state!='complete_usage':
+            assert (result.input_tokens,result.cached_tokens,result.output_tokens,result.total_tokens)==(None,None,None,None)
+
+
+@pytest.mark.parametrize('field',['input_tokens','cached_tokens','output_tokens','total_tokens'])
+async def test_fundamental_usage_one_missing_token_never_totals_or_releases(field):
+    u,expected,wire=usage_contract();wire['calls'][1][field]=None
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='unknown' and result.reason=='USAGE_MISSING' and result.keep_reservation
+    assert result.input_tokens is result.output_tokens is result.total_tokens is None
+    assert len(domain.decode(result.calls_json))==2  # Independent known fields preserved.
+
+
+@pytest.mark.parametrize('closed,empty,trusted,reason',[(False,False,True,'CALL_INVENTORY_UNPROVEN'),(True,True,True,'CALL_INVENTORY_UNPROVEN'),(True,False,False,'PROVENANCE_UNPROVEN')])
+def test_fundamental_usage_inventory_and_provenance_cannot_be_inferred(closed,empty,trusted,reason):
+    from dataclasses import replace
+    u,expected,wire=usage_contract(closed=closed)
+    if empty:
+        expected=replace(expected,calls_json='[]');wire.update(expectation_sha256=expected.fingerprint,calls=[])
+    result=classify_fixture(u,expected,wire,trusted=trusted)
+    assert result.state=='unknown' and result.reason==reason and result.keep_reservation
+    assert u.classify_usage(expected,(domain.canonical(wire),)).state=='unknown'  # trust default is closed.
+
+
+def test_fundamental_usage_complete_flag_and_count_are_never_inventory_authority():
+    u,expected,wire=usage_contract();wire.update(complete=True,llm_calls=2)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='rejected' and result.reason=='EVIDENCE_INVALID' and result.keep_reservation
+    for receipts in ((),(None,),(domain.canonical({'cost_summary':{'llm_calls':0,'prompt_tokens':0}}),)):
+        result=u.classify_usage(expected,receipts,usage_trusted=True)
+        assert result.state=='unknown' and result.input_tokens is None and result.keep_reservation
+
+
+def test_fundamental_usage_exact_duplicate_and_order_are_idempotent():
+    u,expected,wire=usage_contract();first=copy.deepcopy(wire);second=copy.deepcopy(wire)
+    first['calls']=wire['calls'][:1];second['calls']=wire['calls'][1:]
+    baseline=classify_fixture(u,expected,wire)
+    assert baseline==classify_fixture(u,expected,wire,wire)
+    assert baseline==classify_fixture(u,expected,second,first,second,first)
+    repeated=copy.deepcopy(wire);repeated['calls']*=2
+    assert baseline==classify_fixture(u,expected,repeated)
+    assert baseline.total_tokens==30
+
+
+def test_fundamental_usage_conflicting_duplicate_is_not_last_write_wins():
+    u,expected,wire=usage_contract();changed=copy.deepcopy(wire)
+    changed['calls'][0].update(input_tokens=11,total_tokens=16)
+    a=classify_fixture(u,expected,wire,changed)
+    b=classify_fixture(u,expected,changed,wire)
+    assert a==b and a.state=='rejected' and a.reason=='CALL_CONFLICT'
+    assert a.keep_reservation and a.input_tokens is a.total_tokens is None
+    assert len(domain.decode(a.calls_json))==3  # Both conflicting observations retained.
+
+
+@pytest.mark.parametrize('field,value',[(field,value) for field in ('input_tokens','cached_tokens','output_tokens','total_tokens') for value in (True,False,1.0,-1,'10',2**63)])
+def test_fundamental_usage_invalid_integer_range_is_closed(field,value):
+    u,expected,wire=usage_contract();wire['calls'][0][field]=value
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='rejected' and result.keep_reservation and result.total_tokens is None
+
+
+@pytest.mark.parametrize('change,reason',[
+    ({'input_tokens':1001,'total_tokens':1006},'POLICY_CAP_EXCEEDED'),
+    ({'output_tokens':501,'total_tokens':511},'POLICY_CAP_EXCEEDED'),
+    ({'cached_tokens':11},'USAGE_INVALID'),({'total_tokens':16},'USAGE_INVALID'),
+    ({'call_id':str(UUID(int=99))},'CALL_NOT_EXPECTED'),
+    ({'provider':'different-provider'},'CALL_BINDING_MISMATCH'),
+    ({'model':'different-model'},'CALL_BINDING_MISMATCH'),
+    ({'service_tier':'different-tier'},'CALL_BINDING_MISMATCH'),
+    ({'request_sha256':'d'*64},'CALL_BINDING_MISMATCH')])
+def test_fundamental_usage_call_binding_caps_and_consistency(change,reason):
+    u,expected,wire=usage_contract();wire['calls'][0].update(change)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='rejected' and result.reason==reason and result.keep_reservation
+
+
+def test_fundamental_usage_different_run_attempt_owner_policy_and_request_cannot_rebind():
+    from dataclasses import replace
+    u,expected,wire=usage_contract()
+    changed=[replace(expected,policy_sha256='e'*64)]
+    for key,value in [('analysis_id',uuid4()),('attempt_id',uuid4()),('admission_request_id',uuid4()),('owner_user_id',uuid4()),('input_fingerprint','e'*64)]:
+        changed.append(replace(expected,context=replace(expected.context,**{key:value})))
+    for other in changed:
+        result=classify_fixture(u,other,wire)
+        assert result.state=='rejected' and result.reason=='BINDING_MISMATCH' and result.keep_reservation
+
+
+def test_fundamental_usage_expectation_is_immutable_and_validated():
+    from dataclasses import replace,FrozenInstanceError
+    u,expected,wire=usage_contract()
+    with pytest.raises(FrozenInstanceError):expected.policy_sha256='b'*64
+    specs=domain.decode(expected.calls_json)
+    for changes in ({'calls_json':domain.canonical(specs+specs[:1])},{'inventory_closed':1},{'policy_sha256':'secret-sentinel'},
+                    {'context':replace(expected.context,operation='flow.analysis.v1')},
+                    {'calls_json':domain.canonical([specs[0]|{'input_token_cap':True}])}):
+        with pytest.raises(u.UsageEvidenceInvalid) as caught:replace(expected,**changes)
+        assert str(caught.value)=='Fundamental usage evidence contract is invalid' and caught.value.__cause__ is None
+    specs[0]['model']='changed-after-freeze'
+    assert expected.fingerprint==wire['expectation_sha256']
+
+
+def test_fundamental_usage_duplicate_JSON_keys_and_raw_errors_never_leak():
+    u,expected,wire=usage_contract()
+    for receipt in ('{"calls":[],"calls":[]}', '{"secret-sentinel":', '"secret-sentinel"', 'x'*(u.MAX_DOCUMENT_BYTES+1)):
+        result=u.classify_usage(expected,(receipt,),usage_trusted=True)
+        assert result.state=='rejected' and result.keep_reservation
+        assert 'secret-sentinel' not in repr(result) and result.calls_json=='[]'
+
+
+def test_fundamental_usage_aggregate_overflow_retains_hold_without_a_partial_sum():
+    from dataclasses import replace
+    u,expected,wire=usage_contract();specs=domain.decode(expected.calls_json)
+    for spec in specs:spec['input_token_cap']=2**63-1
+    expected=replace(expected,calls_json=domain.canonical(specs));wire['expectation_sha256']=expected.fingerprint
+    for call in wire['calls']:call.update(input_tokens=2**62,cached_tokens=0,output_tokens=0,total_tokens=2**62)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='unknown' and result.reason=='USAGE_OVERFLOW' and result.keep_reservation
+    assert result.input_tokens is result.total_tokens is None
+
+
+def test_fundamental_usage_classification_does_not_activate_observe_or_mutate_output():
+    u,expected,wire=usage_contract();before=copy.deepcopy(wire)
+    classify_fixture(u,expected,wire)
+    assert wire==before
+    from src.modules.fundamental.application.execution_limit_control import FundamentalExecutionLimitControl
+    source=inspect.getsource(FundamentalExecutionLimitControl.observe)
+    assert 'return None' in source and 'classify_usage' not in source and 'self.session' not in source
+
+
+def test_fundamental_usage_known_zero_is_not_missing_or_proof_of_zero_calls():
+    u,expected,wire=usage_contract()
+    for call in wire['calls']:call.update(input_tokens=0,cached_tokens=0,output_tokens=0,total_tokens=0)
+    result=classify_fixture(u,expected,wire)
+    assert result.state=='complete_usage' and result.input_tokens==result.output_tokens==result.total_tokens==0
+    assert result.keep_reservation  # No money/pricing/release inferred even from known zero.
+
+
+def test_fundamental_usage_collection_count_and_nulls_share_document_budget(monkeypatch):
+    u,expected,wire=usage_contract()
+    # Small protocol budget, unrelated to provider/cost policy or actual traffic.
+    monkeypatch.setattr(u,'MAX_DOCUMENT_BYTES',1024)
+    original=u._document;reads=[]
+    def read(text):
+        reads.append(text);return original(text)
+    monkeypatch.setattr(u,'_document',read)
+    result=u.classify_usage(expected,(None,)*342,usage_trusted=True)
+    assert result.state=='rejected' and result.reason=='EVIDENCE_INVALID'
+    assert reads==[expected.calls_json,expected.calls_json]  # No receipt traversal/parse.
+    result=u.classify_usage(expected,(None,)*205,usage_trusted=True)
+    assert result.state=='rejected' and result.keep_reservation and result.calls_json=='[]'
+    # Exact null collection fits: [null,...,null] = 5*N+1 bytes.
+    result=u.classify_usage(expected,(None,)*204,usage_trusted=True)
+    assert result.state=='unknown' and result.reason=='USAGE_MISSING' and result.keep_reservation

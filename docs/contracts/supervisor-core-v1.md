@@ -612,3 +612,44 @@ semantic identity는 prompt SHA만 바뀌며 과거 실행의 spec·입력·회�
 
 [구현·집중 검증과 실제 실행의 구분](../work/supervisor-flow-app.md)을 따른다. 이 앱의
 합성 ASGI 검증은 provider·DB·운영 설정이나 전체 Supervisor→Flow 실제 인수 증거가 아니다.
+
+## CF054 · Explicit single Technical handoff
+
+The separate `supervisor.technical.v1` envelope and `supervisor.technical-core.1` policy expose only
+POST `/api/supervisor/core/technical/prepare`, POST `/api/supervisor/core/technical/requests`, and
+GET `/api/supervisor/core/technical/requests/{supervisor_id}`. Flow1/2 and durable meaning preparation
+DTOs/hashes remain unchanged. The new plan is stateless and revalidated at confirmation; it never
+calls the meaning model, count, generation, or meaning accounting.
+
+The deterministic assessment retains the original question/typed answers/evidence/negation and all
+conditions. Only an unambiguous single Technical view proceeds through the canonical Stock resolver.
+Negated aliases are resolved again against the master: unresolved aliases or excluded canonical
+stocks fail closed before admission. Mixed views, unresolved residuals, and multi-stock ambiguity
+cannot silently execute a subset. All unsupported conditions require their exact waivers and partial
+consent; auth, identity, budget, deadline, and supported-stock policy are never waivable.
+
+The visible fixed profile is `technical.multiframe.v1` with 3m/1y/5y outputs, unverified cutoff,
+null unreported source time, and unavailable intraday. This profile does not honor a requested period,
+cutoff or candle unit. The explicit `execution_query` is `<resolved stock_code> 차트`, separately shown
+in both the plan and effective scope and included in plan/confirmation hashes. Only that consented
+fixed-profile query enters the existing strict Technical engine. The full original meaning remains
+in the saved plan; the CF053 planner's exclusion checks are unchanged.
+
+An additive target on the existing Supervisor binding fixes owner/client key, plan, intent, explicit
+configuration/policy/spec, confirmation session and canonical Stock. The server Technical key is
+`supervisor.technical-core.1:<supervisor_id>`. A fresh binding commit ACK alone may call existing
+`admit_provider_once`; only its fresh token ACK may link the matching run under auth→period→run→binding
+locks. Only the link commit ACK may call existing `execute_provider_once`. Raw tokens/grants are never
+stored in the binding. SQL owner FK, exact identity checks, canonical snapshot checks, a one-way link,
+a 120-second handoff window and retained history prevent key/run substitution or reset.
+
+Any existing binding, ambiguous ACK, same-key replay or GET is observation only. A current same-owner
+A2 session may read with execution settings off; it cannot recover a token or create another run,
+link, claim, start, publish, or expiry transition. Cross-target keys conflict409 and opposite-target
+GET is404. Read-only fixed-key reconciliation covers an admission ACK lost before FK linkage.
+
+Planning shares one initial15-second absolute deadline across body/auth/exchanges/resolution; confirm
+keeps at most140 seconds overall and initial body/auth15. Existing CF053 run deadlines, cancellation,
+independent usage and full hold remain authoritative. Stored status exposes a checked report ID only:
+`report_url=null`, and CF053 controlled public list/detail exclusion remains. This is Backend status/
+storage-reference recovery, not a public report screen, provider-quality acceptance or settlement.

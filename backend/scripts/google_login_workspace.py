@@ -20,16 +20,31 @@ class LoginPreparationError(RuntimeError):
 
 def child_base_environment() -> dict[str, str]:
     """Allowlist only: never inherit parent app/Google/DB/Node options."""
-    return {
+    result = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "LANG": "en_US.UTF-8",
         "TZ": "UTC",
         "NEXT_TELEMETRY_DISABLED": "1",
         "PYTHONNOUSERSITE": "1",
     }
+    # CF047's exec child must keep optional DB certificate/cache discovery in
+    # its already-owned home, including the bootstrap's second environment reset.
+    raw = os.environ.get("HOME")
+    if raw:
+        home = Path(raw)
+        if home.name == "cf047-home" and home.parent.name.startswith(".cf002-google-check-"):
+            import stat
+            for path in (home.parent, home):
+                metadata = path.lstat()
+                if (path.is_symlink() or not stat.S_ISDIR(metadata.st_mode)
+                        or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700):
+                    raise LoginPreparationError("Invalid owned Backend child home")
+            result["HOME"] = str(home.resolve(strict=True))
+            result["PYTHONDONTWRITEBYTECODE"] = "1"
+    return result
 
 
-def ensure_local_ports_free(*, socket_factory=socket.socket) -> None:
+def ensure_local_ports_free(*, socket_factory=socket.socket, backend_only: bool = False) -> None:
     """Probe both loopback families without reuse, then close only own sockets.
 
     Availability is a point-in-time check, not a promise/reservation for a later
@@ -37,7 +52,7 @@ def ensure_local_ports_free(*, socket_factory=socket.socket) -> None:
     """
     sockets = []
     try:
-        for port in (3200, 8200):
+        for port in ((8200,) if backend_only else (3200, 8200)):
             for family, host in (
                 (socket.AF_INET, "127.0.0.1"),
                 (socket.AF_INET6, "::1"),
@@ -183,7 +198,7 @@ class PreparedProjects:
 
 
 def prepare_projects(
-    repository: Path, *, temporary_parent: Path | None = None
+    repository: Path, *, temporary_parent: Path | None = None, backend_only: bool = False
 ) -> PreparedProjects:
     """Copy only source/build config. Existing private files are never opened.
 
@@ -203,7 +218,7 @@ def prepare_projects(
         parent,
     )
     try:
-        for name, entries in {
+        sources = {
             "backend": ("src", "db", "alembic.ini"),
             "frontend": (
                 "src",
@@ -215,7 +230,10 @@ def prepare_projects(
                 "postcss.config.mjs",
                 "eslint.config.mjs",
             ),
-        }.items():
+        }
+        if backend_only:
+            sources = {"backend": sources["backend"]}
+        for name, entries in sources.items():
             target = root / name
             target.mkdir()
             for entry in entries:
@@ -227,12 +245,11 @@ def prepare_projects(
                         project_root=repository / name,
                         project=name,
                     )
-        for required in (
+        required_sources = (
             prepared.backend / "src/shared/config.py",
             prepared.backend / "db/migrations/env.py",
-            prepared.frontend / "next.config.ts",
-            prepared.frontend / "package.json",
-        ):
+        ) + (() if backend_only else (prepared.frontend / "next.config.ts", prepared.frontend / "package.json"))
+        for required in required_sources:
             if not required.is_file():
                 raise LoginPreparationError(
                     "Required verification project source is missing"
@@ -245,6 +262,9 @@ def prepare_projects(
         backend_config.write_text(
             text.replace("s = Settings()", "s = Settings(_env_file=None)", 1)
         )
+        if backend_only:
+            (root / "cf047-home").mkdir(mode=0o700)
+            return prepared
         dependencies = repository / "frontend/node_modules"
         if not dependencies.is_dir():
             raise LoginPreparationError("Existing Frontend dependencies are required")

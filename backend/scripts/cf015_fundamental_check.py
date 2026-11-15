@@ -87,14 +87,19 @@ async def _verify(proof):
     from src.modules.fundamental.application.analysis_adapter import FundamentalAnalysisAdapter
     from src.modules.fundamental.infrastructure import analysis_repository as repo
     from src.modules.fundamental.domain.analysis import canonical,sha,stored_response
-    groups=[];calls={};mode='normal';chosen=None;commit_mode=None;fail_stage=False;rejections=0
-    barrier_count=0;barrier=asyncio.Event();held=asyncio.Event();release=asyncio.Event();dispatch_lock=asyncio.Lock()
+    groups=[];calls={};mode='normal';chosen=None;commit_mode=None;fail_stage=False;rejections=0;quota_trace=[]
+    barrier_count=0;barrier=asyncio.Event();first_dispatch=asyncio.Event();held=asyncio.Event();release=asyncio.Event();dispatch_lock=asyncio.Lock()
     TOKEN='cf015-public-synthetic-service-token-32bytes'
     def mark(label):groups.append(label);safe_print({'phase':'cf015_check','label':label,'status':'passed'})
     async def sql(statement,params=None):
         async with owned_session(proof) as session:return await session.scalar(text(statement),params or {})
     async def request_session(request:Request):
         async with owned_session(proof) as session:
+            connection=await session.connection();pid=await session.scalar(text('SELECT pg_backend_pid()'))
+            def quota_order(conn,cursor,statement,params,context,many):
+                tag='lock' if 'pg_try_advisory_xact_lock' in statement else 'count' if 'count(*)' in statement and 'FROM fundamental_analysis_runs' in statement else None
+                if tag is not None:quota_trace.append((pid,tag))  # No SQL/parameters retained.
+            event.listen(connection.sync_connection,'before_cursor_execute',quota_order)
             original=session.commit;n=0;selected=commit_mode
             async def commit():
                 nonlocal n
@@ -105,7 +110,9 @@ async def _verify(proof):
                     if selected[1]=='ack':await original()
                     raise OSError('synthetic commit boundary')
                 await original()
-            session.commit=commit;yield session
+            session.commit=commit
+            try:yield session
+            finally:event.remove(connection.sync_connection,'before_cursor_execute',quota_order)
     def engine(request):
         key=str(request.analysis_id);calls[key]=calls.get(key,0)+1
         check(calls[key]==1,'CF015 one engine per grant')
@@ -122,10 +129,12 @@ async def _verify(proof):
         async def analyze(request):
             nonlocal barrier_count
             async with dispatch_lock:result=await original(request)
+            if mode=='limit_wait':held.set();await asyncio.wait_for(release.wait(),5)
             if mode=='revoke':
                 async with owned_session(proof) as session:await revoke_session(session,pr)
             if mode=='race_report':
                 barrier_count+=1
+                if barrier_count==1:first_dispatch.set()
                 if barrier_count==2:barrier.set()
                 await asyncio.wait_for(barrier.wait(),5)
             return result
@@ -149,13 +158,16 @@ async def _verify(proof):
         if mode=='delete_first':held.set();await asyncio.wait_for(release.wait(),5)
         return await original_delete(session,id)
     def body(**change):return dict(ticker='005930',question='합성 재무 경계',idempotency_key=str(uuid4()),allow_analysis=True)|change
-    async def call(method,path='/api/fundamental/analyses',*,value=None,raw=None,other=False,revoked=False,headers=None):
-        token,principal=(tr,pr) if revoked else (tb,pb) if other else (ta,pa)
+    async def call(method,path='/api/fundamental/analyses',*,value=None,raw=None,other=False,revoked=False,headers=None,identity=None):
+        token,principal=identity or ((tr,pr) if revoked else (tb,pb) if other else (ta,pa))
         forwarded={'origin':'http://localhost:3200','cookie':auth.SESSION_COOKIE+'='+token,'x-csrf-token':csrf_token(principal)}|(headers or {})
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://localhost:8200') as client:
             return await client.request(method,path,json=value,content=raw,headers=forwarded)
     def response(value,status,code=None):
         nonlocal rejections
+        if value.status_code!=status:
+            problem=value.json().get('error') or {};allowed={'AUTH_REQUIRED','AUTH_REQUEST_INVALID','FEATURE_UNAVAILABLE','SERVICE_UNAVAILABLE','INPUT_INVALID','RESULT_CONTRACT_INVALID','USAGE_LIMIT_EXCEEDED','RESULT_CONFLICT','RESOURCE_NOT_FOUND','IDEMPOTENCY_CONFLICT'}
+            safe_print(dict(phase='cf015_HTTP_mismatch',status=value.status_code,code=problem.get('code') if problem.get('code') in allowed else 'other'))
         check(value.status_code==status,'CF015 HTTP status')
         check(value.headers.get('cache-control')=='private, no-store' and {'cookie','origin'}<={v.strip().lower() for v in value.headers.get('vary','').split(',')},'CF015 private response')
         if code:
@@ -166,7 +178,8 @@ async def _verify(proof):
     async def count_reports(id):return await sql('SELECT count(*) FROM fundamental_reports WHERE id=:id',{'id':UUID(str(id))})
     async def prior_rows():
         return [await sql("SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY id)::text,'[]') FROM "+table+' r') for table in ('fundamental_reports','agent_reports','flow_reports','flow_analysis_runs','flow_runs','flow_input_snapshots','flow_fake_executions')]
-    check(await sql('SELECT version_num FROM alembic_version')=='c15001a7e0001','CF015 exact revision')
+    head='c61001a7e0001'
+    check(await sql('SELECT version_num FROM alembic_version')==head,'CF015 current exact single revision')
     await migration(proof,'c12001a7e0001',downgrade=True)
     async with owned_session(proof) as session:
         a,b=AuthUser(id=uuid4()),AuthUser(id=uuid4());session.add_all([a,b]);await session.flush()
@@ -204,6 +217,8 @@ async def _verify(proof):
     try:
       with ExitStack() as stack:
         for target,name,value in ((settings,'AI_SERVICE_URL','http://synthetic.invalid'),(settings,'FUNDAMENTAL_ANALYSIS_ENABLED',True),(settings,'FUNDAMENTAL_SERVICE_TOKEN',TOKEN),(analysis_router,'AIClient',client),(FundamentalAnalysisAdapter,'stage',stage)):stack.enter_context(patch.object(target,name,value))
+        stack.enter_context(patch.object(settings,'FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT','1000'))
+        stack.enter_context(patch.object(settings,'FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT','1000'))
         stack.enter_context(patch.object(fr_repo,'add_report',add_report));stack.enter_context(patch.object(agent_repo,'add',add_index));stack.enter_context(patch.object(fr_repo,'delete_agent_index',delete_index))
         stack.enter_context(patch.dict('os.environ',{'FUNDAMENTAL_ANALYSIS_ENABLED':'true','FUNDAMENTAL_SERVICE_TOKEN':TOKEN}))
         for change in ({'allow_analysis':1},{'as_of':'2026-01-01'},{'owner_user_id':str(pa.user_id)},{'ticker':'１２３４５６'}):response(await call('POST',value=body(**change)),422,'INPUT_INVALID')
@@ -254,7 +269,10 @@ async def _verify(proof):
         chosen=uuid4();mode='race_report'
         one,two=body(),body()
         # Both independently dispatched responses meet before snapshot acceptance.
-        results=await asyncio.gather(call('POST',value=one),call('POST',value=two,other=True));mode='normal'
+        # Keep the native publication race while admitting serially: a busy
+        # global quota lock is now a legitimate pre-dispatch refusal.
+        first_task=asyncio.create_task(call('POST',value=one));await asyncio.wait_for(first_dispatch.wait(),5)
+        results=await asyncio.gather(first_task,call('POST',value=two,other=True));mode='normal'
         check(all(v.status_code==200 for v in results),'CF015 report race response')
         states=[v.json()['data']['state'] for v in results];check(sorted(states)==['failed','stored'],'CF015 named unique loser terminal')
         winner=next(v.json()['data'] for v in results if v.json()['data']['state']=='stored');winner_other=results[1].json()['data']['state']=='stored'
@@ -351,15 +369,187 @@ async def _verify(proof):
             except IntegrityError as error:
                 check(getattr(getattr(error.orig,'__cause__',None),'sqlstate',None)=='23514','CF015 immutable identity SQLSTATE');await session.rollback()
             else:raise RuntimeError('CF015 expected immutable identity refusal')
+        # Newer populated Flow guards precede c150 during a whole-head downgrade.
+        # Exercise the unchanged old Fundamental downgrade guard explicitly on
+        # the attested owned connection; do not stamp/reset the revision to c150.
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        path=_BACKEND/'db/migrations/versions/20261109_c15001a7e0001_fundamental_owned_analysis.py'
+        spec=importlib.util.spec_from_file_location('_cf015_original_migration',path)
+        old=importlib.util.module_from_spec(spec);spec.loader.exec_module(old)
+        await proof.preflight();guard_engine=create_async_engine(proof.url,connect_args=proof.connection_parameters())
+        try:
+            async with guard_engine.connect() as connection:
+                await proof.attest_connection(connection)
+                def old_guard(sync):
+                    with Operations.context(MigrationContext.configure(sync)):old.downgrade()
+                try:await connection.run_sync(old_guard)
+                except RuntimeError as error:check(type(error) is RuntimeError and error.args==('Nonempty live analysis ledger cannot be downgraded',),'CF015 exact nonempty downgrade refusal')
+                else:raise RuntimeError('CF015 nonempty downgrade must refuse')
+                await connection.rollback()
+        finally:await guard_engine.dispose()
         try:await migration(proof,'c12001a7e0001',downgrade=True)
-        except RuntimeError as error:check(type(error) is RuntimeError and error.args==('Nonempty live analysis ledger cannot be downgraded',),'CF015 exact nonempty downgrade refusal')
-        else:raise RuntimeError('CF015 nonempty downgrade must refuse')
-        check(await sql('SELECT version_num FROM alembic_version')=='c15001a7e0001','CF015 nonempty downgrade unchanged')
+        except RuntimeError:pass
+        else:raise RuntimeError('CF015 current populated head downgrade must refuse')
+        check(await sql('SELECT version_num FROM alembic_version')==head,'CF015 nonempty current downgrade unchanged')
         mark('new_ledger_constraints_and_nonempty_downgrade')
         check(all(n==1 for n in calls.values()) and all(n==1 for n in flow_calls.values()),'CF015 dispatch bounds')
         check(await sql('SELECT count(*) FROM fundamental_reports WHERE id=:id AND owner_user_id IS NULL',{'id':legacy_id})==1,'CF015 legacy NULL preserved')
         final_original=await ledger(first_body['idempotency_key'])
         check((final_original.input_json,final_original.result_json,final_original.input_sha256,final_original.result_sha256,final_original.as_of)==frozen,'CF015 original frozen bytes unchanged')
+        def set_commit(value):
+            nonlocal commit_mode
+            commit_mode=value
+        def set_stage(value):
+            nonlocal fail_stage
+            fail_stage=value
+        def set_mode(value):
+            nonlocal mode
+            mode=value
+        await _verify_execution_limits(proof,settings,call,body,response,mark,sql,calls,(ta,pa),(tb,pb),first_body,first,ledger,set_commit,set_stage,set_mode,held,release)
+        previous_tags={};count_pids=set()
+        for pid,tag in quota_trace:
+            if tag=='count':
+                check(previous_tags.get(pid)=='lock','CF060 separate COUNT follows lock on same actual connection');count_pids.add(pid)
+            previous_tags[pid]=tag
+        check(len(count_pids)>=2,'CF060 distinct actual PostgreSQL admission connections')
+        safe_print(dict(phase='cf060_connection_order',distinct_count_connections=len(count_pids),separate_lock_then_count=True))
         safe_print({'phase':'cf015_counts','analyses':len(calls),'dispatches':sum(calls.values()),'flow_analyses':len(flow_calls),'flow_dispatches':sum(flow_calls.values()),'rejections':rejections})
     finally:app.dependency_overrides.clear();app.dependency_overrides.update(previous)
     return {'groups':groups,'analyses':len(calls),'dispatches':sum(calls.values()),'rejections':rejections,'status':'passed'}
+
+async def _verify_execution_limits(proof,settings,call,body,response,mark,sql,calls,primary,other,first_body,first,ledger,set_commit,set_stage,set_mode,held,release):
+    """Existing public native boundary, real distinct SQL sessions, fake engine."""
+    import copy
+    from unittest.mock import patch
+    from sqlalchemy import text
+    from db.models.auth.models import AuthUser
+    from src.modules.auth.application.session_service import issue_session
+    from src.modules.fundamental.domain.execution_limits import period
+    from src.modules.fundamental.infrastructure import analysis_repository as repo
+    from src.modules.fundamental.application.analysis_service import FundamentalAnalysisService,FundamentalAnalysisError
+    from scripts.cf002_interactive_login import owned_session
+    start,end=period(await sql('SELECT clock_timestamp()'))
+    async def count(owner=None):
+        query="SELECT count(*) FROM fundamental_analysis_runs WHERE operation='fundamental.analysis.v1' AND started_at>=:start AND started_at<:end"
+        params=dict(start=start,end=end)
+        if owner is not None:query+=' AND owner_user_id=:owner';params['owner']=owner
+        return await sql(query,params)
+    async def fresh():
+        async with owned_session(proof) as s:
+            user=AuthUser(id=uuid4());s.add(user);await s.flush();cookie,p=await issue_session(s,user);await s.commit();return cookie,p
+    async def saved(key,identity):return await ledger(key,identity[1].user_id)
+    async def probe_lock():
+        async with owned_session(proof) as s:
+            value=await s.scalar(text('SELECT pg_try_advisory_xact_lock(:key)'),dict(key=repo.ADMISSION_LOCK_KEY))
+            await s.rollback();check(value is True,'CF060 transaction lock released on independent connection')
+    def limits(user,service):
+        from contextlib import ExitStack
+        stack=ExitStack();stack.enter_context(patch.object(settings,'FUNDAMENTAL_USER_DAILY_REQUEST_LIMIT',user));stack.enter_context(patch.object(settings,'FUNDAMENTAL_SERVICE_DAILY_REQUEST_LIMIT',service));return stack
+    async def flow_accounting():
+        return tuple([await sql(q) for q in ('SELECT count(*) FROM analysis_usage_reservations','SELECT count(*) FROM analysis_provider_calls','SELECT coalesce(sum(remaining_nano),0) FROM analysis_usage_reservations')])
+    flow_before=await flow_accounting();before=await count();seen=sum(calls.values())
+    with limits('',''):
+        response(await call('POST',value=body()),403,'FEATURE_UNAVAILABLE')
+        check(response(await call('POST',value=first_body),200)==first,'CF060 known key ignores absent new-admission policy')
+        response(await call('GET','/api/fundamental/analyses/'+first['analysis_id']),200)
+        response(await call('GET','/api/fundamental/analyses/'+first['analysis_id'],identity=other),404,'RESOURCE_NOT_FOUND')
+    response(await call('POST',value=body(ticker='000001')),403,'FEATURE_UNAVAILABLE')
+    check(await count()==before and sum(calls.values())==seen,'CF060 invalid policy or stock dispatch0/run0')
+    mark('CF060_missing_policy_new_stock_eligibility_and_existing_owner_replay_GET_no_limit_consumption')
+
+    a,b=await fresh(),await fresh();one,two=body(),body();baseline=await count()
+    with limits('1',str(baseline+1)):
+        outcomes=await asyncio.gather(call('POST',value=one,identity=a),call('POST',value=two,identity=b))
+        winners=[i for i,r in enumerate(outcomes) if r.status_code==200]
+        check(len(winners)==1 and all(r.status_code in {200,429,503} for r in outcomes),'CF060 one global service slot across distinct owners')
+        i=winners[0];winner=(a,b)[i];loser=(a,b)[1-i];chosen=(one,two)[i];rejected=(one,two)[1-i]
+        result=response(outcomes[i],200)
+        check(await count()==baseline+1 and await saved(rejected['idempotency_key'],loser) is None,'CF060 busy/excess INSERT rollback')
+        response(await call('POST',value=rejected,identity=loser),429,'USAGE_LIMIT_EXCEEDED')
+        with limits('',''):
+            check(response(await call('POST',value=chosen,identity=winner),200)==result,'CF060 service cap replay no redispatch')
+        check((await call('DELETE','/api/fundamental/reports/'+result['report_id'],identity=winner)).status_code==204,'CF060 native delete tombstones')
+        check(await count()==baseline+1,'CF060 deletion does not refund count')
+    with limits('1','1000'):
+        response(await call('POST',value=body(),identity=winner),429,'USAGE_LIMIT_EXCEEDED')
+        # Legacy rows in every state also consume the existing owner's quota.
+        response(await call('POST',value=body(),identity=primary),429,'USAGE_LIMIT_EXCEEDED')
+    await probe_lock()
+    mark('CF060_actual_different_owner_service_race_user_cap_and_deleted_legacy_all_state_count')
+
+    same_owner=await fresh();requests=(body(),body());before=await count()
+    with limits('1','1000'):
+        results=await asyncio.gather(*[call('POST',value=r,identity=same_owner) for r in requests])
+        winners=[i for i,r in enumerate(results) if r.status_code==200]
+        check(len(winners)==1 and await count(same_owner[1].user_id)==1 and await count()==before+1,'CF060 one owner cap1 across two actual connections')
+        response(await call('POST',value=requests[1-winners[0]],identity=same_owner),429,'USAGE_LIMIT_EXCEEDED')
+    mark('CF060_actual_same_owner_different_key_cap1_race')
+
+    identity=await fresh();request=body();before=await count();seen=sum(calls.values())
+    with limits('1000','1000'):
+        async with owned_session(proof) as holder:
+            check(await holder.scalar(text('SELECT pg_try_advisory_xact_lock(:key)'),dict(key=repo.ADMISSION_LOCK_KEY)) is True,'CF060 independent holder')
+            response(await call('POST',value=request,identity=identity),503,'SERVICE_UNAVAILABLE')
+            check(await saved(request['idempotency_key'],identity) is None and await count()==before and sum(calls.values())==seen,'CF060 busy cannot commit run/dispatch')
+            await holder.rollback()
+        await probe_lock()
+        # A repeatable-read transaction never uses a stale count snapshot.
+        async with owned_session(proof) as s:
+            await s.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'))
+            service=FundamentalAnalysisService(s,principal=identity[1],client=None,limit_settings=settings)
+            denied=body()
+            try:await service.post(denied,uuid4())
+            except FundamentalAnalysisError as error:check(error.code.value=='SERVICE_UNAVAILABLE','CF060 isolation fixed failure')
+            else:check(False,'CF060 repeatable-read must close')
+        check(await saved(denied['idempotency_key'],identity) is None and await count()==before,'CF060 isolation rollback')
+        # Cancel after the real count acquired the lock, before admission commit.
+        entered=asyncio.Event();wait=asyncio.Event();original=repo.admission_counts
+        async def pause(*args):
+            result=await original(*args);entered.set();await wait.wait();return result
+        cancelled=body()
+        with patch.object(repo,'admission_counts',pause):
+            task=asyncio.create_task(call('POST',value=cancelled,identity=identity));await asyncio.wait_for(entered.wait(),5);task.cancel()
+            try:await task
+            except asyncio.CancelledError:pass
+            else:check(False,'CF060 admission cancel propagated')
+        check(await saved(cancelled['idempotency_key'],identity) is None and await count()==before and sum(calls.values())==seen,'CF060 cancelled admission rollback and dispatch0')
+        await probe_lock()
+        # A normal same-key race still receives only the original UNIQUE winner.
+        race=body();results=await asyncio.gather(call('POST',value=race,identity=identity),call('POST',value=race,identity=identity))
+        check(all(r.status_code in {200,202} for r in results),'CF060 same-key race observes')
+        ids={r.json()['data']['analysis_id'] for r in results};check(len(ids)==1 and calls[next(iter(ids))]==1,'CF060 same key one run and engine')
+    mark('CF060_actual_busy_isolation_cancel_rollback_lock_release_and_same_key_winner')
+
+    identity=await fresh();request=body();before=await count();seen=sum(calls.values())
+    with limits('1000','1000'):
+        set_commit((1,'before'))
+        try:response(await call('POST',value=request,identity=identity),503,'SERVICE_UNAVAILABLE')
+        finally:set_commit(None)
+        check(await saved(request['idempotency_key'],identity) is None and await count()==before and sum(calls.values())==seen,'CF060 failed admission commit rollback')
+        set_commit((1,'ack'))
+        try:response(await call('POST',value=request,identity=identity),503,'SERVICE_UNAVAILABLE')
+        finally:set_commit(None)
+        value=await saved(request['idempotency_key'],identity)
+        check(value is not None and await count()==before+1 and sum(calls.values())==seen,'CF060 ACK loss preserves committed count and AI0')
+        with limits('',''):
+            replay=response(await call('POST',value=request,identity=identity),202)
+            check(replay['state'] in {'running','unknown'} and sum(calls.values())==seen and await count()==before+1,'CF060 ambiguous ACK replay observation only')
+        await probe_lock()
+        set_stage(True);ready_request=body()
+        try:response(await call('POST',value=ready_request,identity=identity),503,'SERVICE_UNAVAILABLE')
+        finally:set_stage(False)
+        ready=await saved(ready_request['idempotency_key'],identity);check(ready.state=='result_ready','CF060 preserved ready snapshot')
+        seen=sum(calls.values());before=await count()
+        with limits('',''):
+            check(response(await call('GET','/api/fundamental/analyses/'+str(ready.id),identity=identity),202)['state']=='result_ready','CF060 GET observes ready only')
+            check(response(await call('POST',value=ready_request,identity=identity),200)['state']=='stored','CF060 ready recovery ignores removed limits')
+            response(await call('GET','/api/fundamental/analyses/'+str(ready.id),identity=other),404,'RESOURCE_NOT_FOUND')
+        check(sum(calls.values())==seen and await count()==before,'CF060 publish recovery adds no count or dispatch')
+        held.clear();release.clear();set_mode('limit_wait');waiting=body()
+        task=asyncio.create_task(call('POST',value=waiting,identity=identity));await asyncio.wait_for(held.wait(),5)
+        await probe_lock();release.set()
+        try:response(await task,200)
+        finally:set_mode('normal')
+    check(await flow_accounting()==flow_before,'CF060 independent Flow money/usage unchanged')
+    mark('CF060_actual_commit_ACK_unknown_ready_recovery_external_wait_lock_free_and_Flow_money_unchanged')

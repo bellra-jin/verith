@@ -96,13 +96,12 @@ def test_sideways_default(monkeypatch):
     assert rules.classify_daily_regime(daily_bars(last_close=10)) == Regime.SIDEWAYS
 
 
-# 9. slope 계산 불가(60MA 5일 기울기 None) → 전체 unavailable 아님, fallback
-def test_partial_slope_none_falls_back_not_unavailable(monkeypatch):
+# 9. 앞선 충분한 판정이 없고 60MA 기울기 이력도 없으면 횡보가 아닌 unavailable
+def test_partial_slope_none_without_prior_match_is_unavailable(monkeypatch):
     patch_indicators(monkeypatch, ma5=9, ma20=[1, 2, 3, 4, 5, 6, 7, 8],
                      ma60=[1, 1, None, 4, 5, 6, 7, 8], upper=200, rsi=50, support=None, cndl=candle())
     result = rules.classify_daily_regime(daily_bars(last_close=9))
-    assert result != Regime.UNAVAILABLE
-    assert result == Regime.SIDEWAYS  # 60MA slope None → uptrend 조건 False → 착지
+    assert result == Regime.UNAVAILABLE
 
 
 # 10. support None/0 → 지지 근처 False

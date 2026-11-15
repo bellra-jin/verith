@@ -37,3 +37,21 @@ class BoundaryRuntime:
         task.add_done_callback(finished)
         try:return await asyncio.wait_for(asyncio.shield(task),wait_remaining)
         except TimeoutError:raise BoundaryTimeout('Technical boundary unavailable') from None
+
+async def controlled_slot(work,*,remaining,close_pending):
+    """Same physical slot; only the waiter ends at its fixed original bound."""
+    global _ACTIVE_TASK
+    if type(remaining) not in (int,float) or not math.isfinite(remaining) or remaining<=0:raise BoundaryTimeout()
+    if _ACTIVE_TASK is not None:raise BoundaryBusy()
+    task=asyncio.create_task(work());_ACTIVE_TASK=task
+    def finished(done):
+        global _ACTIVE_TASK
+        try:done.exception()
+        except asyncio.CancelledError:pass
+        if _ACTIVE_TASK is done:_ACTIVE_TASK=None
+    task.add_done_callback(finished)
+    try:return await asyncio.wait_for(asyncio.shield(task),remaining)
+    except asyncio.CancelledError:
+        close_pending('CLOSED');raise
+    except TimeoutError:
+        close_pending('DEADLINE_EXCEEDED');raise BoundaryTimeout() from None

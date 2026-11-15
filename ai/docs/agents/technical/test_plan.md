@@ -160,9 +160,9 @@ MTF-01·05·06이 중립 국면 케이스다 — 상위 추세가 무엇이든 `
 | --- | --- | --- |
 | REG-UNAV-01 | 일봉 < `MIN_DAILY_BARS`(예: 40개) | `data_status=regime_unavailable`, `final_regime=unavailable` |
 | REG-UNAV-02 | final_regime=unavailable | `signal=null`, `risk=null`, `technical_signals=[]`, 4·6~8 스킵하고 차트로 |
-| REG-UNAV-03 | 일봉 ≥ `MIN_DAILY_BARS`이나 60MA **기울기**만 계산 불가 | `unavailable` 아님 — 해당 조건만 False, 어디에도 안 걸리면 `sideways`로 착지 |
+| REG-UNAV-03 | 일봉 ≥ `MIN_DAILY_BARS`이나 60MA **기울기**만 계산 불가 | 앞선 충분한 우선순위 1~5 판정은 보존하고, 어디에도 안 걸리면 마지막 fallback에서 `unavailable`로 구분 |
 
-`contracts.md`·`regime_rules.md`(판단 불가 vs 조건 False)와 연결된다 — **필수 데이터 자체 부족(봉 수 < MIN_DAILY_BARS)**만 `unavailable`이고, 값은 있으나 보조 계산(기울기 등)만 부족하면 그 조건만 False 처리해 `sideways` 등으로 정상 착지한다. **억지 판정을 하지 않는 것**이 정직성의 핵심이다.
+`contracts.md`·`regime_rules.md`(판단 불가 vs 조건 False)와 연결된다 — **필수 데이터 자체 부족(봉 수 < MIN_DAILY_BARS)**은 `unavailable`이고, 60MA 기울기가 부족해도 앞선 충분한 우선순위 1~5 판정은 유지한다. 앞선 판정이 없고 기울기 이력도 없으면 횡보로 확정하지 않고 마지막 fallback에서 `unavailable`로 구분한다. **억지 판정을 하지 않는 것**이 정직성의 핵심이다.
 
 ---
 
@@ -294,7 +294,7 @@ MVP의 검증 ③은 **LLM-as-judge가 아니라 결정론적 키워드/라벨 �
 
 확정된 flag들 중 **최소 하나**의 판정어가 문장에 있으면 통과다(전부 나열할 필요는 없음). 프롬프트가 요구한 "risk 반영"(§4)을 최소한으로 강제한다. 개별 flag가 정확히 매핑됐는지까지는 보지 않는다(Future Work).
 
-**forbidden_terms:** 매수, 매도, 손절, 목표가, 목표 가격, 목표주가, 진입, 추천, 예상 수익률, 목표 수익률, 수익 가능성, 수익 보장, 보장합니다, 보장됩니다, 확실합니다, 상승할 가능성, 하락할 것 (부정문 안에서도 실패, §5.3 규칙 5). 과거 등락률·변동률처럼 데이터에 기반한 값은 허용하되, 미래 수익률·방향을 예측·보장하거나 투자 조언성인 표현은 금지한다. `목표 가격`·`목표주가`를 추가해 `목표가` 회피(예: "목표 가격은 999,999원")를 상당 부분 막는다. **다만 출력 숫자가 입력 확정 수치와 일치하는지의 전면 대조는 하지 않는다**(§5.8 Future Work) — 투자 조언성 숫자 표현은 금지어로 막고, 임의 숫자 생성 일반 검출은 후속 단계로 둔다.
+**forbidden_terms:** 매수, 매도, 손절, 목표가, 목표 가격, 목표주가, 진입, 추천, 예상 수익률, 목표 수익률, 수익 가능성, 수익 보장, 보장합니다, 보장됩니다, 확실합니다, 상승할 가능성, 하락할 것 (부정문 안에서도 실패, §5.3 규칙 5). 과거 등락률·변동률 같은 코드 값은 value/metrics에 보존하며 CF059 이후 LLM 문장에는 숫자로 재서술하지 않는다. 미래 수익률·방향을 예측·보장하거나 투자 조언성인 표현은 금지한다. `목표 가격`·`목표주가`를 추가해 `목표가` 회피(예: "목표 가격은 999,999원")를 상당 부분 막는다. **다만 출력 숫자가 입력 확정 수치와 일치하는지의 전면 대조는 하지 않는다**(§5.8 Future Work) — 투자 조언성 숫자 표현은 금지어로 막고, CF059는 측정 숫자 서술을 제한하는 별도 경계를 추가하며 자유 숫자를 사실로 수용하는 전면 의미 대조는 후속이다.
 
 ### 5.5 종합 해석 왜곡 테스트
 
@@ -360,7 +360,7 @@ CONF-*·RISK-MENTION-*은 프롬프트(§4)의 "confidence 왜곡 금지·risk �
 
 **Future Work로 미루는 것(결정론 키워드로는 구조적으로 어렵거나 과함):**
 
-- **출력 숫자 ↔ 입력 확정 수치 전면 대조.** "목표 가격"류는 금지어로 막지만, 임의 숫자 생성 일반 검출은 후속(수치 diff/스키마 대조).
+- **출력 숫자 ↔ 입력 확정 수치 전면 대조.** CF059의 정성/숫자 분리와 별개로, 자유 숫자를 의미별 fact와 대조해 수용하는 수치 diff/관계 검증은 후속이다.
 - **미묘한 confidence 과장(degree 판단).** 반대 라벨 단정은 잡지만, "실제 0.42인데 제법 높은 편" 같은 정도 과장은 못 가린다.
 - **risk flag 정밀 매핑.** 최소 1개 언급만 강제하고, 각 flag가 정확히 서술됐는지·과장/축소됐는지는 보지 않는다.
 - **부정 범위·조건문 의미 해석.** 부정문 안 충돌어는 오탐 가능(단, 금지어는 부정문 안이어도 실패).
@@ -592,3 +592,76 @@ annotation은 전부 코드가 계산하며 `source=code`다. LLM은 좌표·발
 `scripts/diagnose_chart_annotations.py` 는 **"차트 전략(annotation)이 잘 안 보인다"의 원인을 숫자로 가르는** read-only 계측 도구다(기능 구현 아님, 프로덕션 무변경). `build_chart_payloads`(post-dedup 정본)와 chart_builder 내부 생성기(`_cross_annotations` 등)를 읽기 전용으로 호출해 period(3m/1y/5y)별로 다음을 계측한다: annotation kind별/importance별 개수, **dedup 전/후 개수**(pre−post = 줄어든 수), **capacity check**(각 detector 필요 봉 vs 확보 봉 → 봉 부족인지 조건 불충족인지), 미구현 kind의 **"contract exists but generator missing"** 표시(현재 **전 10종 구현 완료**라 목록은 비어 있음). 기본은 **fixture mode**(합성 OHLCV·KIS 호출 없음, `--fixture`), real KIS mode는 `--ticker`로만 켜지며 env 없으면 graceful skip한다. 출력 JSON은 gitignore된 `scripts/chart_annotation_diagnostics_output/`에 저장. 도구 계약(출력 shape·미구현 kind 표시·capacity·production 무변경)은 `test_chart_annotation_diagnostics.py`(fixture 기반)가 고정한다.
 
 이 진단은 단순 개수 확인뿐 아니라 **chart annotations와 technical_signals의 역할 분리**(`chart_annotation_spec.md §1.1·§7.1`)와 **period별 importance/display 정책**(`chart_annotation_spec.md §4.1`) 검증에도 쓴다 — 예: `5y`에서 medium이 대부분이라 high-only 표시면 대부분 숨겨지는지 등.
+
+
+## 설명 검증 실패 반영 보완 (2026-11-13, 첫 품질 단위)
+
+구조화 `interpretation.*` 섹션의 기존 검증 실패도 `interpretation_failed`로 집계한다.
+재생성까지 실패하면 해석 전체만 결정형 문장으로 대체하고 통과한 지표 설명은 유지한다.
+`detail_reason`/`detail_caution`/`detail_watchpoint`에도 detail과 같은 금지어·반대 signal 표현 검사를
+적용하되, 대표 표현 반복은 필수 detail에만 요구한다. 선택 필드의 정상 생략/null/빈 문자열은 기존
+결정형 보충을 유지한다. indicator/detail은 문자열을 요구하고 선택 서술 필드의 숫자·불린·객체·배열도
+강제 문자열 변환 없이 파싱 실패다.
+지표별 실패가 남아도 최종/trace의 label_matched는 false이며 outcome은 template_fallback이다.
+재생성 결과가 모두 통과한 경우에는 passed/label_matched=true와 regen_count로 복구를 표시한다.
+
+결정형 요약은 현재 확정 국면을 유지하고 개별 긍정/부정 신호를 구분해 설명한다.
+모든 긍정 지표를 하락 압력 완화로 설명하거나 개별 부정 지표만으로 추세 복원을 단정하지 않는다.
+수치·라벨·metrics·weight·기간·출력 schema·재생성 1회 한도와 실제 실행 권한은 바꾸지 않는다.
+
+고정 보호 graph unit은 최종 출력까지 잘못된 문장 제거·부분 source·검증 상태·확정 수치 보존을 검사한다.
+기존 원격 graph self에도 실제 순수 평가 모듈과 닫힌 AST의 fallback 분기를 검사하는 두 회귀가 있다.
+새 mode/프레임워크/설치는 없고 실제 provider/DB를 쓰지 않는다.
+
+이 단계는 자유 문장의 숫자-지표/필드 의미 대조나 구조화 요약의 모든 라벨 의미를 보증하지 않는다.
+전역 숫자 집합·다른 지표의 같은 숫자·임의 반올림을 정당화하지 않는다. 해당 숫자/라벨 계약은
+그 문장이 참조하는 지표·필드의 확정 근거에 결합하는 별도 후속이며, support/resistance 동시근접,
+OHLC/warmup/confidence 정책은 이 변경에 포함하지 않는다.
+
+
+## CF059 · 제한된 숫자 서술 경계 회귀
+
+기존 보호 technical-graph-self/unit 안에서 새 순수 numeric_claims helper와 실제 node.verify 및
+compiled graph를 검사한다. 새 mode/collector·AI 전체 pytest·실제 공급자는 사용하지 않는다.
+
+| 경계 | 기대 |
+| --- | --- |
+| 숫자 없는 정성 설명·선택 서술 null/빈 값 | 기존 라벨/보충 계약으로 유지 |
+| 설정에서 만든 해당 MA/RSI 식별자·정상 쉼표/문장 구두점 | 올바른 지표/필드에서 유지 |
+| 코드 고정 watchpoint 전체 | 지정 필드에서만 reference, 앞뒤 현재값/주장 추가는 거절 |
+| 같은 숫자를 RSI/가격/배율/기간으로 차용·숫자 복사 | 허용 값 집합으로 승인하지 않고 거절 |
+| 소수·콤마·부호·분수·과학표기·날짜·전각/위첨자/Unicode 숫자 | 닫힌 식별자 외 숫자는 거절 |
+| 다른 지표 식별자·identifier 숫자 덧붙이기·단위 차용 | 거절, 정확 실패 indicator/info 결합 |
+| 네 detail 필드 실패 | 재생성1회 후 그 지표 네 필드 fallback, 정상 다른 지표 유지 |
+| 본문·모든 구조화 문자열·리스트 숫자 | 기존 interpretation 블록 fallback |
+| 다음 재생성의 정상 정성 문장 | 추가 호출 없이 정상 수용 |
+| None 관측값 | 0으로 채우지 않고 value/metrics·score/confidence 불변 |
+
+기존 숫자 복사형 mock 응답은 새 계약에서 정상 fixture가 아니므로 graph 검사 안의 정성 fixture로
+변경한다. 제품 validator를 patch하거나 계산/metrics를 바꾸지 않는다. 기존 라벨 검사만 통과하던
+숫자 주장에 새 verify 실패가 합쳐짐을 대조한다. 코드가 만든 fallback의 수치는 재검사하지 않는다.
+
+한글 수사·‘두 배/절반’·숫자 없는 관계 의미와 모든 우회는 이 제한의 보장 범위가 아니다.
+완전 grounding이나 실제 모델 품질 검증으로 보고하지 않는다.
+
+## 설명 진단·닫힌 주의 문구 및 중복 봉 보완
+
+- 분리된 기술 상태 명칭 과매수/과매도와 매매 지시를 구분하되 별도 금지어·현재 수치·반대 라벨은 거절한다.
+- 코드의 정확한 완전 주의 절만 충돌 스캔에서 제외하고 별도 단정·변형·금지어 검사는 보존한다.
+- 기존 실제 graph/runtime에서 고정 실패 코드가 기존 주입 trace 및 재생성 입력으로 전달되고
+  원문/info/알 수 없는 대상은 남지 않으며 호출 상한은 증가하지 않는지 검사한다.
+- KIS 같은 날짜 동일 봉 dedup, 페이지 내부/사이의 값 충돌 거절, rate marker/429/본문 오류의
+  기존 제한 재시도와 비재시도500 fail-fast를 가짜 응답으로 구분한다.
+- normal·정렬·유일 날짜만으로 시장 캘린더 무누락이나 공급자 기준시점 검증을 주장하지 않는다.
+  [직접 근거와 한계](../../../../docs/work/technical-validation-diagnostics.md)를 따른다.
+
+## 대표 사례 무키 회귀의 해석 범위
+
+`backend/tests/unit/test_technical_compiled_bridge.py`의 대표 사례는 기존 합성 날짜 자료에
+상승·하락·횡보·급락·저유동성 조건을 고정한 스트레스 검사다. 입력 구성에서 정한 국면·신호·
+평균/가중합·위험 기준과 실제 graph 연결을 함께 확인한다. 모델 답변은 가짜이므로 실모델 정확도나
+수익률 backtest라고 표현하지 않는다. 관측 현대건설 일봉 차트 투영은 별도의 제한된 재생 자료다.
+
+동일 입력의 반복 출력과 지표 prefix 불변, 실제 KIS range의 종료일 초과 날짜 필터를 구분해
+검사한다. 날짜가 맞는 주·월봉의 당일/기간 마감 또는 공급자 게시 시각은 증명되지 않는다.
+상세 출처·oracle·남은 한계는 [대표 사례 평가](../../../../docs/work/technical-representative-evaluation.md)를 따른다.

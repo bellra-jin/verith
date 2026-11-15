@@ -95,7 +95,7 @@ SIGNAL_WEAK = 0.3              # 0.3 <= |score| < 0.5 → 약한 (긍정/부정)
 | `moving_average` | `close > 20MA` AND `5MA > 20MA` | `close < 20MA` AND `5MA < 20MA` | 그 외 |
 | `rsi` | `50 < RSI < RSI_OVERBOUGHT` | `RSI_OVERSOLD < RSI < 50` | `RSI ≥ RSI_OVERBOUGHT` 또는 `RSI ≤ RSI_OVERSOLD` 또는 `RSI == 50` |
 | `volume` | 최신봉 상승 AND `volume_ratio ≥ 1` | 최신봉 하락 AND `volume_ratio ≥ 1` | `volume_ratio < 1` 또는 계산 불가 |
-| `support_resistance` | 지지 근처(±`NEAR_SUPPORT_THRESHOLD_PCT`) | 저항 근처(±`NEAR_RESISTANCE_THRESHOLD_PCT`) | 그 외 |
+| `support_resistance` | 지지에만 근접(±`NEAR_SUPPORT_THRESHOLD_PCT`) | 저항에만 근접(±`NEAR_RESISTANCE_THRESHOLD_PCT`) | 양쪽 동시 근접 또는 그 외 |
 | `pattern` | `is_bullish` | `is_bearish` | 도지 또는 판단 불가 |
 
 - **RSI 극단은 방향 신호로 쓰지 않는다** — `RSI ≥ RSI_OVERBOUGHT`는 risk `overheated_momentum`/regime `overheated`, `RSI ≤ RSI_OVERSOLD`는 regime `oversold_rebound_watch`에서 다룬다.
@@ -142,6 +142,11 @@ CONFIDENCE_MEDIUM = 0.4         # 0.4 ~ 0.7 → 보통, < 0.4 → 낮음
 ### 5.1 confidence 4요소 계산식
 
 각 요소를 0.0~1.0으로 계산해 `CONFIDENCE_WEIGHTS`로 가중합한다. 모든 요소는 "높을수록 confidence↑" 방향이다. **코드가 확정하며 LLM은 confidence를 만들지 않는다.**
+
+confidence는 **현재 지표의 규칙 기반 근거 점수**이며 상승 확률·예측 정확도가 아니다.
+지표 개수 자체의 충분함도 보장하지 않는다. 현재 산식에서는 한 방향 지표 1개·거래량 확인 1·횡보가
+agreement=1, volume_confirm=1, trend_clarity=0, conflict_absence=1로 **0.8/HIGH**가 될 수 있다.
+이를 확률이나 ‘충분한 근거가 많음’으로 바꾸어 설명하지 않고 적용 지표의 긍정·중립·부정 개수를 그대로 표시한다.
 
 - **agreement** = `|Σ(weight_i × signal_i)| / Σ(weight_i × |signal_i|)` — 모두 같은 방향이면 1.0, 상쇄될수록 낮아짐. **모든 지표가 neutral이면 0.0**(분모 0 → 0으로 정의).
 - **volume_confirm** = `clamp(volume_ratio, 0.0, 1.0)` — `volume_ratio ≥ 1` → 1.0, 계산 불가 → 0.0.
@@ -243,13 +248,13 @@ KIS_FETCH_LOOKBACK_DAYS = {
 KIS_FETCH_CHUNK_DAYS = {
     "D": 100,    # ≈68거래일 < 100건
     "W": 600,    # ≈85주 < 100건
-    "M": 1900,   # ≈60개월 < 100건 (분할 없이 1청크)
+    "M": 1900,   # 요청 폭 ≈60개월 < 100건; D/M 기존 종료 계약 유지
 }
-KIS_MAX_CHUNKS = 10             # 무한 루프 방지 상한 (D≈5·W≈4청크면 충분)
+KIS_MAX_CHUNKS = 10             # period당 페이지 상한; 수신량에 따른 완료 보장은 아님
 ```
 
 *연결: `services/kis_client.py`(`fetch_ohlcv`·`fetch_ohlcv_range`), `charts/chart_builder.py`(표시 slice `CHART_PERIOD_DAYS`), `kis_mapping.md` §8.*
-*`KIS_MAX_CHUNKS`는 상한이자 완전성 가드다 — `fetch_ohlcv_range`가 이 상한을 다 쓰고도 요청 `start_date`까지 못 가면 잘린 결과를 반환하지 않고 예외(`KisRangeIncompleteError`)를 던진다(kis_mapping §8.1). 지나치게 넓은 명시 범위 요청에서 데이터가 조용히 잘리는 것을 막기 위함이다.*
+*`KIS_MAX_CHUNKS`는 상한이자 완전성 가드다 — `fetch_ohlcv_range`가 이 상한을 다 쓰고도 요청 `start_date`까지 못 가면 잘린 결과를 반환하지 않고 예외(`KisRangeIncompleteError`)를 던진다(kis_mapping §8.1). 지나치게 넓거나 응답량이 적은 범위에서 partial을 조용히 반환하지 않기 위함이다. W의 다음 cursor는 요청 창 안의 실제 최저 날짜에서 계산하며 D/M 종료 의미는 유지한다. 별도 일회 `market_limit=30`은 기존 retry를 포함한 송신 상한이며 이 안에 완료된다는 뜻이 아니다.*
 ***`KIS_FETCH_LOOKBACK_DAYS`(원천 데이터 확보 기간)와 `CHART_PERIOD_DAYS`(§10, 프론트 표시 slice)는 다른 축이다.*** fetch가 표시 창보다 넓어야 차트 왼쪽 끝 candle의 MA overlay까지 계산된다. D→W/M 리샘플은 하지 않는다 — D/W/M은 각각 KIS `FID_PERIOD_DIV_CODE`로 직접 조회한다.
 
 ## 9. 검증·재생성 (verification)

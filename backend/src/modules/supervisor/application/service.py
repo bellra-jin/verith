@@ -114,6 +114,8 @@ class SupervisorService:
         return plan
 
     def checked(self, binding, digest=None):
+        if getattr(binding,'target','flow')!='flow':
+            raise CoreError('IDEMPOTENCY_CONFLICT' if digest is not None else 'RESOURCE_NOT_FOUND',409 if digest is not None else 404)
         if digest is not None and binding.confirm_digest != digest:
             raise CoreError('IDEMPOTENCY_CONFLICT', 409)
         if binding.redacted_at is not None:
@@ -196,6 +198,7 @@ class SupervisorService:
             if row is None:
                 raise CoreError('RESOURCE_NOT_FOUND', 404)
             binding = repo.snapshot(row)
+            self.checked(binding) if getattr(binding,'target','flow')!='flow' else None
             if binding.redacted_at is not None:
                 await self.session.commit()
                 return outcome(binding)

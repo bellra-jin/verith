@@ -524,6 +524,7 @@ async def existing_epoch(session, binding, *, initial=False, phase=None):
 
 async def capture_synthetic_epoch(proof, principal):
     """Only a new disposable synthetic DB may call the inserting CF023 helper."""
+    from uuid import UUID
     from scripts.cf002_interactive_login import owned_session
     from src.modules.auth.application.session_service import validate_principal
     from src.modules.supervisor.infrastructure.preparation_repository import verifier_epoch
@@ -531,7 +532,11 @@ async def capture_synthetic_epoch(proof, principal):
     async with owned_session(proof) as session:
         await validate_principal(session, principal, lock=True)
         row=await verifier_epoch(session)
-        binding=OwnedEpochBinding(proof,proof._owner.receipt,row.id,row.created_at,sha(epoch_state(row)),'synthetic')
+        # asyncpg returns a UUID subclass; preserve the exact server identity at
+        # this trusted SQL boundary without loosening PreparationService input.
+        if not isinstance(row.id,UUID):
+            raise assembly_error()
+        binding=OwnedEpochBinding(proof,proof._owner.receipt,UUID(str(row.id)),row.created_at,sha(epoch_state(row)),'synthetic')
         await session.commit()
         return binding
 
@@ -900,14 +905,29 @@ async def verify_meaning_flow_crosspath(proof):
         raise
 
 
-async def _verify_meaning_flow_crosspath(proof):
+async def _prepare_owned_flow_read_anchor(proof, private_anchor):
+    """Fixed CF047 parent only; cookies/callbacks remain private in-memory objects."""
+    from scripts.runner_owned_database import RunnerOwnedDatabase
+    from scripts.cf003_admission_check import isolated_application,check
+    if type(proof) is not RunnerOwnedDatabase or type(private_anchor) is not dict or private_anchor:
+        raise assembly_error()
+    proof.verify_ownership()
+    with isolated_application(proof) as observed:
+        result=await _verify_meaning_flow_crosspath(proof,_read_anchor=private_anchor)
+        check(not any(observed.values()),'CF047 anchor forbidden access')
+        return result | {'observed_denials':dict(observed)}
+
+
+async def _verify_meaning_flow_crosspath(proof, *, _read_anchor=None):
     import copy
+    import json
     from contextlib import ExitStack
     from unittest.mock import patch
-    from uuid import uuid4
+    from uuid import UUID, uuid4
     import httpx
-    from sqlalchemy import select, text
+    from sqlalchemy import select, text, delete
     from db.models.auth.models import AuthUser
+    from db.models.common.agent_report import AgentReport
     from db.models.common.stock import Stock
     from db.models.supervisor.preparation import SupervisorMeaningPreparation as Preparation, SupervisorMeaningEpoch as Epoch
     from db.models.supervisor.request_binding import SupervisorRequestBinding as Binding
@@ -916,10 +936,11 @@ async def _verify_meaning_flow_crosspath(proof):
     from src.shared.config import settings
     from src.shared.infrastructure.clients.ai_client import AIClient
     from src.modules.auth.api import router as auth
-    from src.modules.auth.application.session_service import issue_session, csrf_token
+    from src.modules.auth.application.session_service import issue_session, csrf_token, revoke_session
     from src.modules.supervisor.api import router as routes
     from src.modules.supervisor.domain.contracts import canonical, sha, MEANING_SPEC, MEANING_SPEC_SHA256, validate_plan, Draft
-    from src.modules.flow.api.schemas import FlowReportEnvelope
+    from src.modules.flow.api.schemas import FlowReportEnvelope, FlowReportListResponse
+    from src.modules.flow.domain.payload import projection_values_equal
     from scripts.cf002_interactive_login import owned_session, safe_print
     from scripts.cf003_admission_check import check
     from scripts.cf012_analysis_check import flow_app, engine_result
@@ -949,6 +970,15 @@ async def _verify_meaning_flow_crosspath(proof):
         check(await epoch_snapshot()==held_snapshot,'CF029 meaning unknown hold unchanged')
         check(await totals()==expected,'CF029 Flow counters unchanged')
         check(sum(s.count('mock_count') for s in stages)==2 and sum(s.count('mock_generation') for s in stages)==2 and sum(s.count('synthetic_key_supplied') for s in stages)==2,'CF029 meaning sends unchanged')
+
+    async def stored_snapshot(report_id):
+        # Full committed ledger rows, never printed. Counts alone cannot detect a
+        # reservation/settlement mutation during a supposedly read-only replay.
+        async with owned_session(proof) as session:
+            run=await session.scalar(text('SELECT to_jsonb(t) FROM flow_analysis_runs AS t WHERE adopted_report_id=:id'),{'id':UUID(report_id)})
+            usage={table:await session.scalar(text('SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),\'[]\'::jsonb) FROM '+table+' AS t'))
+                   for table in ('analysis_usage_reservations','analysis_provider_calls','analysis_usage_periods')}
+        return {'run':run,'usage':usage}
 
     async def user():
         async with owned_session(proof) as session:
@@ -1059,6 +1089,22 @@ async def _verify_meaning_flow_crosspath(proof):
         else:
             check(False,'CF029 unsupported report response expectation')
         return result
+
+    def restored_report(value,report_id,expected):
+        result=flow_response(value,report_id=report_id)
+        check(projection_values_equal(result['report'],expected),'CF047 lossless stored payload')
+        return result
+
+    def report_list(value,report_id,*,included):
+        check(value.status_code==200 and value.headers.get('cache-control')=='private, no-store','CF047 private list response')
+        result=value.json()
+        check(set(result)=={'items','limit','offset','count'},'CF047 list envelope')
+        parsed=FlowReportListResponse.model_validate(result)
+        check(type(result['limit']) is int and result['limit']==20 and type(result['offset']) is int and result['offset']==0
+              and type(result['count']) is int and result['count']==len(parsed.items),'CF047 list pagination')
+        check(all(item.agent_type=='flow' for item in parsed.items),'CF047 Flow list type')
+        check(sum(str(item.agent_report_id)==report_id for item in parsed.items)==int(included),'CF047 list exact stored identity')
+        return result
     previous=dict(app.dependency_overrides);app.dependency_overrides[get_session]=sessions
     try:
       with ExitStack() as stack:
@@ -1120,7 +1166,86 @@ async def _verify_meaning_flow_crosspath(proof):
         check(await sql("SELECT count(*) FROM supervisor_meaning_preparations WHERE id=:id AND state='consumed' AND draft_json IS NULL AND frame_json IS NULL AND plan_json IS NULL AND continuation_json IS NULL",{'id':__import__('uuid').UUID(preparation_id)})==1,'CF029 consumed root sensitive redaction')
         await unchanged(after);check(len(dispatch)==1,'CF029 replay GET extra dispatch0')
         mark('same_confirmation_retry_stored_replay_owner_GET_extra_calls0')
-        return dict(groups=groups,meaning_mock_count=2,meaning_mock_generation=2,synthetic_supplier=2,fake_flow_dispatch=1,flow_before=before,flow_budget_denied=snapshots['budget_denied'],flow_after=after,meaning_epoch_snapshots={k:snapshots[k] for k in ('ready','unknown')},meaning_epoch_sha256=sha(held_snapshot),meaning_epoch_final_sha256=sha(await epoch_snapshot()),real_provider_requests=0,real_credential_reads=0,google_requests=0,note='PreparationService private initial preparation; actual authenticated ASGI GET/confirmation/report; fake Flow only. Nine provider rows are not_called reservations.')
+
+        anchor=await stored_snapshot(report_id)
+        check(anchor['run']['state']=='stored' and anchor['run']['id']==stored['flow']['analysis_id'],'CF047 committed run anchor')
+        expected=json.loads(anchor['run']['result_json'])
+        check(hashlib.sha256(anchor['run']['result_json'].encode()).hexdigest()==anchor['run']['result_sha256'],'CF047 immutable result hash')
+        restored_report(await call('GET','/api/flow/reports/'+report_id),report_id,expected)
+        async with owned_session(proof) as session:
+            user_a=await session.get(AuthUser,primary[1].user_id)
+            a2_cookie,a2_principal=await issue_session(session,user_a)
+            await session.commit()
+        a2=(a2_cookie,a2_principal)
+        check(a2_principal.user_id==primary[1].user_id and a2_principal.session_id!=primary[1].session_id,'CF047 same user new SQL issued session')
+        restored_report(await call('GET','/api/flow/reports/'+report_id,identity=a2),report_id,expected)
+        listed=report_list(await call('GET','/api/flow/reports',identity=a2),report_id,included=True)
+        check(listed['count']==1,'CF047 one committed report in fixture list')
+        check(response(await call('POST','/api/supervisor/core/requests',confirmation,identity=a2))==stored,'CF047 A2 same confirmation binding')
+        check(response(await call('GET','/api/supervisor/core/requests/'+supervisor_id,identity=a2))==stored,'CF047 A2 same Supervisor GET')
+        flow_response(await call('GET','/api/flow/reports/'+report_id,identity=other),404)
+        report_list(await call('GET','/api/flow/reports',identity=other),report_id,included=False)
+        async with owned_session(proof) as session:
+            index=(await session.scalars(select(AgentReport).where(AgentReport.agent_type=='flow',AgentReport.agent_report_id==UUID(report_id)))).one()
+            check(index.owner_user_id==primary[1].user_id and index.owner_session_id==primary[1].session_id,'CF047 original index ownership metadata unchanged')
+        await unchanged(after)
+        check(await stored_snapshot(report_id)==anchor and len(dispatch)==1,'CF047 new session read replay ledger unchanged')
+        mark('A2_new_SQL_session_list_lossless_detail_same_binding_no_calls')
+
+        async def assert_current():
+            await unchanged(after)
+            check(await stored_snapshot(report_id)==anchor and len(dispatch)==1,'CF047 run accounting and mock calls unchanged')
+
+        async def committed_state():
+            # Private synthetic DB-only fingerprints; never expose session rows,
+            # tokens, payloads or these fingerprints in the public result/log.
+            async with owned_session(proof) as session:
+                return {table:await session.scalar(text('SELECT md5(coalesce(jsonb_agg(to_jsonb(t) ORDER BY '+key+'),\'[]\'::jsonb)::text) FROM '+table+' AS t'))
+                    for table,key in (('auth_users','id'),('auth_sessions','id'),('stocks','stock_code'),
+                        ('flow_reports','id'),('flow_report_interpretations','report_id'),('flow_report_verifications','report_id'),('agent_reports','id'),
+                        ('supervisor_request_bindings','id'),('supervisor_meaning_preparations','id'),('supervisor_meaning_test_epochs','id'))}
+
+        async def revoke_a2():
+            async with owned_session(proof) as session:
+                await revoke_session(session,a2_principal)
+
+        async def remove_index():
+            async with owned_session(proof) as session:
+                removed=await session.execute(delete(AgentReport).where(AgentReport.agent_type=='flow',AgentReport.agent_report_id==UUID(report_id),AgentReport.owner_user_id==primary[1].user_id))
+                check(removed.rowcount==1,'CF047 exact fixture index removal')
+                await session.commit()
+            check(await sql('SELECT count(*) FROM flow_reports WHERE id=:id',{'id':UUID(report_id)})==1,'CF047 root survives index-only removal')
+
+        result=dict(groups=groups,meaning_mock_count=2,meaning_mock_generation=2,synthetic_supplier=2,fake_flow_dispatch=1,flow_before=before,flow_budget_denied=snapshots['budget_denied'],flow_after=after,meaning_epoch_snapshots={k:snapshots[k] for k in ('ready','unknown')},meaning_epoch_sha256=sha(held_snapshot),meaning_epoch_final_sha256=sha(await epoch_snapshot()),new_auth_session=True,new_SQL_sessions=True,new_Backend_process=False,real_provider_requests=0,real_credential_reads=0,google_requests=0,note='PreparationService private initial preparation; actual authenticated ASGI GET/confirmation/report and new SQL-issued A2 session; fake Flow only. Nine provider rows are not_called reservations. No permanent user archive verified.')
+        if _read_anchor is not None:
+            check(type(_read_anchor) is dict and not _read_anchor,'CF047 private anchor one capture')
+            _read_anchor.update(primary=primary,a2=a2,other=other,report_id=report_id,
+                detail=lambda value:restored_report(value,report_id,expected),
+                listing=lambda value,included:report_list(value,report_id,included=included),
+                denied=lambda value,status:flow_response(value,status),
+                assert_current=assert_current,committed_state=committed_state,revoke_a2=revoke_a2,remove_index=remove_index)
+            return result
+
+        await revoke_a2()
+        flow_response(await call('GET','/api/flow/reports/'+report_id,identity=a2),401)
+        denied_list=await call('GET','/api/flow/reports',identity=a2)
+        check(denied_list.status_code==401 and denied_list.headers.get('cache-control')=='private, no-store'
+              and denied_list.json()=={'detail':{'code':'AUTH_REQUIRED','message':'인증이 필요합니다.'}},'CF047 revoked list has no private body')
+        restored_report(await call('GET','/api/flow/reports/'+report_id),report_id,expected)
+        await unchanged(after)
+        check(await stored_snapshot(report_id)==anchor and len(dispatch)==1,'CF047 revoke no ledger mutation')
+        mark('A2_revoked_denied_A1_remains_valid')
+
+        # Deliberate fixture corruption only: keep the owned root and all ledgers,
+        # remove its sole Flow index, and require a fresh SQL request to hide it.
+        await remove_index()
+        flow_response(await call('GET','/api/flow/reports/'+report_id),404)
+        hidden=report_list(await call('GET','/api/flow/reports'),report_id,included=False)
+        check(hidden['count']==0,'CF047 index-only orphan omitted')
+        await unchanged(after)
+        check(await stored_snapshot(report_id)==anchor and len(dispatch)==1,'CF047 index fixture change no run or accounting reset')
+        mark('index_only_missing_root_preserved_detail404_list_omits')
+        return result
     finally:
         app.dependency_overrides.clear();app.dependency_overrides.update(previous)
 

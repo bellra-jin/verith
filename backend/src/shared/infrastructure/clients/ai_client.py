@@ -11,12 +11,57 @@ from __future__ import annotations
 
 import httpx
 import asyncio
+import time
+import math
+import ssl
+import hashlib
+from dataclasses import dataclass
 
 _ANALYZE_PATH = "/internal/technical/analyze"
 _FUNDAMENTAL_ANALYZE_PATH = "/internal/fundamental/analyze"
 _INDUSTRY_ANALYZE_PATH = "/internal/industry/analyze"
 _INDUSTRY_RENDER_PATH = "/internal/industry/render"
 
+def _technical_tls_snapshot(context):
+    if context is None:return None
+    if (type(context) is not ssl.SSLContext or context.protocol!=ssl.PROTOCOL_TLS_CLIENT
+            or context.verify_mode!=ssl.CERT_REQUIRED or context.check_hostname is not True
+            or context.minimum_version<ssl.TLSVersion.TLSv1_2):raise ValueError()
+    return (context.minimum_version,context.maximum_version,context.verify_flags,context.options,
+            tuple(sorted(hashlib.sha256(cert).hexdigest() for cert in context.get_ca_certs(binary_form=True))))
+
+def _technical_owned_tls(context):
+    if context is None:return None
+    snapshot=_technical_tls_snapshot(context);certs=context.get_ca_certs(binary_form=True)
+    if not certs:raise ValueError()
+    owned=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    owned.minimum_version=context.minimum_version;owned.maximum_version=context.maximum_version
+    owned.verify_flags=context.verify_flags;owned.options=context.options
+    owned.load_verify_locations(cadata='\n'.join(ssl.DER_cert_to_PEM_cert(cert) for cert in certs))
+    if _technical_tls_snapshot(owned)!=snapshot:raise ValueError()
+    return owned
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class _TechnicalBoundaryConfiguration:
+    base_url:str
+    token:bytes
+    transport:object
+
+    def same(self,other):
+        return (type(other) is _TechnicalBoundaryConfiguration and self.base_url==other.base_url
+                and self.token==other.token and self.transport is other.transport)
+
+
+@dataclass(frozen=True,slots=True,repr=False)
+class _TechnicalExecutionConfiguration:
+    origin:str
+    token:bytes
+    configuration:str
+    transport:object
+    tls_context:object
+    owned_tls:object
+    tls_snapshot:object
 
 class AIClientError(Exception):
     """AI 호출 실패의 베이스."""
@@ -52,13 +97,19 @@ class AIClient:
         base_url: str,
         timeout_seconds: float,
         transport: httpx.AsyncBaseTransport | None = None,
-        *, service_token: str = "",
+        *, service_token: str = "", execution_token: str = "", technical_tls_context=None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
         self._transport = transport  # 테스트에서 MockTransport 주입용
+        self._execution_token = execution_token
         self._flow_token = service_token
         self._fundamental_token = service_token
+        self._technical_tls_context=technical_tls_context
+        try:
+            self._technical_tls_snapshot=_technical_tls_snapshot(technical_tls_context)
+            self._technical_owned_tls=_technical_owned_tls(technical_tls_context)
+        except Exception:raise AIUnavailableError('Technical execution unavailable') from None
 
     async def plan_supervisor_core(self,payload:dict,*,meaning_grant=None)->dict:
         # Policy2/attempt fields travel only inside the authenticated typed core envelope.
@@ -183,22 +234,34 @@ class AIClient:
         """Legacy unauthenticated execution is closed before transport."""
         raise AIUnavailableError('Technical execution unavailable')
 
-    async def technical_boundary(self,payload:dict)->dict:
-        """Fixed synthetic typed boundary; no retry, proxy, redirect or production engine."""
+    def _technical_boundary_configuration(self):
+        """Pure private snapshot; no settings/env/DNS/client or HTTP side effects."""
         from urllib.parse import urlsplit
-        from src.modules.technical.domain.execution_boundary import REQUEST_LIMIT,RESPONSE_LIMIT,WAIT_SECONDS,parse_request,canonical,decode,BoundaryInvalid
         try:
-            url=urlsplit(self._base_url);httpx.URL(self._base_url);token=self._flow_token.encode('ascii')
+            base=self._base_url;transport=self._transport;raw_token=self._flow_token
+            if type(base) is not str or type(raw_token) is not str:raise ValueError()
+            url=urlsplit(base);httpx.URL(base);token=raw_token.encode('ascii')
             if url.scheme not in {'http','https'} or not url.hostname or url.port==0 or url.username or url.password or url.path not in {'','/'} or url.query or url.fragment or len(token)<32 or any(c<32 or c>126 for c in token):raise ValueError()
-        except (ValueError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
+            if transport is not None and not isinstance(transport,httpx.AsyncBaseTransport):raise ValueError()
+            return _TechnicalBoundaryConfiguration(base,token,transport)
+        except (ValueError,TypeError,UnicodeError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
+
+    async def technical_boundary(self,payload:dict,*,_configuration=None)->dict:
+        """Fixed synthetic typed boundary; no retry, proxy, redirect or production engine."""
+        from src.modules.technical.domain.execution_boundary import REQUEST_LIMIT,RESPONSE_LIMIT,WAIT_SECONDS,parse_request,canonical,decode,BoundaryInvalid
+        captured=self._technical_boundary_configuration()
+        if _configuration is not None:
+            if type(_configuration) is not _TechnicalBoundaryConfiguration or not captured.same(_configuration):
+                raise AIUnavailableError('Technical boundary unavailable')
+            captured=_configuration
         try:
             parse_request(payload);body=canonical(payload).encode('utf8')
             if len(body)>REQUEST_LIMIT:raise BoundaryInvalid()
         except (ValueError,TypeError,UnicodeError,RecursionError):raise AIValidationError('Technical boundary input invalid') from None
         try:
             async with asyncio.timeout(WAIT_SECONDS):
-                async with httpx.AsyncClient(timeout=WAIT_SECONDS,transport=self._transport,trust_env=False,follow_redirects=False) as client:
-                    async with client.stream('POST',self._base_url+'/internal/technical/boundary',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Technical-Service-Token':token.decode('ascii')}) as response:
+                async with httpx.AsyncClient(timeout=WAIT_SECONDS,transport=captured.transport,trust_env=False,follow_redirects=False) as client:
+                    async with client.stream('POST',captured.base_url+'/internal/technical/boundary',content=body,headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Technical-Service-Token':captured.token.decode('ascii')}) as response:
                         if response.status_code==504:raise AITimeoutError('Technical boundary deadline exceeded')
                         if response.status_code!=200:raise AIUnavailableError('Technical boundary unavailable')
                         if response.headers.get('content-encoding','identity').lower()!='identity':raise AIContractError('Technical boundary result invalid')
@@ -213,6 +276,60 @@ class AIClient:
                         except (ValueError,TypeError,UnicodeError,RecursionError):raise AIContractError('Technical boundary result invalid') from None
         except (TimeoutError,httpx.TimeoutException):raise AITimeoutError('Technical boundary deadline exceeded') from None
         except (httpx.HTTPError,httpx.InvalidURL):raise AIUnavailableError('Technical boundary unavailable') from None
+
+    def _technical_execution_configuration(self,configuration):
+        from src.modules.technical.domain import provider_execution as P
+        try:
+            if type(configuration) is not P.Configuration:raise P.ExecutionInvalid()
+            cfg=P.Configuration(configuration.text);origin=P.origin(self._base_url)
+            token=P.service_token(self._execution_token)
+            if origin!=cfg.data()['ai_origin'] or self._transport is not None and type(self._transport) is not httpx.ASGITransport:raise P.ExecutionInvalid()
+            if (_technical_tls_snapshot(self._technical_tls_context)!=self._technical_tls_snapshot
+                    or _technical_tls_snapshot(self._technical_owned_tls)!=self._technical_tls_snapshot):raise P.ExecutionInvalid()
+            return _TechnicalExecutionConfiguration(origin,token,cfg.text,self._transport,
+                self._technical_tls_context,self._technical_owned_tls,self._technical_tls_snapshot)
+        except Exception:raise AIUnavailableError('Technical execution unavailable') from None
+
+    async def _technical_execution_post(self,path,body,captured,remaining,cap,grant=None):
+        from src.modules.technical.domain import provider_execution as P
+        if type(captured) is not _TechnicalExecutionConfiguration:raise AIUnavailableError('Technical execution unavailable')
+        fresh=self._technical_execution_configuration(P.Configuration(captured.configuration))
+        if (fresh.origin!=captured.origin or fresh.token!=captured.token or fresh.transport is not captured.transport
+                or fresh.tls_context is not captured.tls_context or fresh.owned_tls is not captured.owned_tls
+                or fresh.tls_snapshot!=captured.tls_snapshot):raise AIUnavailableError('Technical execution unavailable')
+        raw=P.canonical(body).encode('utf8');headers={'Content-Type':'application/json','Accept':'application/json','Accept-Encoding':'identity','X-Technical-Service-Token':captured.token.decode('ascii')}
+        if grant is not None:P.digest(grant);headers['X-Technical-Execution-Grant']=grant
+        if len(raw)>(32768 if path.endswith('/ready') else 65536) or type(remaining) not in (int,float) or not math.isfinite(remaining) or not 0<remaining<=86400:raise AIUnavailableError('Technical execution unavailable')
+        deadline=time.monotonic()+remaining
+        try:
+            async with asyncio.timeout(remaining):
+                async with httpx.AsyncClient(verify=True if captured.owned_tls is None else captured.owned_tls,trust_env=False,follow_redirects=False,transport=captured.transport,timeout=remaining) as client:
+                    async with client.stream('POST',captured.origin+path,content=raw,headers=headers) as response:
+                        if response.status_code!=200 or response.headers.get('content-encoding','identity')!='identity':raise AIUnavailableError('Technical execution unavailable')
+                        result=bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(result)+len(chunk)>cap:raise AIContractError('Technical execution result invalid')
+                            result.extend(chunk)
+                        parsed=P.decode(result,cap)
+                        if time.monotonic()>=deadline:raise AITimeoutError('Technical execution deadline exceeded')
+            if time.monotonic()>=deadline:raise AITimeoutError('Technical execution deadline exceeded')
+            return parsed
+        except asyncio.CancelledError:raise
+        except AITimeoutError:raise
+        except (TimeoutError,httpx.TimeoutException):raise AITimeoutError('Technical execution deadline exceeded') from None
+        except Exception:raise AIUnavailableError('Technical execution unavailable') from None
+
+    async def technical_execution_ready(self,configuration,*,_configuration=None):
+        from src.modules.technical.domain import provider_execution as P
+        captured=self._technical_execution_configuration(configuration) if _configuration is None else _configuration
+        value=await self._technical_execution_post('/internal/technical/execution/ready',{'schema_version':P.SCHEMA},captured,5,32768)
+        if P.canonical(value)!=P.canonical({'schema_version':P.SCHEMA,'configuration':configuration.data(),'spec_sha256':P.SPEC_SHA256,'ready':True}):raise AIUnavailableError('Technical execution unavailable')
+        return captured
+
+    async def technical_execute(self,payload,grant,*,remaining,_configuration):
+        from src.modules.technical.domain import provider_execution as P
+        P.parse_execution(payload,P.Configuration(_configuration.configuration))
+        return await self._technical_execution_post('/internal/technical/execution',payload,_configuration,remaining,2097152,grant)
 
     async def analyze_fundamental(self, payload: dict) -> dict:
         """One bounded internal Financial request. No redirect, environment proxy or retry."""
@@ -303,3 +420,12 @@ class AIClient:
         if resp.status_code in (502, 503):
             raise AIUnavailableError(f"AI 서버 사용 불가({resp.status_code})")
         raise AIUnavailableError(f"AI 서버 오류({resp.status_code})")
+
+    async def plan_supervisor_technical(self,payload,configuration,*,remaining):
+        """Fixed deterministic planner, authenticated only by the Technical token."""
+        from src.modules.supervisor.domain import technical_core_contracts as C
+        body=C.Envelope[C.InternalInput].model_validate(payload)
+        expected=C.Context(configuration_sha256=configuration.fingerprint,policy_sha256=configuration.policy_sha256,spec_sha256=body.data.context.spec_sha256,reserved_nano=configuration.data()['policy']['attempt_reserve_nano'])
+        if body.data.context!=expected:raise AIContractError('Technical plan invalid')
+        captured=self._technical_execution_configuration(configuration)
+        return await self._technical_execution_post('/internal/supervisor/core/technical-plan',payload,captured,min(15,remaining),65536)

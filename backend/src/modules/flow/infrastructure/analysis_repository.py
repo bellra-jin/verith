@@ -1,5 +1,5 @@
 """Analysis SQL only: precise owner/key lookup, DB clock and fenced acceptance."""
-from sqlalchemy import select,func,update
+from sqlalchemy import select,func,update,literal
 from sqlalchemy.dialects.postgresql import insert
 from db.models.flow.analysis_run import FlowAnalysisRun,KEY_CONSTRAINT
 
@@ -15,9 +15,17 @@ async def by_key(session,owner,key):
         .with_for_update().execution_options(populate_existing=True))
 
 
-async def admit(session,values):
-    return await session.scalar(insert(FlowAnalysisRun).values(**values)
-        .on_conflict_do_nothing(constraint=KEY_CONSTRAINT).returning(FlowAnalysisRun))
+async def admit(session,values,*,before=None):
+    statement=insert(FlowAnalysisRun)
+    if before is None:
+        statement=statement.values(**values)
+    else:
+        # The fixed admission cutoff is checked by the INSERT itself, not by a
+        # prior SELECT that can become stale while another SQL lock is awaited.
+        columns=[FlowAnalysisRun.__table__.c[name] for name in values]
+        statement=statement.from_select([c.name for c in columns],select(
+            *(literal(values[c.name],type_=c.type) for c in columns)).where(func.clock_timestamp()<before))
+    return await session.scalar(statement.on_conflict_do_nothing(constraint=KEY_CONSTRAINT).returning(FlowAnalysisRun))
 
 
 async def expire(session,row):

@@ -144,9 +144,13 @@ async def test_local_callback_cookies_origin_and_host_injection(monkeypatch, pro
 def test_scoped_static_defaults_preserve_inference_and_cache_off():
     assert "http://localhost:3200" in (ROOT / "src/shared/config.py").read_text()
     repo = ROOT.parent
-    assert (
-        '"http://localhost:8200"' in (repo / "ai/src/supervisor/config.py").read_text()
-    )
+    # CF020 has no implicit Backend destination or import-time env discovery.
+    import ast
+    tree = ast.parse((repo / "ai/src/supervisor/config.py").read_text())
+    values = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)}
+    assert values["BACKEND_BASE_URL"] == ""
+    assert values["LLM_REWRITE_ENABLED"] is False
+    assert not any(isinstance(n, (ast.Import, ast.ImportFrom, ast.Call)) for n in ast.walk(tree))
     assert (
         '"http://localhost:8200"' in (repo / "ai/src/agents/news/config.py").read_text()
     )

@@ -368,3 +368,86 @@ SELECT-only reconcile은 `newly_authorized=False`다. observed도 자동 환급�
 unknown/anomalous는 기존 예약을 유지하며 계정을 막는다. terminal ACK가 없는 held는 정산 미확인이다.
 다운그레이드는 새 grant 표를 잠근 뒤 비어 있을 때만 허용한다. 이 migration은 기존 정책/행을
 발급·갱신하거나 실제 운영 DB에 자동 적용하지 않는다.
+
+## CF048 · Technical 전용 접수와 보수 hold
+
+`c48001a7e0001`은 `c45001a7e0001` 뒤에 두 표만 추가한다. 기존 Flow/Supervisor 회계는 변경하지 않는다.
+
+- `technical_usage_periods`: operation/KST 일자 UNIQUE인 서비스 단일 기간. UTC 시작/끝과 명시 policy/가격/cap TEXT·SHA, 사용자/서비스 횟수·금액 상한, 누적 횟수/예약·blocked를 보존한다. 같은 날 정책 교체나 카운터 감소는 금지다.
+- `technical_analysis_runs`: owner/operation/key digest UNIQUE. 원 admission session ID, 고정 서버 ID 6개, intent·Stock·spec snapshot/hash, 원 period/policy, 시작/기한, claim digest/소비 시각, admitted/claimed/unknown·고정 이유·redaction 시각과 예약/hold를 저장한다. 원 session에는 신규 FK를 걸지 않으며 원 owner와 period-policy에는 RESTRICT FK를 둔다.
+
+INSERT/UPDATE guard는 identity·정책/기간·실행당 예약과 정책의 deadline 상한을 결합한다. claim은 한 번만 소비하고 intent는 NULL로만 삭제할 수 있다. DELETE/TRUNCATE와 hold 환급은 금지다. deferred trigger는 commit 최종 상태에서 run COUNT/예약 합과 period 누적값·사용자 한도를 대조한다. downgrade는 새 두 표의 ACCESS EXCLUSIVE 잠금 아래 비어 있을 때만 허용한다.
+
+이 표는 내부 SQL 접수/로컬 claim이며 provider 송신권·정산이나 운영 활성화가 아니다. [서비스 계약](../../docs/contracts/technical-boundary-v1.md#cf048-technical-전용-접수와-로컬-claim)과 [직접 검증](../../docs/work/CF-048-technical-admission.md)을 따른다.
+
+### CF050 · 같은 run의 완료 snapshot
+
+`c50001a7e0001`은 c480 뒤 기존 `technical_analysis_runs`에 nullable completion_format·input/result TEXT/SHA·binding SHA·accepted_at·error_code 8컬럼을 추가한다. 새 표/예약·기존 revision 변경은 없고, 이전 3상태·NULL 완료 필드는 그대로 유효하다.
+
+claimed→result_ready→stored와 필요한 failed/unknown 전이만 추가한다. 첫 accept의 실제 SQL fence는 원 claim/세션·owner·Stock·기간·원 deadline 및 B/S binding을 대조한다. accepted hash/시각은 이후 불변이며 ready만 pending TEXT를 보유한다. stored/failed/unknown은 원 intent와 pending input/result TEXT를 NULL로 소비하되 ID/key/hash·claim·전체 hold는 유지한다. 미채택 실패에는 완료 metadata가 없다.
+
+같은 commit의 root/snapshot/전체 Technical index 정확1개·owner/hash·실제 stage session을 deferred guard로 결합한다. 연결된 stored 정본의 root/snapshot/index 변경·삭제·TRUNCATE를 거절하며 미연결 기존 보고서는 이 새 결합에 포함하지 않는다. 전체 child projection의 의미 검증은 기존 CF035 writer/read를 재사용한다. downgrade는 원 period/run을 잠그고 새 상태/완료 값이 전부 없는 경우에만 이전 CHECK/guard를 복원한다. 이는 전용 테스트 PG에 적용한 검증이며 운영 DB 적용은 아니다. [완료 계약](../../docs/contracts/technical-boundary-v1.md#cf050-같은-technical-run의-결과-수신과-저장-복구)을 따른다.
+
+### CF053: 동일 Technical run의 start/evidence (c53001a7e0001)
+
+새 table/registry/Flow ledger 없이 `technical_analysis_runs`에 nullable execution 열12개를 추가한다.
+`execution_configuration_json/sha256`은 비밀 없는 명시 policy/counter/caps/origin 구성,
+`execution_grant_digest`는 일회 opaque grant의 SHA256,
+`execution_control_json/sha256`은 원 IDs·intent/B/Stock/spec/policy/config hash·예약·원 기한 binding이다.
+`execution_started_at`, `execution_executor_id`, `execution_start_json/sha256`은 단일 fresh start를,
+`execution_evidence_json/sha256`, `execution_observed_at`은 최대16KiB 최종 관측을 보존한다.
+raw grant·key·HTTP header·raw SDK 오류·prompt/response는 새 관측 열에 저장하지 않는다.
+
+기존 spec은 새 execution 열이 전부 비어 있어야 한다. 새 spec/config는 INSERT 뒤 불변이고,
+claim/grant·start·evidence는 한 방향으로만 고정된다. 기존 period/owner/key/FK·삭제/TRUNCATE 보존
+경계와 전액 hold를 재사용한다. evidence는 실제 정산/환급이 아니며 expiry/revocation 뒤 record-only
+수신도 실행권을 만들지 않는다. 같은 hash만 replay하고 다른 late evidence는 conflict다.
+
+snapshot FORMAT/B/L은 유지한다. `technical_report_snapshots`의 정확 old synthetic/new controlled
+schema 조합, SQL run spec에서 분기한 binding hash와 completion/stored guard를 함께 적용한다.
+controlled snapshot은 대응 accepted/stored provider run 없이 생성할 수 없다. c530 자체의 부분 DDL
+실패는 같은 transaction에서 rollback하며 provider record가 있으면 downgrade를 DROP 전에 거절한다.
+기존 c350/c480/c500 migration bytes는 수정하지 않는다.
+
+## CF054 Supervisor Technical handoff
+
+Revision `c54001a7e0001` follows c530. Existing Supervisor bindings gain `target` (old rows default
+`flow`) and nullable Technical intent/hash, fixed-key digest, configuration/hash, policy/spec hashes,
+Stock/hash, confirmation-session identity and run/snapshot link. Flow payload fields are NULL only
+for the Technical branch; old Flow CHECK text remains the Flow branch of the new checks. New JSON
+snapshots have exact canonical bytes. Technical run `(id,owner_user_id)` UNIQUE supports a RESTRICT
+composite owner FK. No new run/budget/ledger table is introduced.
+
+The binding guard preserves immutable identity and permits only a first exact run link or redaction.
+The link verifies key/intent/config/policy/spec/Stock/original session, run IDs and UTC canonical
+as-of/deadline. A narrow run INSERT guard enforces an associated Supervisor handoff window before
+reservation can commit. Technical binding DELETE/TRUNCATE and populated downgrade are refused;
+empty downgrade locks the two affected tables, restores old Flow constraints and removes only the
+additive revision. Run counters/full holds and the existing Technical deletion rules are unchanged.
+
+## Supervisor composition foundation (c60001)
+
+Revision `c60001a7e0001` follows c540 and adds only `supervisor_compositions`.
+The immutable owner/client-key confirmation fixes original session/scope/consent,
+independent native policies, private derived child identities and original 15s/140s windows.
+One-way claim/handoff/close timestamps and optional native run FKs record consumed
+opportunities; this table is not a common usage ledger. Child binding checks owner,
+key, original Technical session, stock, policy, input and shared analysis time. Redaction
+cannot add formerly NULL child links or replace identity. DELETE/TRUNCATE and populated
+downgrade are refused; FKs use RESTRICT. Existing native schema/holds remain unchanged.
+
+The internal service supports admission, one-time local handoff, validated native links
+and owner observation (including a new valid session). It adds no public multi-analysis
+route or native dispatcher. See [composition contract](../../docs/contracts/supervisor-composition-v1.md).
+
+
+## Supervisor explicit child input projection (c610)
+
+Revision `c61001a7e0001` follows c600; it replaces only the existing composition
+guard function. No table, column, ledger, price or native state is added. New
+`supervisor.composition.v2` snapshots include exact Flow/Technical child inputs.
+Technical uses the confirmed canonical code/chart profile; the root retains the
+complete original question/frame. SQL validates the projection and native Technical
+intent hash. v1 shape, derived-key namespace and owner reads remain unchanged.
+Populated downgrade is refused, including redacted history whose original version
+cannot safely be inferred. Existing c600 migration bytes are unchanged.

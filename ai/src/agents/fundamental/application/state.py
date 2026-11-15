@@ -54,6 +54,7 @@ class FundamentalAgentState(TypedDict, total=False):
     llm_latency_ms: int
     llm_usage: dict[str, int | None]
     llm_usage_records: list[dict[str, Any]]
+    llm_call_usage_records: list[dict[str, Any]]
     llm_guard_violations: list[str]
     verification_summary: dict[str, Any]
     cost_summary: dict[str, Any]

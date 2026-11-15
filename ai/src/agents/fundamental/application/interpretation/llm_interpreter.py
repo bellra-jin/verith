@@ -26,6 +26,7 @@ class InterpretResult:
     prompt: str = ""
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    call_usage_records: list[dict[str, Any]] = field(default_factory=list)
 
 
 class InterpretOutput(BaseModel):
@@ -61,6 +62,7 @@ async def interpret(
     retrieval_context: dict[str, Any] | None = None,
     period_basis: dict[str, Any] | None = None,
     prompt_override: str | None = None,
+    usage_stage: str = "interpret",
 ) -> InterpretResult:
     # 해석 LLM은 이미 계산된 값만 설명한다. 점수·라벨·지표 값 생성 권한은 없다.
     started = time.perf_counter()
@@ -83,12 +85,14 @@ async def interpret(
     flags = ["LLM_FALLBACK_OPENAI"]
     if qwen_skipped:
         flags.append("LLM_QWEN_CIRCUIT_OPEN")
+    call_usage_records: list[dict[str, Any]] = []
     result = await complete_structured(
         InterpretOutput,
         system=SYSTEM_PROMPT,
         prompt=prompt,
         timeout=settings.LLM_TIMEOUT,
         max_tokens=1024,
+        attempt_records=call_usage_records, stage=usage_stage,
     )
     if result is not None:
         return InterpretResult(
@@ -102,6 +106,7 @@ async def interpret(
             prompt=prompt,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
+            call_usage_records=call_usage_records,
         )
 
     if not settings.OPENAI_API_KEY and not qwen_is_skipped():
@@ -121,4 +126,5 @@ async def interpret(
         flags=flags,
         latency_ms=round((time.perf_counter() - started) * 1000),
         prompt=prompt,
+        call_usage_records=call_usage_records,
     )

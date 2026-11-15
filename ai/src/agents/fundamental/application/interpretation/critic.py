@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -30,6 +30,7 @@ class CriticResult:
     latency_ms: int
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    call_usage_records: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_critic_prompt(state: dict[str, Any]) -> str:
@@ -65,15 +66,17 @@ def build_revise_prompt(original_prompt: str, critic: CriticOutput) -> str:
 
 
 async def critic_review(state: dict[str, Any]) -> CriticResult:
+    call_usage_records: list[dict[str, Any]] = []
     result = await complete_structured(
         CriticOutput,
         system=CRITIC_SYSTEM_PROMPT,
         prompt=build_critic_prompt(state),
         timeout=max(settings.LLM_TIMEOUT / 2, 1.0),
         max_tokens=500,
+        attempt_records=call_usage_records, stage="critic",
     )
     if result is None:
-        return CriticResult(output=None, provider="template", model="critic-skipped", latency_ms=0)
+        return CriticResult(output=None, provider="template", model="critic-skipped", latency_ms=0, call_usage_records=call_usage_records)
     return CriticResult(
         output=result.data,
         provider=result.provider,
@@ -81,4 +84,5 @@ async def critic_review(state: dict[str, Any]) -> CriticResult:
         latency_ms=result.latency_ms,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
+        call_usage_records=call_usage_records,
     )

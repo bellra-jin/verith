@@ -27,6 +27,7 @@ async def critic_node(state: FundamentalAgentState) -> dict[str, Any]:
         return {"agent_decisions": decisions, "failures": failures, "llm_call_count": call_count, "critic_result": {"decision": "skip"}}
 
     critic = await critic_review(state)
+    call_usage_records = list(state.get("llm_call_usage_records", [])) + critic.call_usage_records
     if critic.output is None:
         failures = record_failure(
             failures,
@@ -43,7 +44,8 @@ async def critic_node(state: FundamentalAgentState) -> dict[str, Any]:
             provider=critic.provider,
             model=critic.model,
         )
-        return {"agent_decisions": decisions, "failures": failures, "llm_call_count": call_count, "critic_result": {"decision": "skip"}}
+        return {"agent_decisions": decisions, "failures": failures, "llm_call_count": call_count,
+                "critic_result": {"decision": "skip"}, "llm_call_usage_records": call_usage_records}
 
     call_count += 1
     usage_records.append({"stage": "critic", "prompt_tokens": critic.prompt_tokens, "completion_tokens": critic.completion_tokens})
@@ -69,6 +71,7 @@ async def critic_node(state: FundamentalAgentState) -> dict[str, Any]:
             "failures": failures,
             "llm_call_count": call_count,
             "critic_result": result_payload,
+            "llm_call_usage_records": call_usage_records,
             "critic_usage": {"prompt_tokens": critic.prompt_tokens, "completion_tokens": critic.completion_tokens},
             "llm_usage_records": usage_records,
         }
@@ -88,12 +91,15 @@ async def critic_node(state: FundamentalAgentState) -> dict[str, Any]:
         retrieval_context=state.get("retrieval_context", {}),
         period_basis=state.get("period_basis", {}),
         prompt_override=revise_prompt,
+        usage_stage="critic_revision",
     )
+    call_usage_records.extend(revised.call_usage_records)
     call_count += 0 if revised.provider == "template" else 1
     extend_unique(risk_flags, revised.flags)
     usage_records.append({"stage": "revise", "prompt_tokens": revised.prompt_tokens, "completion_tokens": revised.completion_tokens})
     result_payload["revised"] = revised.provider != "template"
     return {
+        "llm_call_usage_records": call_usage_records,
         "interpretation_result": revised,
         "risk_flags": risk_flags,
         "verdict": revised.verdict,

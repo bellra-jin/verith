@@ -43,6 +43,7 @@ async def plan_node(state: FundamentalAgentState) -> dict[str, Any]:
     prompt_tokens = usage.get("prompt_tokens")
     completion_tokens = usage.get("completion_tokens")
     return {
+        "llm_call_usage_records": list(state.get("llm_call_usage_records", [])) + usage.get("call_usage_records", []),
         "analysis_plan": plan.model_dump(),
         "analyst_plan": analyst_plan,
         "selected_paths": selected_paths,

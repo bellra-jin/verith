@@ -27,16 +27,16 @@ export default async function FlowReportPage({
 
   // 배경·카드 구성은 flow 목업(flow_sample) 디자인 언어: #F2F4F6 위에 흰 카드들.
   return (
-    <div className="min-h-screen bg-[#F2F4F6] px-4 py-8 font-sans antialiased sm:px-6 lg:px-8">
-      <article className="mx-auto w-full max-w-[1200px]">
+    <div className="report-frame min-h-screen bg-[#F2F4F6] px-4 py-8 font-sans antialiased sm:px-6 lg:px-8">
+      <article className="report-frame-content mx-auto w-full max-w-[1200px]">
         {/* Top Brand Bar */}
         <div className="mb-5 flex h-[60px] items-center justify-between rounded-2xl border border-[#e2e8f0] bg-white px-6 shadow-sm print:hidden">
           <Link href="/" className="flex items-center gap-2">
-            <div className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[#4f46e5] text-[17px] font-bold leading-none text-white">
+            <div className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[var(--brand)] text-[17px] font-bold leading-none text-white">
               θ
             </div>
             <span className="text-[18px] font-bold tracking-tight text-[#0f172a]">
-              veri<span className="text-[#4f46e5]">θ</span>
+              veri<span className="text-[var(--brand)]">θ</span>
             </span>
             <span className="ml-1 rounded border border-[#e2e8f0] px-1.5 py-0.5 text-[9px] font-bold leading-none text-[#94a3b8]">
               BETA

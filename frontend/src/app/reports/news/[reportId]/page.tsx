@@ -24,16 +24,16 @@ export default async function NewsReportPage({
   const report = envelope.report;
 
   return (
-    <div className="min-h-screen bg-[#eceff3] px-4 py-8 font-sans text-[#1e293b] antialiased sm:px-6 lg:px-8">
-      <article className="mx-auto w-full max-w-[1120px]">
+    <div className="report-frame min-h-screen bg-[#eceff3] px-4 py-8 font-sans text-[#1e293b] antialiased sm:px-6 lg:px-8">
+      <article className="report-frame-content mx-auto w-full max-w-[1120px]">
         {/* Top Brand Bar */}
         <div className="flex h-[60px] items-center justify-between rounded-t-2xl border border-[#e2e8f0] bg-white px-6 shadow-sm">
           <Link href="/" className="flex items-center gap-2">
-            <div className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[#4f46e5] text-[17px] font-bold leading-none text-white">
+            <div className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-[var(--brand)] text-[17px] font-bold leading-none text-white">
               θ
             </div>
             <span className="text-[18px] font-bold tracking-tight text-[#0f172a]">
-              veri<span className="text-[#4f46e5]">θ</span>
+              veri<span className="text-[var(--brand)]">θ</span>
             </span>
             <span className="ml-1 rounded border border-[#e2e8f0] px-1.5 py-0.5 text-[9px] font-bold leading-none text-[#94a3b8]">
               BETA

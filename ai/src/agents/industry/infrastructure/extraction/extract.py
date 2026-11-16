@@ -28,31 +28,32 @@ Run:
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
-import re
 from collections import defaultdict
-from dataclasses import dataclass, field
 import pandas as pd
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field
-from rapidfuzz import fuzz
 
 from ...domain.companies import COMPANIES, Company, by_stock_code
 from ...config import EXTRACTED_DIR, RAW_DIR, STRUCTURED_DIR, get_chat_llm
 from ..entity_normalization import is_self_reference, normalize_name
 from ...domain.schema import NodeType, REL_SHAPES, RelType
+from ...domain.triples import Triple, merge_triples
+from ...domain.candidates import normalize_candidates
+from ...domain.candidate_review import build_candidate_review
+from .cli_args import parse_extraction_args
+from .evidence_verification import (
+    VERIFY_THRESHOLD, _SOURCE_NORM_CACHE, _ELLIPSIS_RE, _norm_ws,
+    _load_source_norm, _match_score, verify_evidence,
+)
 
 CHUNK_SIZE = 2500
 CHUNK_OVERLAP = 200
 
-# Evidence verification: each LLM-quoted `evidence` must actually appear in the
-# filer's source text, or it's dropped (a fabricated citation is worse than none).
-# 90 tolerates minor 조사/구두점/whitespace drift on an otherwise-verbatim quote.
-VERIFY_THRESHOLD = 90
+# Quote matching lives in evidence_verification; candidate selection is separate.
 
 # --- Custom extraction schema (fixed graph schema, CLAUDE.md) ----------------
 # NodeType/RelType are the fixed schema, defined once in schema.py so ingestion
@@ -123,18 +124,6 @@ HUMAN_TEMPLATE = (
     "'당사'·'회사'·'지배기업'은 모두 '{filer}'를 가리킨다.\n\n"
     "---\n{text}\n---"
 )
-
-
-@dataclass
-class Triple:
-    source: str
-    source_type: str
-    relation: str
-    target: str
-    target_type: str
-    origins: set[str] = field(default_factory=set)
-    evidences: set[str] = field(default_factory=set)
-    qota_rt: str = ""  # OWNS_STAKE 지분율(%), backbone edges only
 
 
 def _select_companies(company: str | None, limit: int | None) -> list[Company]:
@@ -223,119 +212,26 @@ def load_raw_cache() -> list[dict]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _norm_ws(text: str) -> str:
-    """Collapse every whitespace run to a single space.
+def raw_to_triples(raw: list[dict], *,
+                   verification_observations: list[dict] | None = None,
+                   quarantined_candidates: list[dict] | None = None) -> list[Triple]:
+    """Return supported new LLM candidates; retain unknowns in an optional caller sink.
 
-    The LLM quote and the source may differ only in newlines/indentation (chunking,
-    PDF-to-text), so both sides are normalized the same way before comparison.
+    Stored graph/final triple CSV are untouched; the existing reject-log writer remains.
     """
-    return " ".join(str(text or "").split())
-
-
-_SOURCE_NORM_CACHE: dict[str, str] = {}
-
-
-def _load_source_norm(origin: str) -> str:
-    """Whitespace-normalized full source text for a filer (stock_code), cached per origin.
-
-    Verifying against the *whole* filing (not the originating chunk) makes the check
-    independent of CHUNK_SIZE and immune to quotes that straddle a chunk boundary.
-    Empty string (missing file) means every evidence for this origin fails to verify.
-    """
-    if origin not in _SOURCE_NORM_CACHE:
-        path = RAW_DIR / origin / "business_content.txt"
-        if path.exists():
-            _SOURCE_NORM_CACHE[origin] = _norm_ws(path.read_text(encoding="utf-8"))
-        else:
-            print(f"  [verify] no source text for {origin}; its evidence cannot be verified")
-            _SOURCE_NORM_CACHE[origin] = ""
-    return _SOURCE_NORM_CACHE[origin]
-
-
-_ELLIPSIS_RE = re.compile(r"\.\.\.+|…")
-
-
-def _match_score(span: str, source_norm: str) -> int:
-    """Verbatim -> 100, else best-window fuzzy ratio (tolerates 조사/구두점 drift)."""
-    if span in source_norm:
-        return 100
-    return int(round(fuzz.partial_ratio(span, source_norm)))
-
-
-def verify_evidence(evidence: str, source_norm: str) -> tuple[bool, int]:
-    """Does ``evidence`` actually occur in the source? Exact substring -> (True, 100).
-
-    The LLM often stitches two non-contiguous — but individually verbatim — spans with
-    an ellipsis (``A ... B``). Scoring the whole string then penalizes the gap and drops
-    a genuinely grounded quote, so ellipsis-joined quotes are verified **per fragment**
-    and scored by their weakest fragment. A single span (or a summarized/fabricated
-    quote) is scored whole; both are rejected below :data:`VERIFY_THRESHOLD`.
-    """
-    ev = _norm_ws(evidence)
-    if not ev or not source_norm:
-        return False, 0
-    fragments = [f for f in (_norm_ws(p) for p in _ELLIPSIS_RE.split(ev)) if len(f) >= 8]
-    if len(fragments) > 1:
-        worst = min(_match_score(f, source_norm) for f in fragments)
-        return worst >= VERIFY_THRESHOLD, worst
-    score = _match_score(ev, source_norm)
-    return score >= VERIFY_THRESHOLD, score
-
-
-def raw_to_triples(raw: list[dict]) -> list[Triple]:
-    """Normalize raw LLM records -> Triples (self-reference + alias + junk filter).
-
-    Each LLM-quoted ``evidence`` is verified against the filer's source text; only
-    verified quotes survive onto the Triple (a fabricated citation is worse than none).
-    Rejected quotes are logged to ``evidence_rejected.csv`` for review.
-    """
-    triples: list[Triple] = []
-    skipped_bad_shape = 0
-    verified = 0
-    rejects: list[dict] = []
-    for r in raw:
-        origin = r.get("origin", "")
-        filer = by_stock_code(origin)
-        filer_name = filer.canonical if filer else ""
-
-        def _resolve(name: str, typ: str) -> str:
-            # "당사"/"지배기업" etc. are the filer talking about itself.
-            if typ == "Company" and filer_name and is_self_reference(name):
-                return filer_name
-            return normalize_name(name, typ)
-
-        src = _resolve(r["source"], r["source_type"])
-        tgt = _resolve(r["target"], r["target_type"])
-        if not src or not tgt or src == tgt:
-            continue
-        shape = (r["source_type"], r["type"], r["target_type"])
-        if shape not in REL_SHAPES:
-            skipped_bad_shape += 1
-            continue
-        evidence = str(r.get("evidence", "")).strip()
-        kept_evidence: set[str] = set()
-        if evidence:
-            ok, score = verify_evidence(evidence, _load_source_norm(origin))
-            if ok:
-                kept_evidence = {evidence}
-                verified += 1
-            else:
-                rejects.append({
-                    "source": src, "relation": r["type"], "target": tgt,
-                    "origin": origin, "score": score, "evidence": evidence,
-                })
-        triples.append(
-            Triple(
-                src, r["source_type"], r["type"], tgt, r["target_type"],
-                {origin}, kept_evidence,
-            )
-        )
-    if skipped_bad_shape:
-        print(f"  [filter] skipped {skipped_bad_shape} relation(s) with invalid schema shape")
+    triples, rejects, quarantine, observations, skipped = normalize_candidates(
+        raw, by_stock_code=by_stock_code, is_self_reference=is_self_reference,
+        normalize_name=normalize_name, load_source=_load_source_norm, verify=verify_evidence)
+    if verification_observations is not None:
+        verification_observations.extend(observations)
+    if quarantined_candidates is not None:
+        quarantined_candidates.extend(quarantine)
+    if skipped:
+        print(f"  [filter] skipped {skipped} relation(s) with invalid schema shape")
     _write_evidence_rejects(rejects)
-    total_with_evidence = verified + len(rejects)
-    print(f"  [verify] kept {verified}/{total_with_evidence} evidence quotes "
-          f"(rejected {len(rejects)} not found in source)")
+    counts = {status: sum(o["status"] == status for o in observations)
+              for status in ("supported", "rejected", "not_run", "indeterminate")}
+    print(f"  [verify] candidate outcomes: {counts}")
     return triples
 
 
@@ -401,33 +297,6 @@ def extract_ownstake_triples(include_shareholders: bool = True) -> list[Triple]:
     return triples
 
 
-# Symmetric relations: A-REL-B and B-REL-A are the same edge.
-SYMMETRIC_RELATIONS = {"COMPETES_WITH"}
-
-
-def merge_triples(triples: list[Triple]) -> list[Triple]:
-    """Dedupe on (source, relation, target); union origins, keep first 지분율.
-
-    Symmetric relations (COMPETES_WITH) are order-normalized so both directions
-    collapse to one edge.
-    """
-    merged: dict[tuple[str, str, str], Triple] = {}
-    for t in triples:
-        if t.relation in SYMMETRIC_RELATIONS and t.source > t.target:
-            t = Triple(t.target, t.target_type, t.relation, t.source, t.source_type,
-                       set(t.origins), set(t.evidences), t.qota_rt)
-        key = (t.source, t.relation, t.target)
-        if key in merged:
-            merged[key].origins |= t.origins
-            merged[key].evidences |= t.evidences
-            if not merged[key].qota_rt and t.qota_rt:
-                merged[key].qota_rt = t.qota_rt
-        else:
-            merged[key] = Triple(t.source, t.source_type, t.relation, t.target,
-                                 t.target_type, set(t.origins), set(t.evidences), t.qota_rt)
-    return list(merged.values())
-
-
 def write_outputs(triples: list[Triple]) -> None:
     EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -488,30 +357,26 @@ def write_outputs(triples: list[Triple]) -> None:
     print(f"  triples w/ verified evidence: {nonempty_evidences}/{len(triples)}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Step 3: extract graph triples from DART filings.")
-    parser.add_argument("--company", help="single company by stock code or canonical name (smoke test)")
-    parser.add_argument("--limit", type=int, help="only the first N companies")
-    parser.add_argument("--skip-llm", action="store_true", help="structured OWNS_STAKE backbone only")
-    parser.add_argument("--from-cache", action="store_true",
-                        help="re-normalize from raw_llm.json (no LLM) — fast filter-tuning loop")
-    parser.add_argument("--no-shareholders", action="store_true", help="skip major_shareholders.csv")
-    args = parser.parse_args()
+def main(*, review_records: list[dict] | None = None) -> None:
+    args = parse_extraction_args()
 
     companies = _select_companies(args.company, args.limit)
     print(f"Companies: {', '.join(c.canonical for c in companies)}")
 
     all_triples: list[Triple] = []
+    observations, quarantine = [], []
 
     if args.from_cache:
         raw = load_raw_cache()
         print(f"Re-normalizing {len(raw)} cached raw LLM rels ...")
-        all_triples += raw_to_triples(raw)
+        all_triples += raw_to_triples(raw, verification_observations=observations,
+                                      quarantined_candidates=quarantine)
     elif not args.skip_llm:
         docs = load_chunks(companies)
         print(f"Loaded {len(docs)} chunks; extracting with LLM ...")
         extractor = build_extractor()
-        all_triples += raw_to_triples(run_llm(docs, extractor))
+        all_triples += raw_to_triples(run_llm(docs, extractor),
+            verification_observations=observations, quarantined_candidates=quarantine)
 
     # OWNS_STAKE backbone is company-wide (not per-selection) unless a single
     # company is requested, in which case filter to its provenance.
@@ -522,6 +387,10 @@ def main() -> None:
         backbone = [t for t in backbone if t.origins & codes]
     all_triples += backbone
 
+    review = build_candidate_review(observations, quarantine)
+    print(f"Candidate review (not persisted): {review['summary']}")
+    if review_records is not None:
+        review_records.append(review)
     merged = merge_triples(all_triples)
     write_outputs(merged)
 

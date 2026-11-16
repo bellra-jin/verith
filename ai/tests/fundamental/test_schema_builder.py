@@ -262,3 +262,60 @@ def test_build_erd_payload_maps_report_ratios_evidence_and_verification() -> Non
     assert payload["report_verification"]["guard_violations"] == []
     assert payload["report_verification"]["flags"] == []
     assert payload["report_insights"][0]["insight_type"] == "dividend"
+
+
+def test_missing_or_truthy_verification_metadata_never_becomes_passed():
+    def project(verification):
+        return build_erd_payload(
+            request_id='synthetic', trace_id='synthetic', ticker='005930',
+            corp_name='Synthetic', corp_code='synthetic', bsns_year=2025,
+            fs_div='CFS', reprt_code='11011', years_count=1, verdict='synthetic',
+            confidence=0.5, score=50, label='moderate', score_breakdown={},
+            ratios={}, evidence=[], trend={}, interpretation='',
+            interpretation_source='template', risk_flags=[], verification=verification,
+            retrieval_summary={})['report_verification']
+    fields = ('binding_passed', 'consistency_passed', 'guard_passed', 'verdict_stable')
+    complete = dict.fromkeys(fields, True)
+    complete['outcome'] = 'passed'
+    assert project(complete)['outcome'] == 'passed'
+    assert set(project(complete)) == REPORT_VERIFICATION_COLUMNS
+    for key in (*fields, 'outcome'):
+        incomplete = dict(complete)
+        incomplete.pop(key)
+        assert project(incomplete)['outcome'] == 'guarded'
+    for value in (None, 1, 'true', 'false', [], {}):
+        for key in fields:
+            malformed = dict(complete, **{key: value})
+            result = project(malformed)
+            assert result['outcome'] == 'guarded'
+            if key != 'guard_passed':
+                assert result[key] is False
+    for outcome in (None, '', '   ', 1, True):
+        assert project(dict(complete, outcome=outcome))['outcome'] == 'guarded'
+    empty = project({})
+    assert empty['outcome'] == 'guarded'
+    assert all(empty[key] is False for key in fields if key != 'guard_passed')
+    assert project(dict.fromkeys(fields, False) | {'outcome': 'insufficient_data'})['outcome'] == 'insufficient_data'
+    assert project(dict(complete, outcome='guarded'))['outcome'] == 'guarded'
+
+
+def test_each_failed_check_cannot_keep_a_passed_storage_outcome():
+    fields = ('binding_passed', 'consistency_passed', 'guard_passed', 'verdict_stable')
+    def project(checks):
+        return build_erd_payload(
+            request_id='synthetic', trace_id='synthetic', ticker='005930',
+            corp_name='Synthetic', corp_code='synthetic', bsns_year=2025,
+            fs_div='CFS', reprt_code='11011', years_count=1, verdict='synthetic',
+            confidence=0.5, score=50, label='moderate', score_breakdown={},
+            ratios={}, evidence=[], trend={}, interpretation='',
+            interpretation_source='template', risk_flags=[],
+            verification=dict(checks, outcome='passed'), retrieval_summary={}
+        )['report_verification']
+    complete = dict.fromkeys(fields, True)
+    assert project(complete)['outcome'] == 'passed'
+    for key in fields:
+        result = project(dict(complete, **{key: False}))
+        assert result['outcome'] == 'guarded', key
+        if key != 'guard_passed':
+            assert result[key] is False
+        assert set(result) == REPORT_VERIFICATION_COLUMNS

@@ -93,7 +93,7 @@ export function SyntheticDemo({userId,runId,initialView}:{userId:string;runId:st
   window.location.assign('/flow/demo');
  }
  const canRetry=hasPending&&(!runId||pendingRun===runId);
- return <main><h1>Flow 합성 데모</h1><p>합성 데모 · 실제 시세/수급/투자 분석 아님 · 실제 보관함에 게시되지 않음</p><p>005930 표시용 예시 · 합성 20개 달력 행</p>
+ return <main className="workspace-page"><h1>Flow 합성 데모</h1><p>합성 데모 · 실제 시세/수급/투자 분석 아님 · 실제 보관함에 게시되지 않음</p><p>005930 표시용 예시 · 합성 20개 달력 행</p>
   <label><input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)}/>합성 데모 실행에 동의합니다.</label>
   <button type="button" disabled={!checked||busy||!verified||storageBlocked||Boolean(runId&&!canRetry)||Boolean(view&&['running','succeeded','failed','timed_out'].includes(view.stage))} onClick={()=>void execute()}>{busy?'요청 중':hasPending?'동일 요청 확인':'합성 데모 실행'}</button>
   <button type="button" onClick={startNew}>새 합성 데모 (이전 요청과 별개)</button><Link href="/">홈</Link>

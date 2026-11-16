@@ -21,16 +21,16 @@ export default async function TechnicalDemoPage() {
   const charts = report.charts_full ?? rawReport.charts_full ?? null;
 
   return (
-    <div className="min-h-screen bg-[#eceff3] py-8 px-4 sm:px-6 lg:px-8 font-sans antialiased text-[#1e293b]">
-      <article className="mx-auto w-full max-w-[1120px]">
+    <div className="report-frame min-h-screen bg-[#eceff3] py-8 px-4 sm:px-6 lg:px-8 font-sans antialiased text-[#1e293b]">
+      <article className="report-frame-content mx-auto w-full max-w-[1120px]">
         {/* Top Brand Bar */}
         <div className="h-[60px] bg-white border border-[#e2e8f0] rounded-t-2xl flex items-center justify-between px-6 shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="w-[30px] h-[30px] rounded-lg bg-[#4f46e5] grid place-items-center text-white font-bold text-[17px] leading-none">
+            <div className="w-[30px] h-[30px] rounded-lg bg-[var(--brand)] grid place-items-center text-white font-bold text-[17px] leading-none">
               θ
             </div>
             <span className="text-[18px] font-bold tracking-tight text-[#0f172a]">
-              veri<span className="text-[#4f46e5]">θ</span>
+              veri<span className="text-[var(--brand)]">θ</span>
             </span>
             <span className="ml-1 text-[9px] font-bold text-[#94a3b8] border border-[#e2e8f0] rounded px-1.5 py-0.5 leading-none">
               BETA

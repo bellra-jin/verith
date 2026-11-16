@@ -32,7 +32,7 @@ export function NewsReportView({ report }: { report: NewsReportModel }) {
   return (
     <div className="flex flex-col gap-5">
       {/* Hero: 종합 감성 게이지 */}
-      <section id="n-summary" className="rounded-2xl border border-[#e2e8f0] bg-white p-6">
+      <section id="n-summary" className="report-card rounded-2xl border border-[#e2e8f0] bg-white p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-[13px] font-bold text-indigo-600">
@@ -60,7 +60,7 @@ export function NewsReportView({ report }: { report: NewsReportModel }) {
       </section>
 
       {/* AI 분석 (answer_text) */}
-      <section id="n-answer" className="rounded-2xl border border-[#e2e8f0] bg-white p-6">
+      <section id="n-answer" className="report-card rounded-2xl border border-[#e2e8f0] bg-white p-6">
         <h2 className="text-[15px] font-bold text-slate-900">AI 분석</h2>
         <div className="mt-3">
           <AnswerText text={report.answer_text} />
@@ -69,14 +69,14 @@ export function NewsReportView({ report }: { report: NewsReportModel }) {
       </section>
 
       {/* 일자별 기사량 */}
-      <section id="n-volume" className="rounded-2xl border border-[#e2e8f0] bg-white p-6">
+      <section id="n-volume" className="report-card rounded-2xl border border-[#e2e8f0] bg-white p-6">
         <h2 className="text-[15px] font-bold text-slate-900">일자별 기사량</h2>
         <p className="mt-0.5 text-[12.5px] text-slate-500">최근 {report.period_days}일 수집 기사 수</p>
         <DailyCounts report={report} />
       </section>
 
       {/* 주요 이슈 (top_events) */}
-      <section id="n-events" className="rounded-2xl border border-[#e2e8f0] bg-white p-6">
+      <section id="n-events" className="report-card rounded-2xl border border-[#e2e8f0] bg-white p-6">
         <h2 className="text-[15px] font-bold text-slate-900">
           주요 이슈 <span className="text-slate-400">({report.top_events.length})</span>
         </h2>
@@ -126,7 +126,7 @@ export function NewsReportView({ report }: { report: NewsReportModel }) {
       </section>
 
       {/* 근거 요약 */}
-      <section id="n-evidence" className="rounded-2xl border border-[#e2e8f0] bg-white p-6">
+      <section id="n-evidence" className="report-card rounded-2xl border border-[#e2e8f0] bg-white p-6">
         <h2 className="text-[15px] font-bold text-slate-900">근거</h2>
         <div className="mt-3 flex flex-wrap gap-3 text-[13px]">
           <span className="rounded-lg bg-slate-50 px-3 py-2 font-semibold text-slate-600">

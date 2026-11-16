@@ -30,10 +30,10 @@ export function NewsActions({ reportId }: { reportId: string }) {
 
   const disabled = busy || isPending;
   return (
-    <div className="no-print mb-5 flex items-center justify-between">
+    <div className="report-actions no-print mb-5 flex items-center justify-between">
       <Link
         href="/?agent_type=news"
-        className="flex items-center gap-1.5 text-[13px] font-bold text-[#4f46e5] transition-colors hover:text-[#4338ca]"
+        className="flex items-center gap-1.5 text-[13px] font-bold text-[var(--brand)] transition-colors hover:text-[var(--brand-hover)]"
       >
         <ChevronLeft className="h-4 w-4" /> 리포트 목록으로 돌아가기
       </Link>
@@ -50,7 +50,7 @@ export function NewsActions({ reportId }: { reportId: string }) {
         <button
           type="button"
           onClick={onPrint}
-          className="flex items-center gap-1.5 rounded-xl bg-[#4f46e5] px-3.5 py-2.5 text-[13px] font-bold text-white shadow-[0_4px_10px_-3px_rgba(79,70,229,0.5)] transition-colors hover:bg-[#4338ca]"
+          className="flex items-center gap-1.5 rounded-xl bg-[var(--brand)] px-3.5 py-2.5 text-[13px] font-bold text-white shadow-none transition-colors hover:bg-[var(--brand-hover)]"
         >
           <Download className="h-4 w-4" />
           <span>PDF 다운로드</span>

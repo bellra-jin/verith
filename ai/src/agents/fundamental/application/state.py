@@ -31,6 +31,7 @@ class FundamentalAgentState(TypedDict, total=False):
     data_status_reason: str
     risk_flags: list[str]
     yearly_metrics: dict[str, dict[str, Any]]
+    metric_currency_provenance: dict[str, dict[str, bool]]
     share_count: Any
     insights: dict[str, Any]
     ratios: dict[str, Any]

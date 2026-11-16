@@ -135,6 +135,15 @@ def build_erd_payload(
 
     이 함수는 DB에 쓰지 않는다. 백엔드가 그대로 매핑할 수 있는 구조만 고정한다.
     """
+    # A missing observation is not a passed check. Keep the existing wire fields.
+    verification = verification if isinstance(verification, dict) else {}
+    checks = ('binding_passed', 'consistency_passed', 'guard_passed', 'verdict_stable')
+    # Storage and HTML agree: only four explicit successful checks can pass.
+    checks_passed = all(verification.get(key) is True for key in checks)
+    verification_outcome = verification.get('outcome')
+    if (not isinstance(verification_outcome, str) or not verification_outcome.strip()
+            or (verification_outcome == 'passed' and not checks_passed)):
+        verification_outcome = 'guarded'
     created_at = datetime.now(timezone.utc).isoformat()
     report_id = _report_id(trace_id, ticker, bsns_year, reprt_code)
     report_ratios: list[dict[str, Any]] = []
@@ -314,10 +323,10 @@ def build_erd_payload(
         "report_verification": {
             "id": str(uuid5(NAMESPACE_URL, f"{report_id}:verification")),
             "report_id": report_id,
-            "binding_passed": bool(verification.get("binding_passed", True)),
-            "consistency_passed": bool(verification.get("consistency_passed", True)),
-            "verdict_stable": bool(verification.get("verdict_stable", True)),
-            "outcome": str(verification.get("outcome", "passed")),
+            "binding_passed": verification.get("binding_passed") is True,
+            "consistency_passed": verification.get("consistency_passed") is True,
+            "verdict_stable": verification.get("verdict_stable") is True,
+            "outcome": verification_outcome,
             "regen_count": int(verification.get("regen_count", 0)),
             "evidence_count": len(report_evidence),
             "guard_violations": verification.get("guard_violations", []),

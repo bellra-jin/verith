@@ -5,3 +5,26 @@
 .sc-consent label,.sc-conditions label{min-height:44px;display:flex;align-items:center;gap:.625rem;cursor:pointer}.sc-consent input,.sc-conditions input{flex:none}
 
 .supervisor-chat .sc-operation{padding:12px 16px;border:1px solid #a5b4fc;border-radius:12px;background:#eef2ff;color:#312e81;font-size:14px;line-height:1.7;overflow-wrap:anywhere}.supervisor-chat .sc-error{line-height:1.8;overflow-wrap:anywhere;white-space:normal}.supervisor-chat .sc-recovery{min-width:0}.supervisor-chat .sc-recovery button{max-width:100%;white-space:normal;overflow-wrap:anywhere}@media(max-width:440px){.supervisor-chat .sc-operation,.supervisor-chat .sc-error{padding:12px}.supervisor-chat .sc-recovery button{margin:4px 0}}
+
+/* 공통 쉘의 차분한 카드·브랜드 토큰에 맞추되 대화 상태 표시는 보존한다. */
+.supervisor-chat {
+  --sc-accent: var(--brand);
+  background: transparent;
+  font-family: inherit;
+}
+.supervisor-chat .sc-question,
+.supervisor-chat .sc-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+.supervisor-chat .sc-card,
+.supervisor-chat .sc-composer,
+.supervisor-chat .sc-recovery {
+  border-color: #f1f5f9;
+  border-radius: 24px;
+  box-shadow: var(--card-shadow);
+}
+.supervisor-chat .sc-answer {
+  border-left-color: var(--brand);
+  line-height: 1.8;
+}

@@ -173,7 +173,7 @@ function Interpretation({ text }: { text: string }) {
 
 function Card({ id, title, cap, children }: { id?: string; title?: string; cap?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-4 rounded-[22px] bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] sm:px-8 sm:py-7">
+    <section id={id} className="report-card scroll-mt-4 rounded-[22px] bg-white p-6 shadow-[0_1px_3px_rgba(0,0,0,0.04)] sm:px-8 sm:py-7">
       {title ? <h2 className="text-[15px] font-extrabold tracking-tight text-[#191F28]">{title}</h2> : null}
       {cap ? <div className="mb-4 mt-1 text-[12.5px] text-[#8B95A1]">{cap}</div> : title ? <div className="mb-4" /> : null}
       {children}

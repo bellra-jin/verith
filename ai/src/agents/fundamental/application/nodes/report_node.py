@@ -17,6 +17,11 @@ def _insufficient_response(state: FundamentalAgentState) -> dict[str, Any]:
     request = state["request"]
     reason = state.get("data_status_reason", "분석 가능한 데이터가 부족합니다.")
     risk_flags = state.get("risk_flags", [])
+    mixed_basis = "MIXED_ACCOUNTING_BASIS" in risk_flags
+    retrieval = state.get("retrieval_summary") or {}
+    # 수집 전 종목 거절만 0이 알려져 있다. 관측 부재를 비용 0/정산 완료로 바꾸지 않는다.
+    no_collection = state.get("data_status") == "unsupported_ticker"
+    unobserved = 0 if no_collection else None
     failures = list(state.get("failures", []))
     if state.get("data_status") == "unsupported_ticker":
         failures = record_failure(
@@ -32,7 +37,7 @@ def _insufficient_response(state: FundamentalAgentState) -> dict[str, Any]:
             failure_type="empty_data",
             stage="collect",
             message=reason,
-            retryable=True,
+            retryable=not mixed_basis,
         )
     meta = {
         "llm_provider": "template",
@@ -47,16 +52,20 @@ def _insufficient_response(state: FundamentalAgentState) -> dict[str, Any]:
         "period_basis": state.get("period_basis", {}),
         "fresh_dart": request.report_mode == "latest",
         "retrieval_summary": state.get("retrieval_summary", {}),
+        # verify was not executed: False means no pass, not a performed-check failure.
+        # Existing outcome/reasons identify insufficient input; no new status or DTO field.
         "verification_summary": {
-            "binding_passed": True,
-            "consistency_passed": True,
-            "guard_passed": True,
-            "verdict_stable": True,
+            "binding_passed": False,
+            "consistency_passed": False,
+            "guard_passed": False,
+            "verdict_stable": False,
             "outcome": "insufficient_data",
-            "reasons": [state.get("data_status", "insufficient_data")],
+            "reasons": ["MIXED_ACCOUNTING_BASIS"] if mixed_basis else [state.get("data_status", "insufficient_data")],
             "regen_count": 0,
         },
-        "cost_summary": {"llm_calls": 0, "prompt_tokens": None, "completion_tokens": None, "dart_network_calls": 0, "probe_calls": 0},
+        "cost_summary": {"llm_calls": 0, "prompt_tokens": None, "completion_tokens": None,
+            "dart_network_calls": retrieval.get("financial_network_calls", unobserved),
+            "probe_calls": retrieval.get("probe_network_calls", unobserved)},
         "corp_code": state.get("corp_code", ""),
         "corp_code_resolution": state.get("corp_code_resolution", {}),
         "input_interpretation": state.get("input_interpretation", {}),

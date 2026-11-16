@@ -28,6 +28,27 @@ FLAG_DESCRIPTIONS = {
 }
 
 
+FLAG_DESCRIPTIONS.update({
+    "CURRENCY_UNPROVEN_LEGACY": "원문 통화 이력이 없는 구형 입력입니다. 기존 값 유지가 통화 검증 완료를 뜻하지 않습니다.",
+    **{f"CURRENCY_UNPROVEN_{name}": "원문 통화가 확인되지 않아 기본 KRW만으로 계산·원화 표시하지 않았습니다."
+       for name in ("ROE", "OPERATING_MARGIN", "NET_MARGIN", "DEBT_RATIO", "CURRENT_RATIO", "REVENUE_GROWTH", "OPERATING_INCOME_GROWTH", "EPS", "BPS")},
+    **{f"TREND_CURRENCY_UNPROVEN_{name}": "원문 통화가 확인되지 않은 금액·계정의 추세 표시를 보류했습니다." for name in ("REVENUE", "OPERATING_INCOME", "ROE")},
+    **{f"CURRENCY_MISMATCH_{name}": "계정 또는 연도별 기록 통화가 달라 환산 없이 비율을 계산하지 않았습니다."
+       for name in ("ROE", "OPERATING_MARGIN", "NET_MARGIN", "DEBT_RATIO", "CURRENT_RATIO", "REVENUE_GROWTH", "OPERATING_INCOME_GROWTH")},
+    **{f"CURRENCY_UNIT_UNSUPPORTED_{name}": "기록된 통화가 원화가 아니어서 원화 지표 표시를 보류했습니다." for name in ("EPS", "BPS")},
+    **{f"TREND_CURRENCY_MISMATCH_{name}": "통화가 다른 금액이나 계정을 같은 단위의 추세로 표시하지 않았습니다." for name in ("REVENUE", "OPERATING_INCOME", "ROE")},
+    **{f"TREND_UNIT_UNSUPPORTED_{name}": "원화 단위가 확인되지 않은 금액 추세 표시를 보류했습니다." for name in ("REVENUE", "OPERATING_INCOME")},
+})
+
+
+def _flag_description(flag: str, default: str = "추적용 리스크 플래그입니다.") -> str:
+    if flag.startswith("CURRENCY_UNPROVEN_BALANCE_"):
+        return "원문 통화가 확인되지 않아 대차 균형 검증을 보류했습니다."
+    if flag.startswith("CURRENCY_MISMATCH_BALANCE_"):
+        return "계정의 통화가 달라 대차 균형 검증을 보류했습니다."
+    return FLAG_DESCRIPTIONS.get(flag, default)
+
+
 def _fmt(value: Any, unit: str) -> str:
     return format_metric_value(value, unit)
 
@@ -66,7 +87,7 @@ def _value_tone_class(metric: str, item: dict[str, Any]) -> str:
 
 def _label_summary(label: str, risk_flags: list[str]) -> str:
     if risk_flags:
-        return FLAG_DESCRIPTIONS.get(risk_flags[0], risk_flags[0])
+        return _flag_description(risk_flags[0], risk_flags[0])
     if label == "strong":
         return "수익성, 안정성, 성장성 지표가 전반적으로 양호합니다."
     if label == "moderate":
@@ -205,11 +226,10 @@ def _verification_passed(meta: dict[str, Any]) -> bool:
     summary = meta.get("verification_summary") or {}
     if not isinstance(summary, dict):
         return False
-    if summary.get("outcome") not in {"passed", "insufficient_data"}:
+    if summary.get("outcome") != "passed":
         return False
     required = ("binding_passed", "consistency_passed", "guard_passed", "verdict_stable")
-    explicit = [summary.get(key) for key in required if key in summary]
-    return bool(explicit) and all(value is True for value in explicit)
+    return all(summary.get(key) is True for key in required)
 
 
 def _display_tokens(ratios: dict[str, Any], evidence: list[Evidence]) -> list[str]:
@@ -761,7 +781,7 @@ def _debug_sections(meta: dict[str, Any], analyst_plan: dict[str, Any], evidence
 
 def _risk_flags_section(risk_flags: list[str]) -> str:
     flag_items = "".join(
-        f"<li><strong>{escape(flag)}</strong> · {escape(FLAG_DESCRIPTIONS.get(flag, '추적용 리스크 플래그입니다.'))}</li>"
+        f"<li><strong>{escape(flag)}</strong> · {escape(_flag_description(flag))}</li>"
         for flag in risk_flags
     ) or "<li>특이 플래그 없음</li>"
     return (

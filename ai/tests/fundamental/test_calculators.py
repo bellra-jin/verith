@@ -268,3 +268,86 @@ def test_all_scored_metrics_at_max_return_100():
     assert score == 100
     assert label == "strong"
     assert breakdown["attainable_max"] == 100
+
+
+def test_low_base_operating_income_decline_is_not_recovery():
+    for current, previous, revenue, expected in ((50, 100, 100000, -50.0),
+                                                  (50, 100, None, -50.0),
+                                                  (0, 100, 100000, -100.0)):
+        latest = {"operating_income": metric(current)}
+        if revenue is not None:
+            latest["revenue"] = metric(revenue)
+        ratios, evidence, flags = calculate_ratios({
+            "2024": {"operating_income": metric(previous)}, "2025": latest})
+        item = ratios["operating_income_growth"]
+        assert item["value"] == expected
+        assert item["status"] == "available"
+        assert "direction" not in item
+        assert "회복" not in str(item)
+        assert "NOT_MEANINGFUL_OPERATING_INCOME_GROWTH" not in flags
+        assert next(e for e in evidence if e.metric == "operating_income_growth").value == expected
+
+
+def test_low_base_unchanged_operating_income_is_zero_not_recovery():
+    ratios, _, _ = calculate_ratios({
+        "2024": {"operating_income": metric(100)},
+        "2025": {"operating_income": metric(100), "revenue": metric(100000)}})
+    item = ratios["operating_income_growth"]
+    assert item["value"] == 0.0
+    assert item["status"] == "available"
+    assert "direction" not in item
+    assert "회복" not in str(item)
+
+
+def share_count(issued):
+    return ShareCountData(issued_shares=issued, distributed_shares=None,
+        treasury_shares=None, share_class="보통주", basis="common_issued_shares",
+        rcept_no="20260301000002", stlm_dt="2025-12-31")
+
+
+def test_bps_preserves_known_zero_and_negative_equity():
+    for equity, expected in ((0, 0.0), (-100, -1.0)):
+        ratios, evidence, flags = calculate_ratios(
+            {"2025": {"equity": metric(equity)}}, share_count=share_count(100))
+        item = ratios["bps"]
+        assert item["value"] == expected
+        assert item["status"] == "available"
+        assert "MISSING_BPS" not in flags
+        bps_evidence = next(e for e in evidence if e.metric == "bps")
+        assert bps_evidence.value == expected
+        assert bps_evidence.accounts[0].amount == equity
+        assert item["issued_shares"] == 100
+
+
+def test_bps_unusable_share_denominator_stays_unavailable_without_exception():
+    for issued in (0, -1, float('nan'), float('inf')):
+        ratios, evidence, flags = calculate_ratios(
+            {"2025": {"equity": metric(100)}}, share_count=share_count(issued))
+        assert ratios["bps"]["value"] is None
+        assert ratios["bps"]["status"] == "unavailable"
+        assert "MISSING_BPS" in flags
+        assert not any(e.metric == "bps" for e in evidence)
+
+
+def test_bps_overflow_is_not_emitted_as_a_financial_value():
+    ratios, evidence, flags = calculate_ratios(
+        {"2025": {"equity": metric(1e308)}}, share_count=share_count(1e-308))
+    assert ratios["bps"]["value"] is None
+    assert ratios["bps"]["status"] == "unavailable"
+    assert "MISSING_BPS" in flags
+    assert not any(e.metric == "bps" for e in evidence)
+
+
+def test_bps_nonfinite_or_missing_equity_and_missing_share_object_stay_unavailable():
+    cases = [(None, share_count(100)), (float('nan'), share_count(100)),
+             (float('inf'), share_count(100)), (-float('inf'), share_count(100)),
+             (100, None), (0, None)]
+    for equity, shares in cases:
+        metrics = {} if equity is None else {"equity": metric(equity)}
+        ratios, evidence, flags = calculate_ratios({"2025": metrics}, share_count=shares)
+        item = ratios["bps"]
+        assert item["value"] is None
+        assert item["status"] == "unavailable"
+        assert "MISSING_BPS" in flags
+        assert "issued_shares" not in item
+        assert not any(e.metric == "bps" for e in evidence)

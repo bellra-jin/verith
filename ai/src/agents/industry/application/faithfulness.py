@@ -31,9 +31,13 @@ from ..config import get_chat_llm
 # Marker appended to an unsupported sentence, and the header of the footer block.
 UNVERIFIED_MARK = "⚠️미검증"
 
-# Phrases that mean "I found nothing" — a refusal has no claims to verify, so the
-# gate skips it (matches the refusal wording in retrieve.ANSWER_TEMPLATE rule 2).
-_REFUSAL_MARKERS = ("찾지 못", "찾을 수 없", "해당하는 연결", "결과가 없", "정보가 없")
+# Only known whole-answer refusals can skip claim verification. A missing-data
+# phrase inside a factual answer does not make the other claims disappear.
+_REFUSAL_SENTENCES = {
+    "근거에서 해당 연결을 찾지 못했습니다.",
+    "근거에서 관련 정보를 찾지 못했습니다.",
+    "근거에서 해당 정보를 찾을 수 없습니다.",
+}
 
 
 @dataclass
@@ -50,13 +54,14 @@ class FaithResult:
     text: str
     unsupported: list[str]
     checked: bool
+    outcome: str = "not_run"
 
 
 # A claim sentence ends at ./!/?/…/newline. The second lookbehind stops us from
 # splitting on an ordinal list marker's period ("1. ", "10) ") — otherwise the
 # bare number becomes a junk "sentence". We keep bullet lines whole.
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?。…])(?<![0-9][.)])\s+|\n+")
-_CITATION_ONLY_RE = re.compile(r"^\[[GV]\d+\].*$")
+_CITATION_ONLY_RE = re.compile('^(?:\\[[GV]\\d+\\]\\s*)+$')
 # A fragment with no Hangul/letter (e.g. a stray "1." or "-") asserts nothing.
 _HAS_CLAIM_RE = re.compile(r"[가-힣A-Za-z]")
 
@@ -73,7 +78,7 @@ def _split_sentences(answer: str) -> list[str]:
 
 
 def _is_refusal(answer: str) -> bool:
-    return any(marker in answer for marker in _REFUSAL_MARKERS)
+    return answer.strip() in _REFUSAL_SENTENCES
 
 
 _VERIFY_PROMPT = """\
@@ -100,20 +105,28 @@ _VERDICT_RE = re.compile(r"(\d+)\s*[:.)]\s*(SUPPORTED|UNSUPPORTED)", re.IGNORECA
 
 
 def _parse_verdicts(text: str, n: int) -> list[bool] | None:
-    """Parse ``"3: UNSUPPORTED"`` lines into per-sentence support flags.
+    """Accept one unambiguous verdict per nonempty line.
 
-    Returns a list of ``n`` bools (True = supported). A sentence with no verdict
-    is treated as unsupported (conservative). If *nothing* parses, returns None
-    so the caller fails open (leaves the answer untouched rather than flagging
-    every sentence off a broken verifier response).
+    Missing sentence indices stay unsupported (legacy conservative behavior).
+    Malformed/duplicate/out-of-range output is indeterminate, never last-wins.
     """
-    verdicts: dict[int, bool] = {}
-    for m in _VERDICT_RE.finditer(text):
-        idx = int(m.group(1))
-        if 1 <= idx <= n:
-            verdicts[idx] = m.group(2).upper() == "SUPPORTED"
-    if not verdicts:
+    if type(n) is not int or n < 1 or not isinstance(text, str):
         return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    verdicts: dict[int, bool] = {}
+    for line in lines:
+        match = _VERDICT_RE.fullmatch(line)
+        if match is None:
+            return None
+        try:
+            index = int(match.group(1))
+        except ValueError:
+            return None
+        if not 1 <= index <= n or index in verdicts:
+            return None
+        verdicts[index] = match.group(2).upper() == "SUPPORTED"
     return [verdicts.get(i, False) for i in range(1, n + 1)]
 
 
@@ -132,28 +145,33 @@ def check_faithfulness(
         return FaithResult(answer, [], checked=False)
 
     sentences = _split_sentences(answer)
-    if not sentences:
+    claims = [sentence for sentence in sentences if not _is_refusal(sentence)]
+    if not claims:
         return FaithResult(answer, [], checked=False)
 
-    if llm is None:
-        llm = get_chat_llm(enable_thinking=False, max_tokens=512)
-    numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(sentences, 1))
+    numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(claims, 1))
     prompt = _VERIFY_PROMPT.format(evidence="\n".join(evidence), sentences=numbered)
     try:
-        supported = _parse_verdicts(llm.invoke(prompt).content, len(sentences))
+        if llm is None:
+            llm = get_chat_llm(enable_thinking=False, max_tokens=512)
+        supported = _parse_verdicts(llm.invoke(prompt).content, len(claims))
     except Exception:
         supported = None
     if supported is None:  # verifier unusable -> don't touch the answer
-        return FaithResult(answer, [], checked=False)
+        return FaithResult(answer, [], checked=False, outcome="indeterminate")
 
     marked: list[str] = []
     unsupported: list[str] = []
-    for sentence, ok in zip(sentences, supported):
-        if ok:
+    verdicts = iter(supported)
+    for sentence in sentences:
+        if _is_refusal(sentence):
+            marked.append(sentence)
+            continue
+        if next(verdicts):
             marked.append(sentence)
         else:
             marked.append(f"{sentence} {UNVERIFIED_MARK}")
             unsupported.append(sentence)
     if not unsupported:  # all supported -> leave original formatting untouched
-        return FaithResult(answer, [], checked=True)
-    return FaithResult("\n".join(marked), unsupported, checked=True)
+        return FaithResult(answer, [], checked=True, outcome="checked")
+    return FaithResult("\n".join(marked), unsupported, checked=True, outcome="checked")

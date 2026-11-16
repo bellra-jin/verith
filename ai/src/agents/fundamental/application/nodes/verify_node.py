@@ -118,6 +118,7 @@ async def verify_node(state: FundamentalAgentState) -> dict[str, Any]:
         "dart_network_calls": (state.get("retrieval_summary") or {}).get("financial_network_calls"),
         "probe_calls": (state.get("retrieval_summary") or {}).get("probe_network_calls"),
     }
+    currency_limits = any(flag.startswith(("CURRENCY_", "TREND_CURRENCY_", "TREND_UNIT_UNSUPPORTED_")) for flag in risk_flags)
     verification_summary = {
         # 프론트와 HTML은 이 summary를 읽어 검증됨/한계 상태를 표시한다.
         "binding_passed": EVIDENCE_UNBOUND_FLAG not in risk_flags,
@@ -125,7 +126,7 @@ async def verify_node(state: FundamentalAgentState) -> dict[str, Any]:
         "guard_passed": not llm_guard_violations,
         "verdict_stable": stability.verdict_stable,
         "outcome": stability.outcome,
-        "reasons": stability.reasons,
+        "reasons": [*stability.reasons, *(["통화 확인·환산 근거 부족으로 일부 재무 비교를 검증하지 않았습니다."] if currency_limits else [])],
         "consistency_notes": state.get("consistency_notes", []),
         "regen_count": regen_count,
         "initial_provider": initial_provider,
